@@ -12,7 +12,8 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@duckdb/node-api": "1.5.6-r.1",
-    "@koopjs/koop-core": "10.4.19"
+    "@koopjs/koop-core": "10.4.19",
+    "hyparquet": "1.31.4",
+    "hyparquet-compressors": "1.1.1"
   }
 }

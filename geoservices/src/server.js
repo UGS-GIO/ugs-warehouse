@@ -6,6 +6,11 @@ const catalog = require('./catalog');
 const provider = require('./provider');
 
 const koop = new Koop({ logLevel: process.env.LOG_LEVEL ?? 'warn' });
+// Tile queries repeat across viewers; a CDN may hold them as long as the catalog cache does.
+koop.server.use((req, res, next) => {
+  if (req.method === 'GET') res.set('Cache-Control', `public, max-age=${process.env.CACHE_TTL ?? 300}`);
+  next();
+});
 koop.register(provider);
 
 const baseUrl = (req) => process.env.PUBLIC_URL?.replace(/\/$/, '')

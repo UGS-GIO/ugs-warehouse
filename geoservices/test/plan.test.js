@@ -2,50 +2,38 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { plan, filterBox, fieldType } = require('../src/plan');
+const { plan, filterBox } = require('../src/plan');
 
 const layer = {
-  url: 'https://cdn.example/x.parquet', geom: 'geom', bbox: 'flat', point: false,
-  columns: [
-    { name: 'feature_id', type: 'BIGINT' }, { name: 'faultname', type: 'VARCHAR' },
-    { name: 'sliprate', type: 'DOUBLE' }, { name: 'mapped', type: 'TIMESTAMP' },
-  ],
+  point: false,
+  columns: [{ name: 'feature_id' }, { name: 'faultname' }, { name: 'sliprate' }, { name: 'mapped' }],
 };
 
-test('trivial count is answered by SQL without geometry', () => {
-  const p = plan({ where: '1=1', returnCountOnly: 'true' }, layer);
-  assert.equal(p.kind, 'count');
-  assert.match(p.sql, /^SELECT count\(\*\)/);
-});
-
-test('a client where clause never reaches DuckDB', () => {
-  const where = "faultname = 'x'; SELECT * FROM read_csv('/etc/passwd')";
-  const p = plan({ where, outFields: '*' }, layer);
-  assert.doesNotMatch(p.sql, /passwd|read_csv/);
-  assert.deepEqual(p.filtersApplied, {});   // Koop applies where, so paging stays with Koop too
+test('trivial counts and extents come from the file metadata', () => {
+  assert.equal(plan({ where: '1=1', returnCountOnly: 'true' }, layer).kind, 'count');
+  assert.equal(plan({ returnExtentOnly: 'true', outSR: '102100' }, layer).kind, 'extent');
+  // a filtered count must read rows
+  assert.equal(plan({ where: "sliprate > 1", returnCountOnly: 'true' }, layer).kind, 'features');
 });
 
 test('outFields and where-referenced columns are the only attributes read', () => {
-  const p = plan({ where: "sliprate > 1", outFields: 'faultname' }, layer);
-  assert.match(p.sql, /"faultname"/);
-  assert.match(p.sql, /"sliprate"/);
-  assert.doesNotMatch(p.sql, /"mapped"/);
+  const p = plan({ where: 'sliprate > 1', outFields: 'faultname' }, layer);
+  assert.deepEqual(p.columns, ['feature_id', 'faultname', 'sliprate']);
 });
 
-test('paging is pushed down only for trivial where', () => {
-  const p = plan({ where: '1=1', resultRecordCount: '10', resultOffset: '20', outFields: '*' }, layer);
-  assert.match(p.sql, /ORDER BY feature_id LIMIT 11 OFFSET 20$/);
-  assert.equal(p.limit, 10);
+test('paging is ours only for trivial where in feature_id order', () => {
+  const p = plan({ where: '1=1', resultRecordCount: '10', resultOffset: '20' }, layer);
+  assert.deepEqual(p.page, { offset: 20, limit: 10 });
   assert.ok(p.filtersApplied.resultRecordCount);
+  assert.equal(plan({ where: "faultname = 'x'", resultRecordCount: '10' }, layer).page, null);
+  assert.equal(plan({ resultRecordCount: '10', orderByFields: 'faultname DESC' }, layer).page, null);
 });
 
-test('a web mercator envelope becomes a lon/lat bbox prefilter on the covering columns', () => {
+test('a web mercator envelope becomes a lon/lat bbox prefilter', () => {
   const geometry = JSON.stringify({ xmin: -12485000, ymin: 4970000, xmax: -12445000, ymax: 5010000, spatialReference: { wkid: 102100 } });
-  const box = filterBox({ geometry });
-  assert.ok(box[0] < -112 && box[0] > -112.3 && box[1] > 40.6 && box[3] < 41.1);
-  const p = plan({ geometry, geometryType: 'esriGeometryEnvelope', outFields: '*' }, layer);
-  assert.match(p.sql, /bbox_xmax >= -112\.\d+ AND bbox_xmin <= -111\.\d+/);
-  assert.equal(p.filtersApplied.resultRecordCount, undefined);   // Koop still filters exactly
+  const [x0, y0, , y1] = filterBox({ geometry });
+  assert.ok(x0 < -112 && x0 > -112.3 && y0 > 40.6 && y1 < 41.1);
+  assert.equal(plan({ geometry, outFields: '*' }, layer).page, null);   // Koop still filters exactly
 });
 
 test('point identify with a distance grows the box', () => {
@@ -58,19 +46,12 @@ test('unknown spatial references skip the prefilter rather than guess', () => {
 });
 
 test('simplification follows maxAllowableOffset, in degrees for mercator output', () => {
-  const p = plan({ maxAllowableOffset: '1113.2', outSR: '102100', outFields: 'faultname' }, layer);
-  assert.match(p.sql, /ST_Simplify\(ST_Force2D\("geom"\), 0\.01\)/);
-  assert.doesNotMatch(plan({ maxAllowableOffset: '10' }, { ...layer, point: true }).sql, /Simplify/);
+  assert.equal(plan({ maxAllowableOffset: '1113.2', outSR: '102100' }, layer).tolerance, 0.01);
+  assert.equal(plan({ maxAllowableOffset: '10' }, { ...layer, point: true }).tolerance, 0);
+  assert.equal(plan({ maxAllowableOffset: '10', returnGeometry: 'false' }, layer).tolerance, 0);
 });
 
 test('objectIds must be integers', () => {
-  assert.match(plan({ objectIds: '1,2' }, layer).sql, /feature_id IN \(1, 2\)/);
-  assert.throws(() => plan({ objectIds: '1;DROP' }, layer));
-});
-
-test('column types map to the Esri field types the values are cast to', () => {
-  assert.equal(fieldType({ name: 'feature_id', type: 'BIGINT' }), 'Integer');
-  assert.equal(fieldType({ name: 'n', type: 'BIGINT' }), 'Double');
-  assert.equal(fieldType({ name: 'd', type: 'TIMESTAMP WITH TIME ZONE' }), 'Date');
-  assert.equal(fieldType({ name: 's', type: 'VARCHAR' }), 'String');
+  assert.deepEqual(plan({ objectIds: '1,2' }, layer).ids, [1, 2]);
+  assert.throws(() => plan({ objectIds: '1;DROP' }, layer), /integers/);
 });

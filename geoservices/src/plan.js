@@ -1,12 +1,8 @@
-// GeoServices query params -> one DuckDB statement over a layer's GeoParquet.
+// GeoServices query params -> what to read from a layer's GeoParquet (src/parquet.js reads it).
 //
-// Pushed down: the columns a request needs, a bbox prefilter on the GeoParquet covering columns,
+// Ours: the columns a request needs, a bbox prefilter on the GeoParquet covering columns,
 // objectIds, simplification, and paging when `where` is trivial. Koop applies everything else
 // (exact geometry tests, `where`, statistics, projection, PBF) to what comes back.
-//
-// `where` is never sent to DuckDB. It is client SQL, and DuckDB can read files and URLs, so
-// passing it through would let a request read anything the service can. Koop evaluates it in
-// memory instead; until then this only prunes by bbox.
 'use strict';
 
 const MERCATOR = new Set([102100, 102113, 3857, 900913]);
@@ -73,120 +69,59 @@ function filterBox(params) {
   return [xmin - pad, ymin - pad, xmax + pad, ymax + pad];
 }
 
-const quote = (name) => `"${name.replace(/"/g, '""')}"`;
-
-// A column as a JSON-safe value of the Esri type the layer reports (see fieldType).
-function selectExpr(col) {
-  const q = quote(col.name);
-  if (col.name === 'feature_id') return `${q}::INTEGER AS ${q}`;
-  if (/^(TIMESTAMP|DATE)/.test(col.type)) return `epoch_ms(${q}::TIMESTAMP)::DOUBLE AS ${q}`;
-  if (/^(BIGINT|HUGEINT|UBIGINT|UINTEGER|DECIMAL|DOUBLE|FLOAT|REAL)/.test(col.type)) return `${q}::DOUBLE AS ${q}`;
-  if (/^(INTEGER|SMALLINT|TINYINT|USMALLINT|UTINYINT)/.test(col.type)) return `${q}::INTEGER AS ${q}`;
-  if (col.type === 'BOOLEAN') return `${q}::INTEGER AS ${q}`;
-  if (col.type === 'VARCHAR') return q;
-  return `to_json(${q})::VARCHAR AS ${q}`;   // lists and structs, as text
-}
-
-function fieldType(col) {
-  if (col.name === 'feature_id') return 'Integer';
-  if (/^(TIMESTAMP|DATE)/.test(col.type)) return 'Date';
-  if (/^(BIGINT|HUGEINT|UBIGINT|UINTEGER|DECIMAL|DOUBLE|FLOAT|REAL)/.test(col.type)) return 'Double';
-  if (/^(INTEGER|SMALLINT|TINYINT|USMALLINT|UTINYINT|BOOLEAN)/.test(col.type)) return 'Integer';
-  return 'String';
-}
-
-const sqlString = (s) => `'${String(s).replace(/'/g, "''")}'`;
 const trivialWhere = (w) => w == null || /^\s*(1\s*=\s*1)?\s*$/i.test(String(w));
 
 /**
  * @param params  raw GeoServices query params
- * @param layer   { url, geom, columns: [{name, type}], bbox: 'flat' | 'struct' | null, point }
- * @returns {{ kind: 'count' | 'extent' | 'features', sql: string, filtersApplied: object, limit?: number }}
+ * @param layer   { columns: [{name, type}], point }
+ * @returns {{ kind: 'count' | 'extent' | 'features', box, ids, columns, geometry, tolerance,
+ *   page, filtersApplied, outSR }}
  */
 function plan(params, layer) {
-  const byName = new Map(layer.columns.map((c) => [c.name.toLowerCase(), c]));
-  const conditions = [];
   const box = filterBox(params);
-  if (box) {
-    const [xmin, ymin, xmax, ymax] = box;
-    const b = layer.bbox === 'struct'
-      ? { x0: 'bbox.xmin', y0: 'bbox.ymin', x1: 'bbox.xmax', y1: 'bbox.ymax' }
-      : { x0: 'bbox_xmin', y0: 'bbox_ymin', x1: 'bbox_xmax', y1: 'bbox_ymax' };
-    conditions.push(layer.bbox
-      ? `${b.x1} >= ${xmin} AND ${b.x0} <= ${xmax} AND ${b.y1} >= ${ymin} AND ${b.y0} <= ${ymax}`
-      : `ST_Intersects(${quote(layer.geom)}, ST_MakeEnvelope(${xmin}, ${ymin}, ${xmax}, ${ymax}))`);
-  }
   const ids = String(params.objectIds ?? '').split(',').map((s) => s.trim()).filter(Boolean).map(Number);
-  if (ids.length) {
-    if (!ids.every(Number.isInteger)) throw new Error('objectIds must be integers');
-    conditions.push(`feature_id IN (${ids.join(', ')})`);
-  }
-  const from = `read_parquet(${sqlString(layer.url)})`;
-  const whereSql = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+  if (!ids.every(Number.isInteger)) throw Object.assign(new Error('objectIds must be integers'), { code: 400 });
   const simple = trivialWhere(params.where);
+  const outSR = wkidOf(params.outSR);
+  const base = { box, ids, outSR, filtersApplied: {} };
 
-  // Counts and extents the covering columns answer without reading geometry.
+  // Counts and extents the file metadata answers without reading a row.
   if (simple && !box && !ids.length && isTrue(params.returnCountOnly) && !isTrue(params.returnExtentOnly)) {
-    return { kind: 'count', sql: `SELECT count(*)::INTEGER AS n FROM ${from}`, filtersApplied: {} };
+    return { ...base, kind: 'count' };
   }
-  if (simple && !box && !ids.length && isTrue(params.returnExtentOnly) && layer.bbox) {
-    const p = layer.bbox === 'struct' ? 'bbox.' : 'bbox_';
-    return { kind: 'extent', filtersApplied: {}, outSR: wkidOf(params.outSR),
-      sql: `SELECT min(${p}xmin) AS xmin, min(${p}ymin) AS ymin, max(${p}xmax) AS xmax, max(${p}ymax) AS ymax, count(*)::INTEGER AS n FROM ${from}` };
+  if (simple && !box && !ids.length && isTrue(params.returnExtentOnly)) {
+    return { ...base, kind: 'extent' };
   }
 
   // Columns: the requested outFields plus anything `where`, ordering or statistics read.
-  const wanted = new Set(['feature_id']);
-  const out = String(params.outFields ?? '*');
-  const all = out.split(',').some((f) => f.trim() === '*');
+  const out = String(params.outFields ?? '*').split(',').map((f) => f.trim().toLowerCase());
   const mentions = [params.where, params.orderByFields, params.groupByFieldsForStatistics,
     typeof params.outStatistics === 'string' ? params.outStatistics : JSON.stringify(params.outStatistics ?? '')]
     .filter(Boolean).join(' ');
-  for (const col of layer.columns) {
-    if (all || out.split(',').map((f) => f.trim().toLowerCase()).includes(col.name.toLowerCase())
-      || new RegExp(`\\b${col.name.replace(/[^\w]/g, '')}\\b`, 'i').test(mentions)) wanted.add(col.name);
-  }
-  const cols = [...wanted].map((n) => byName.get(n.toLowerCase())).filter(Boolean);
-  const select = cols.map(selectExpr);
+  const columns = layer.columns.filter((col) => col.name === 'feature_id' || out.includes('*')
+    || out.includes(col.name.toLowerCase())
+    || new RegExp(`\\b${col.name.replace(/[^\w]/g, '')}\\b`, 'i').test(mentions)).map((col) => col.name);
 
-  const needGeometry = !isTrue(params.returnIdsOnly) && !isTrue(params.returnCountOnly)
-    ? !(params.returnGeometry === false || params.returnGeometry === 'false')
-    : Boolean(box);   // ids/counts under a spatial filter still need geometry for the exact test
-  if (needGeometry || isTrue(params.returnExtentOnly)) {
-    let g = `ST_Force2D(${quote(layer.geom)})`;   // our Z is always 0; dropping it shrinks every response
-    const offset = Number(params.maxAllowableOffset);
-    if (!layer.point && Number.isFinite(offset) && offset > 0) {
-      const tolerance = MERCATOR.has(wkidOf(params.outSR) ?? 4326) ? offset / 111320 : offset;
-      // Plain Douglas-Peucker: 5x faster than the topology-preserving form on detailed polygons,
-      // and a drawing at this scale can't show the difference.
-      g = `ST_Simplify(${g}, ${tolerance})`;
-    }
-    select.push(`ST_AsGeoJSON(${g}) AS __geom`);
-  }
+  // Ids and counts under a spatial filter still need geometry, for Koop's exact test.
+  const geometry = isTrue(params.returnIdsOnly) || isTrue(params.returnCountOnly)
+    ? Boolean(box)
+    : !(params.returnGeometry === false || params.returnGeometry === 'false');
+  const offset = Number(params.maxAllowableOffset);
+  const tolerance = geometry && !layer.point && Number.isFinite(offset) && offset > 0
+    ? (MERCATOR.has(outSR ?? 4326) ? offset / 111320 : offset)
+    : 0;
 
-  // Paging is ours only when Koop has nothing left to filter out.
-  const filtersApplied = {};
-  let tail = '';
-  let limit;
-  if (simple && !isTrue(params.returnCountOnly) && !isTrue(params.returnExtentOnly) && !params.outStatistics) {
-    const order = String(params.orderByFields ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-      .map((s) => {
-        const [name, dir] = s.split(/\s+/);
-        const col = byName.get(name.toLowerCase());
-        return col ? `${quote(col.name)} ${/^desc$/i.test(dir ?? '') ? 'DESC' : 'ASC'}` : null;
-      });
-    const orderSql = order.length && order.every(Boolean) ? order.join(', ') : 'feature_id';
-    const count = Number(params.resultRecordCount);
-    const offset = Number(params.resultOffset || 0);
-    if (Number.isInteger(count) && count > 0 && !box) {
-      limit = count;
-      tail = ` ORDER BY ${orderSql} LIMIT ${count + 1} OFFSET ${Math.max(0, offset)}`;
-      Object.assign(filtersApplied, { offset: true, limit: true, resultRecordCount: true, orderByFields: true });
-    } else {
-      tail = ` ORDER BY ${orderSql}`;
-    }
+  // Paging is ours only when Koop has nothing left to filter out. Rows are stored in feature_id
+  // order, so a page of rows is a page of features.
+  let page = null;
+  const count = Number(params.resultRecordCount);
+  const ordered = !params.orderByFields || /^\s*feature_id(\s+asc)?\s*$/i.test(String(params.orderByFields));
+  if (simple && !box && ordered && !isTrue(params.returnCountOnly) && !params.outStatistics
+    && Number.isInteger(count) && count > 0) {
+    page = { offset: Math.max(0, Number(params.resultOffset || 0)), limit: count };
+    Object.assign(base.filtersApplied, { offset: true, limit: true, resultRecordCount: true, orderByFields: true });
   }
-  return { kind: 'features', sql: `SELECT ${select.join(', ')} FROM ${from}${whereSql}${tail}`, filtersApplied, limit };
+  return { ...base, kind: 'features', columns, geometry, tolerance, page };
 }
 
-module.exports = { plan, fieldType, filterBox, toMercator, wkidOf, MERCATOR };
+module.exports = { plan, filterBox, toMercator, wkidOf, MERCATOR };

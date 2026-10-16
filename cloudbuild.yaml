@@ -892,9 +892,9 @@ steps:
           --tag=prod
         gcloud run services update-traffic ${_TILES_SERVICE} --region=${_REGION} --to-tags=prod=100
 
-  # ArcGIS FeatureServer — scale-to-zero, no secrets (reads the public CDN). Memory is DuckDB's
-  # cache of the GeoParquet blocks it has read: a layer's first view fetches its row groups, later
-  # ones come from memory, so memory buys warm tiles. Same `prod` tag routing as tiles.
+  # ArcGIS FeatureServer — scale-to-zero, no secrets (reads the public CDN). Memory is mostly the
+  # cache of GeoParquet pages already fetched (PAGE_CACHE_MB), so memory buys warm tiles. Same
+  # `prod` tag routing as tiles.
   - id: deploy-geoservices
     waitFor: [push-geoservices]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -911,7 +911,7 @@ steps:
           --port=8080 \
           --cpu=2 \
           --memory=2Gi \
-          --set-env-vars=DUCKDB_MEMORY_LIMIT=1500MB,DUCKDB_THREADS=2 \
+          --set-env-vars=PAGE_CACHE_MB=1024 \
           --concurrency=20 \
           --max-instances=10 \
           --timeout=60 \

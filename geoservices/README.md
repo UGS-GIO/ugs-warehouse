@@ -22,19 +22,22 @@ two renders (UCRC wells: `by-purpose`, `by-boxtype`) is two layers to add.
 - **Symbology** is the Esri renderer ugs-styles builds next to each GL style (`build:esri` there).
   The warehouse passes its URL through as `ugs:renders[render].esri_url`. A render without one is
   served with Koop's default symbol.
-- **Queries** run in DuckDB against the GeoParquet over https (`src/plan.js`). It reads only the
-  columns a request needs, prunes row groups by the bbox covering columns, simplifies to the
-  request's `maxAllowableOffset`, and pages when `where` is `1=1`. Koop does the rest (exact
-  geometry tests, `where`, statistics, projection, PBF).
-- **`where` never reaches DuckDB.** It is client SQL, and DuckDB can read files and URLs. Koop
-  evaluates it in memory instead.
+- **Queries** read the GeoParquet over https with [hyparquet](https://github.com/hyparam/hyparquet)
+  (`src/parquet.js`). Row groups are pruned on the bbox covering columns; inside one, the small
+  bbox columns pick the matching rows and the page index fetches only the pages holding them. The
+  warehouse writes ~100-row pages for this (`vector/sink_archive.py`). Geometry is simplified to the
+  request's `maxAllowableOffset`, and the service pages when `where` is `1=1`. Koop does the rest
+  (exact geometry tests, `where`, statistics, projection, PBF). Fetched pages stay in a
+  `PAGE_CACHE_MB` (default 512) memory cache.
+- **`where` is evaluated by Koop**, in memory, on the rows the bbox and ids select.
 
 ## Performance
 
-A layer's first view fetches the row groups it touches, then DuckDB serves later requests for
-those row groups from memory. Cold start is about 0.7 s to listen and 1.4 s for the first layer
-description. Large polygon layers are slow cold (8–15 s for a tile of `wetlands_nonriverine`,
-whose 32 MB row groups each span several degrees) and under 1 s warm.
+A zoomed-in tile of the heaviest layer (`wetlands_nonriverine`, 279k polygons) fetches 1.5–20 MB
+and answers in under a second cold, except where the geometry itself is that large (around the
+Great Salt Lake, 3,400 polygons hold 170 MB of WKB). A statewide view of a heavy layer still reads
+most of the file. Cold start is about 0.6 s to listen and 0.9 s for the first layer description.
+Archives written before the page index read whole column chunks until their next ingest.
 
 ## Local
 

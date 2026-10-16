@@ -96,8 +96,10 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
 
     pyarrow writes it, not DuckDB's COPY, for the page index. Row groups stay at the gpio-recommended
     size, and the page index lets a reader fetch only the ~100-row pages a bbox touches inside one
-    (the FeatureServer and the viewer both read with hyparquet, which uses it). The geometry gets
-    no dictionary: a dictionary page forces a reader back to the start of the column chunk.
+    (the FeatureServer and the viewer both read with hyparquet, which uses it). Only text and
+    integer columns get a dictionary: on the geometry a dictionary page forces a reader back to the
+    start of the column chunk, and on floats it makes the file bigger. write_batch_size lets pages
+    close near PAGE_BYTES; at the default 1024 every page is at least 1024 rows.
     """
     rows_per_group = _row_group_size(con, view)
     print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
@@ -110,9 +112,10 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
         f"FROM {view}"
     ).to_arrow_reader(rows_per_group)
     schema = batches.schema.with_metadata({"geo": geo})
-    plain = [n for n in schema.names if n != "geom"]
+    dictionary = [f.name for f in schema if f.name != "geom" and (
+        pa.types.is_string(f.type) or pa.types.is_large_string(f.type) or pa.types.is_integer(f.type))]
     with pq.ParquetWriter(path, schema, compression="zstd", compression_level=9, write_page_index=True,
-                          data_page_size=PAGE_BYTES, write_batch_size=64, use_dictionary=plain) as out:
+                          data_page_size=PAGE_BYTES, write_batch_size=64, use_dictionary=dictionary) as out:
         for batch in batches:   # one DuckDB batch per row group, so only one is ever in memory
             out.write_table(pa.Table.from_batches([batch], schema), row_group_size=rows_per_group)
 
@@ -169,11 +172,11 @@ def write_overview(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> g
         return None
     # A polygon smaller than the tolerance keeps its envelope, a speck where it is, as the vector
     # tiles keep one; dropping it would empty a statewide view of a layer made of small features.
-    simple = f"ST_Simplify(geom, {OVERVIEW_TOLERANCE})"
     con.execute(
-        f"CREATE OR REPLACE TEMP VIEW {view}_overview AS SELECT * FROM (SELECT * REPLACE ("
-        f"CASE WHEN ST_IsEmpty({simple}) AND ST_Dimension(geom) = 2 THEN ST_Envelope(geom) "
-        f"ELSE {simple} END AS geom) FROM {view}) WHERE NOT ST_IsEmpty(geom)")
+        f"CREATE OR REPLACE TEMP VIEW {view}_overview AS SELECT * FROM (SELECT * EXCLUDE (_simple) "
+        f"REPLACE (CASE WHEN ST_IsEmpty(_simple) AND ST_Dimension(geom) = 2 THEN ST_Envelope(geom) "
+        f"ELSE _simple END AS geom) FROM (SELECT *, ST_Simplify(geom, {OVERVIEW_TOLERANCE}) AS _simple "
+        f"FROM {view})) WHERE NOT ST_IsEmpty(geom)")
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, os.path.basename(path))
         _copy_geoparquet(con, f"{view}_overview", local)

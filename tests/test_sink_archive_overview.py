@@ -1,6 +1,8 @@
 """The archive sink writes a generalized overview for heavy line/polygon layers, and only them."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pyarrow.parquet as pq
 import pytest
 
@@ -16,7 +18,7 @@ def uploads(monkeypatch, tmp_path):
 
     def upload(local, path, **_):
         kept = tmp_path / path.replace("/", "_")
-        kept.write_bytes(open(local, "rb").read())
+        kept.write_bytes(Path(local).read_bytes())
         calls["upload"].append((path, str(kept)))
 
     monkeypatch.setattr(sink_archive.gcs, "upload", upload)

@@ -134,7 +134,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     def _stac() -> None:
         # The hash vouches for the published artifacts, so it only moves when they were all
         # rewritten. Stamping it after a failed data sink would make the next --skip-unchanged run
-        # skip the rebuild, and hand the tiles service a new version for the old archive.
+        # skip the rebuild.
         content_hash = fingerprint.published_hash(topic) if data_failed else fp
         sink_stac.write(topic, con, view, metadata=meta, related=related_info,
                         content_hash=content_hash, file_meta=written)

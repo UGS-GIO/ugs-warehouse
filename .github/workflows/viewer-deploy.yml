@@ -15,9 +15,6 @@ on:
       features_base:
         type: string
         default: ""
-      tiles_base:
-        type: string
-        default: ""
       geoservices_base:
         type: string
         default: ""
@@ -38,7 +35,6 @@ jobs:
         working-directory: viewer
         env:
           VITE_FEATURES_BASE: ${{ inputs.features_base }}
-          VITE_TILES_BASE: ${{ inputs.tiles_base }}
           VITE_GEOSERVICES_BASE: ${{ inputs.geoservices_base }}
         run: |
           npm ci

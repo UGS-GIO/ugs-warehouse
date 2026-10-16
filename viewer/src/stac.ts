@@ -169,20 +169,8 @@ export const FEATURES_BASE = (
 export const featuresCollectionUrl = (id: string): string | undefined =>
   FEATURES_BASE ? `${FEATURES_BASE}/collections/${id}` : undefined;
 
-// XYZ vector tiles + Esri VectorTileServer (the `tiles/` service). Same shape as FEATURES_BASE:
-// baked at build time, overridable per session, and empty hides the links rather than printing
-// dead ones. The service serves every topic that has PMTiles, keyed by STAC item id.
-export const TILES_BASE = (
-  new URLSearchParams(LOC.search).get("tiles")
-  || ((import.meta as { env?: Record<string, string> }).env?.VITE_TILES_BASE)
-  || ""
-).replace(/\/+$/, "");
-export const xyzTilesUrl = (id: string): string | undefined =>
-  TILES_BASE ? `${TILES_BASE}/tiles/${id}/{z}/{x}/{y}.mvt` : undefined;
-export const tilesStyleUrl = (id: string, render?: string): string | undefined =>
-  TILES_BASE ? `${TILES_BASE}/styles/${id}.json${render ? `?render=${encodeURIComponent(render)}` : ""}` : undefined;
 // ArcGIS FeatureServer (the `geoservices/` service) for Map Viewer, Experience Builder and
-// StoryMaps. Same shape as TILES_BASE. Every topic with a GeoParquet is a layer, one per render,
+// StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a layer, one per render,
 // and a topic without renders is served as `default`.
 export const GEOSERVICES_BASE = (
   new URLSearchParams(LOC.search).get("geoservices")

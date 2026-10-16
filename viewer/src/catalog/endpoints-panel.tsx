@@ -1,11 +1,10 @@
 // How to use an item from other software, in STAC's terms: its assets (the files on the CDN) and its
-// links (live services: OGC API Features, ArcGIS FeatureServer, XYZ, the GL style).
+// links (live services: OGC API Features, ArcGIS FeatureServer).
 import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, featureServerUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
-  tilesStyleUrl, xyzTilesUrl } from "@/stac";
+import { assetKind, featureServerUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, rendersOf, type StacDoc } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
 
@@ -73,7 +72,6 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   // Raster and publication items have neither, so they get no row instead of a link to a
   // collection that never existed (#85: featureserv is keyed by item id, not collection id).
   const coll = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(id) : undefined);
-  const pm = pmtilesLink(item);
   const esriRenders = Object.keys(rendersOf(item)).sort();
   // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
   const { render: shown } = usePreviewMap();
@@ -100,14 +98,6 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       url: fs,
       pick: renderPick,
     });
-  }
-  // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
-  // item actually has PMTiles, since that archive is what it serves.
-  if (pm) {
-    const xyz = xyzTilesUrl(id);
-    if (xyz) rows.push({ label: "XYZ tiles (fallback)", desc: "For clients that cannot read PMTiles. Prefer the PMTiles asset", url: xyz });
-    const style = tilesStyleUrl(id, chosen);
-    if (style) rows.push({ label: "Vector tile style", desc: "Complete GL style — MapLibre, Mapbox GL, ArcGIS JS SDK", url: style });
   }
   if (!rows.length) return null;
   const row = (r: Row) => (

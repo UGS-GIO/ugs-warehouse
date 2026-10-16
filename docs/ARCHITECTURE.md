@@ -30,7 +30,7 @@ flowchart LR
   subgraph S["Serving"]
     direction TB
     VW["STAC viewer<br/>browse · map · zarr datacubes · export"]
-    FS["OGC Features · tiles<br/>pygeoapi · XYZ · Esri VTS"]
+    FS["OGC Features · FeatureServer<br/>pygeoapi · Go"]
   end
 
   CDN --> VW
@@ -135,8 +135,6 @@ which preserves object paths.
 - Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.
 - STAC viewer: catalog browse + map + COG preview + zarr datacube layers + client-side export.
 - OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
-- `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
-  so AGOL and Pro can add a layer at all.
 - `ugs-warehouse-geoservices`: an ArcGIS FeatureServer over the GeoParquet, one layer per ugs-styles
   render, so Map Viewer, Experience Builder and StoryMaps get the symbology, popups and attribute
   tables (`geoservices/README.md`).

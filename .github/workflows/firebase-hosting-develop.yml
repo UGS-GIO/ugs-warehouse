@@ -16,6 +16,5 @@ jobs:
     with:
       site: dev-data-geology-utah-gov
       features_base: ${{ vars.VITE_FEATURES_BASE_DEV || vars.VITE_FEATURES_BASE }}
-      tiles_base: ${{ vars.VITE_TILES_BASE_DEV || vars.VITE_TILES_BASE }}
       geoservices_base: ${{ vars.VITE_GEOSERVICES_BASE_DEV || vars.VITE_GEOSERVICES_BASE }}
     secrets: inherit

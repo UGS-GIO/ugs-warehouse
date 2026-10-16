@@ -11,7 +11,6 @@
 substitutions:
   _REGION: us-central1
   _FEATURES_SERVICE: ugs-warehouse-features
-  _TILES_SERVICE: ugs-warehouse-tiles
   _GEOSERVICES_SERVICE: ugs-warehouse-geoservices
   _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
@@ -29,9 +28,6 @@ steps:
         gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
           --format='value(status.url)' > /workspace/features_url 2>/dev/null \
           || printf '' > /workspace/features_url
-        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
-          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
-          || printf '' > /workspace/tiles_url
         gcloud run services describe ${_GEOSERVICES_SERVICE} --region=${_REGION} \
           --format='value(status.url)' > /workspace/geoservices_url 2>/dev/null \
           || printf '' > /workspace/geoservices_url
@@ -47,7 +43,6 @@ steps:
       - |
         set -e
         export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
-        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
         export VITE_GEOSERVICES_BASE="$$(cat /workspace/geoservices_url 2>/dev/null || true)"
         export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
         export VITE_OFFLINE=0

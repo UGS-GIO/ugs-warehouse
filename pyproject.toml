@@ -31,8 +31,7 @@ dependencies = [
 # and pre-commit enforce; an unpinned floor let a fresh install drift to a newer
 # ruff and turn CI red. Keep this in lockstep with the ruff-pre-commit `rev` in
 # .pre-commit-config.yaml (bump both together, e.g. via Renovate).
-# httpx: starlette's TestClient is built on it — needed by tests/test_tiles_esri.py, which is the
-# only automated check that sees the tiles service's Esri path contract.
+# httpx: starlette's TestClient is built on it.
 # rashid: the Portolan validator, run by tests/test_portolan_conformance.py against a catalog the
 # real builders write. It pulls the raster stack (rasterio, pyarrow, pyproj), which the base
 # install deliberately avoids — the cost is ~400MB in CI and nothing in the runtime images. The

@@ -37,13 +37,12 @@ jobs:
           cache: npm
           cache-dependency-path: viewer/package-lock.json
 
-      # Both are optional: the viewer hides the OGC/tiles links when they're empty rather than
+      # Both are optional: the viewer hides the service links when they're empty rather than
       # printing dead URLs. Set them as repo variables to give previews the real endpoints.
       - name: Build
         working-directory: viewer
         env:
           VITE_FEATURES_BASE: ${{ vars.VITE_FEATURES_BASE }}
-          VITE_TILES_BASE: ${{ vars.VITE_TILES_BASE }}
           VITE_GEOSERVICES_BASE: ${{ vars.VITE_GEOSERVICES_BASE }}
         run: |
           npm ci

@@ -1145,3 +1145,12 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
     elsewhere = {"data": {"href": "https://example.com/x.parquet", "type": config.PARQUET_MIME}}
     assert feature_service.collection({"id": "a", "assets": elsewhere}) is None
     assert feature_service.collection({"id": "b", "assets": {}}) is None
+
+
+def test_feature_service_serves_the_data_asset_not_the_overview():
+    from ugs_warehouse.core import feature_service
+
+    asset = lambda path: {"href": config.public_url(path), "type": config.PARQUET_MIME}  # noqa: E731
+    assets = {"overview": asset(config.overview_path("x")), "data": asset(config.archive_path("x"))}
+    served = feature_service.collection({"id": "x", "assets": assets})
+    assert served["source"] == f"gs://{config.BUCKET}/{config.archive_path('x')}"

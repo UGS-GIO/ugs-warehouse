@@ -15,6 +15,8 @@ import os
 import tempfile
 
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from ..core import config, gcs
 from .topics import Topic
@@ -34,6 +36,7 @@ GEOPARQUET_VERSION = "1.1.0"
 TARGET_ROW_GROUP_BYTES = 32 * 1024**2
 ROW_GROUP_MIN = 512          # heavy geometry: a few hundred rows is already tens of MB
 ROW_GROUP_MAX = 122_880      # DuckDB's own default, the ceiling for very light rows
+PAGE_BYTES = 64 * 1024       # ~100 rows of polygon geometry: what a page-index reader fetches
 
 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
@@ -75,7 +78,7 @@ def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
 
 
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
-    """COPY the transformed `view` to a GeoParquet file.
+    """Stream the transformed `view` into a GeoParquet file.
 
     GeoParquet 1.1, written by hand: DuckDB writes 1.0, and its 2.0 (Parquet's native GEOMETRY
     type) does not open in GDAL before 3.12, which is every QGIS release today. The `bbox` struct is
@@ -84,19 +87,28 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
 
     The extent also goes out as four plain columns (bbox_xmin/ymin/xmax/ymax), which the viewer
     and ugs-map-viewer already read.
+
+    pyarrow writes it, not DuckDB's COPY, for the page index. Row groups stay at the gpio-recommended
+    size, and the page index lets a reader fetch only the ~100-row pages a bbox touches inside one
+    (the FeatureServer and the viewer both read with hyparquet, which uses it). The geometry gets
+    no dictionary: a dictionary page forces a reader back to the start of the column chunk.
     """
     rows_per_group = _row_group_size(con, view)
     print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
     geo = _geo_metadata(con, view)
-    con.execute(
-        f"COPY (SELECT * REPLACE (ST_AsWKB(geom) AS geom), "
+    batches = con.execute(
+        f"SELECT * REPLACE (ST_AsWKB(geom) AS geom), "
         f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
         f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax, "
         f"{{'xmin': ST_XMin(geom), 'ymin': ST_YMin(geom), 'xmax': ST_XMax(geom), 'ymax': ST_YMax(geom)}} AS bbox "
-        f"FROM {view}) TO '{path}' "
-        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group}, "
-        f"GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{geo}'}})"
-    )
+        f"FROM {view}"
+    ).to_arrow_reader(rows_per_group)
+    schema = batches.schema.with_metadata({"geo": geo})
+    plain = [n for n in schema.names if n != "geom"]
+    with pq.ParquetWriter(path, schema, compression="zstd", compression_level=9, write_page_index=True,
+                          data_page_size=PAGE_BYTES, write_batch_size=64, use_dictionary=plain) as out:
+        for batch in batches:   # one DuckDB batch per row group, so only one is ever in memory
+            out.write_table(pa.Table.from_batches([batch], schema), row_group_size=rows_per_group)
 
 
 def _upload(topic: Topic, local: str) -> gcs.FileMeta:
@@ -113,8 +125,8 @@ def _upload(topic: Topic, local: str) -> gcs.FileMeta:
 
 def is_current(topic: Topic) -> bool:
     """The published archive is in the format `write` makes today: GeoParquet 1.1 with a bbox
-    covering. Skip-unchanged checks this, so an archive from an older writer is rebuilt even when its
-    data has not changed. Reads only the Parquet footer."""
+    covering and a page index. Skip-unchanged checks this, so an archive from an older writer is
+    rebuilt even when its data has not changed. Reads only the Parquet footer."""
     path = config.archive_path(topic.stem)
     try:
         footer = gcs.get_tail(path, 64 * 1024)  # holds the whole footer of any archive we write
@@ -129,9 +141,13 @@ def is_current(topic: Topic) -> bool:
         f.flush()
         row = duckdb.sql(f"SELECT decode(value) FROM parquet_kv_metadata('{f.name}') "
                          f"WHERE decode(key) = 'geo'").fetchone()
+        meta = pq.read_metadata(f.name)
     geo = json.loads(row[0]) if row else {}
     column = (geo.get("columns") or {}).get(geo.get("primary_column")) or {}
-    return geo.get("version") == GEOPARQUET_VERSION and "bbox" in (column.get("covering") or {})
+    geom = meta.schema.names.index("geom") if "geom" in meta.schema.names else None
+    paged = geom is not None and meta.num_row_groups > 0 and meta.row_group(0).column(geom).has_offset_index
+    return (geo.get("version") == GEOPARQUET_VERSION and "bbox" in (column.get("covering") or {})
+            and paged)
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:

@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -4723,6 +4723,7 @@ dependencies = [
     { name = "google-cloud-run" },
     { name = "google-cloud-storage" },
     { name = "obstore" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pytz" },
     { name = "requests" },
@@ -4789,6 +4790,7 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'thumbs'", specifier = ">=1.62" },
     { name = "pmtiles", marker = "extra == 'pubs'", specifier = ">=3.8" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
+    { name = "pyarrow", specifier = ">=17" },
     { name = "pyarrow", marker = "extra == 'pubs'", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pygltflib", marker = "extra == 'pubs'", specifier = ">=1.16" },

@@ -44,6 +44,14 @@ steps:
         pip install -q -r featureserv/requirements.txt
         cd featureserv && python -m pytest -q -p no:cacheprovider test_ugs_parquet.py
 
+  # ---- geoservices: the FeatureServer query planner (the image build runs these too) ----
+  - id: geoservices
+    name: node:22
+    waitFor: ["-"]
+    dir: geoservices
+    entrypoint: bash
+    args: [-c, "npm ci --silent && npm test"]
+
   # ---- docs: every relative Markdown link resolves. Offline, so external URLs never flake the PR;
   # links inside docs/ are also checked by `mkdocs build --strict` in cloudbuild-docs.yaml. ----
   - id: docs-links

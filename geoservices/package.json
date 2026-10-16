@@ -1,0 +1,18 @@
+{
+  "name": "ugs-geoservices",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ArcGIS FeatureServer over the warehouse GeoParquet, symbolized by ugs-styles",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "1.5.6-r.1",
+    "@koopjs/koop-core": "10.4.19"
+  }
+}

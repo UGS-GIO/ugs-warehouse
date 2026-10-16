@@ -10,6 +10,7 @@ Services are a thin read-through, never the system of record.
 | Consumer | Wants | Serve via | Service? |
 |---|---|---|---|
 | ArcGIS Pro / QGIS / AGOL (vector) | queryable feature layer | **OGC API Features** (pygeoapi) | yes — scale-to-zero |
+| AGOL Map Viewer / Experience Builder / StoryMaps | styled feature layer | **ArcGIS FeatureServer** (Koop, [`geoservices/`](https://github.com/UGS-GIO/ugs-warehouse/tree/main/geoservices)) | yes — scale-to-zero |
 | ArcGIS Pro (raster) | the geologic-map COGs | **STAC catalog** + **COG by URL** | no — CDN |
 | Web maps | tiles | **PMTiles** (MapLibre) | no — CDN |
 | Analysts / QGIS / Python / R / DuckDB | query + download | **GeoParquet** (range-read pushdown) | no — CDN |
@@ -34,8 +35,9 @@ AGOL all consume OGC API Features, so one service covers them.
   pushdown, no service semantics). Parquet is for the DuckDB/analyst crowd, not Pro.
 - **Hosted feature layers in AGOL** — copies data into Esri (duplication + lock-in). Only if a
   workflow genuinely needs browser editing.
-- **Koop** (native Esri feature service, also scale-to-zero) — a fine fallback if OGC API Features
-  ever falls short in AGOL; not needed today.
+- **Koop** (native Esri feature service, also scale-to-zero) — now runs beside pygeoapi, because
+  AGOL draws OGC API Features in one default symbol. A FeatureServer carries its renderer, so Map
+  Viewer, Experience Builder and StoryMaps get the ugs-styles symbology and popups.
 
 ## `ugs:summary_fields` — which columns identify a row
 

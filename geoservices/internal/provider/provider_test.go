@@ -67,6 +67,20 @@ func TestCountAndPage(t *testing.T) {
 	}
 }
 
+func TestStatisticsCoverTheLayer(t *testing.T) {
+	pr := fixture(t)
+	pr.MaxGeometryRows = 10
+	stats := `[{"statisticType":"count","onStatisticField":"feature_id","outStatisticFieldName":"n"}]`
+	c := load(t, pr, "qfaults", query.Raw{"where": "1=1", "outStatistics": stats})
+	if len(c.Features) != 300 || c.Features[0].Geom != nil {
+		t.Errorf("statistics read %d rows (geometry %v), want all 300 without geometry", len(c.Features), c.Features[0].Geom)
+	}
+	c = load(t, pr, "qfaults", query.Raw{"outStatistics": stats, "geometry": "-180,-90,180,90"})
+	if len(c.Features) != 10 {
+		t.Errorf("under a spatial filter statistics read geometry, capped: %d rows", len(c.Features))
+	}
+}
+
 func TestTile(t *testing.T) {
 	pr := fixture(t)
 	// A statewide tile at a coarse tolerance: past the tile cap, the largest features are kept and

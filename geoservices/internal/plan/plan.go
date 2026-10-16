@@ -41,6 +41,7 @@ type Plan struct {
 	OutSR          int // 0 when not given
 	Columns        []string
 	Geometry       bool
+	Present        bool    // only rows with a geometry count, and the geometry itself is not read
 	Tolerance      float64 // degrees; 0 means none
 	Page           *pq.Page
 	FiltersApplied map[string]bool
@@ -249,12 +250,15 @@ func New(params map[string]string, layer Layer, maxRecords int64) (*Plan, error)
 	}
 
 	// Anything under a spatial filter still needs geometry, for the exact test; the response
-	// leaves it out when returnGeometry is false.
-	if isTrue(params["returnIdsOnly"]) || countOnly || params["returnGeometry"] == "false" {
+	// leaves it out when returnGeometry is false. Statistics return none, so without a filter they
+	// read none and cover the whole layer, not the rows a geometry read is capped at.
+	stats := params["outStatistics"] != ""
+	if isTrue(params["returnIdsOnly"]) || countOnly || stats || params["returnGeometry"] == "false" {
 		p.Geometry = p.Box != nil
 	} else {
 		p.Geometry = true
 	}
+	p.Present = stats && !p.Geometry
 	offset := math.NaN()
 	if s, ok := params["maxAllowableOffset"]; ok {
 		offset = js.ParseNumber(s)

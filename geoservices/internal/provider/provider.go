@@ -190,6 +190,10 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	}
 	c.FiltersApplied = p.FiltersApplied
 	c.Props = p.Columns
+	// Which rows have a geometry comes from the covering column; a file without one reads geometry.
+	if p.Present && !source.HasBBox {
+		p.Geometry, p.Present = true, false
+	}
 
 	// At a drawing scale, read past the page: specks are thinned below, as the vector tiles do,
 	// so a dense small-scale tile still fits in one page instead of splitting into hundreds.
@@ -296,6 +300,15 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 	if err != nil {
 		return nil, err
 	}
+	if p.Present {
+		bbox, err := source.Read(ctx, pq.BBox[:1], rows)
+		if err != nil {
+			return nil, err
+		}
+		for i := range rows {
+			has[i] = bbox.Get(0, i) != nil
+		}
+	}
 	out := make([]shaped, 0, len(rows))
 	cells := map[cell]bool{}
 	var class strings.Builder
@@ -305,10 +318,10 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 			props[c] = values.Get(c, i)
 		}
 		var g orb.Geometry
+		if (p.Geometry || p.Present) && !has[i] {
+			continue
+		}
 		if p.Geometry {
-			if !has[i] {
-				continue
-			}
 			g = shapes[i].G
 		}
 		if thin && shapes[i].Speck {

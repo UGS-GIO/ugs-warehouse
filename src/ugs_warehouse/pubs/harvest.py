@@ -446,7 +446,13 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     xml = open(vrt).read()
     import html
     escaped_srs = html.escape(srs)
-    xml = re.sub(r"<SRS[^>]*>.*?</SRS>", f"<SRS>{escaped_srs}</SRS>", xml, flags=re.S)
+    srs_el = f"<SRS>{escaped_srs}</SRS>"
+    xml, n = re.subn(r"<SRS[^>]*>.*?</SRS>", lambda _: srs_el, xml, flags=re.S)
+    if not n:
+        before, root_end, after = xml.rpartition("</VRTDataset>")
+        if not root_end:
+            raise ValueError(f"VRT for {os.path.basename(gtif)} has no </VRTDataset> to add <SRS> to")
+        xml = before + srs_el + root_end + after
     gtx = "<GeoTransform>%.12g, %.12g, %.12g, %.12g, %.12g, %.12g</GeoTransform>" % gt
     xml = (re.sub(r"<GeoTransform>.*?</GeoTransform>", gtx, xml, flags=re.S)
            if "<GeoTransform>" in xml else xml.replace("</VRTDataset>", gtx + "</VRTDataset>"))
@@ -887,6 +893,11 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
             hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
                  level="ERROR", category="attention", err=True)
             return "fail:noplate"
+        # gdalwarp copies coordinates unchanged from a source with no CRS, then labels them 3857.
+        if _is_unreferenced(plate):
+            hlog("FAIL plate has no usable CRS", step="georef",
+                 level="ERROR", category="attention", err=True)
+            return "fail:nocrs"
 
         # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
         # type, and browsers draw 16-bit plates almost black.

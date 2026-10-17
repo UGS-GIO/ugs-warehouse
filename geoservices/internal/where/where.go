@@ -74,6 +74,8 @@ var keywords = map[string]bool{"AND": true, "OR": true, "NOT": true, "IN": true,
 	"IS": true, "NULL": true, "BETWEEN": true, "ESCAPE": true, "TRUE": true, "FALSE": true,
 	"DATE": true, "TIMESTAMP": true}
 
+var punct = map[byte]tokKind{'(': tLParen, ')': tRParen, ',': tComma}
+
 func lex(s string) ([]token, error) {
 	var out []token
 	for i := 0; i < len(s); {
@@ -81,14 +83,8 @@ func lex(s string) ([]token, error) {
 		switch {
 		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
 			i++
-		case c == '(':
-			out = append(out, token{kind: tLParen})
-			i++
-		case c == ')':
-			out = append(out, token{kind: tRParen})
-			i++
-		case c == ',':
-			out = append(out, token{kind: tComma})
+		case punct[c] != tEOF:
+			out = append(out, token{kind: punct[c]})
 			i++
 		case c == '\'':
 			var b strings.Builder
@@ -195,31 +191,25 @@ func (p *parser) keyword(k string) bool {
 var errSyntax = fmt.Errorf("syntax")
 
 func (p *parser) or() (Expr, error) {
-	l, err := p.and()
-	if err != nil {
-		return nil, err
-	}
-	for p.keyword("OR") {
-		r, err := p.and()
-		if err != nil {
-			return nil, err
-		}
-		l = orExpr{l, r}
-	}
-	return l, nil
+	return p.chain("OR", p.and, func(l, r Expr) Expr { return orExpr{l, r} })
 }
 
 func (p *parser) and() (Expr, error) {
-	l, err := p.not()
+	return p.chain("AND", p.not, func(l, r Expr) Expr { return andExpr{l, r} })
+}
+
+// chain parses operands joined by the keyword kw, left to right.
+func (p *parser) chain(kw string, operand func() (Expr, error), join func(l, r Expr) Expr) (Expr, error) {
+	l, err := operand()
 	if err != nil {
 		return nil, err
 	}
-	for p.keyword("AND") {
-		r, err := p.not()
+	for p.keyword(kw) {
+		r, err := operand()
 		if err != nil {
 			return nil, err
 		}
-		l = andExpr{l, r}
+		l = join(l, r)
 	}
 	return l, nil
 }

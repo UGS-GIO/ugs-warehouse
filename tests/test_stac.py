@@ -1461,6 +1461,14 @@ def test_an_item_declares_the_table_extension_from_its_table_properties():
     assert stac.TABLE_EXT in _item({"table:row_count": 3})["stac_extensions"]
 
 
+def test_an_item_declares_proj_and_table_from_what_its_assets_carry():
+    item = stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
+                           datetime_iso="2026-01-01T00:00:00Z", properties={},
+                           assets={"cog": {"href": "h", "proj:code": "EPSG:26912"},
+                                   "data": {"href": "d", "table:columns": [{"name": "a"}]}})
+    assert stac.PROJ_EXT in item["stac_extensions"] and stac.TABLE_EXT in item["stac_extensions"]
+
+
 def test_a_caller_declared_extension_is_not_repeated():
     item = stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
                            datetime_iso="2026-01-01T00:00:00Z", properties={"proj:code": "EPSG:4326"},

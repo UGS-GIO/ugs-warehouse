@@ -391,7 +391,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                 **({"ugs:geometry_kind": gk} if spatial and (gk := geometry_kind(
                     layer_meta.get(label, {}).get("geometry_types"))) else {})}
 
-    def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
+    def with_related(label: str, data: dict) -> dict:
         """The Item's assets: its data (carrying its own foreign keys), then its related tables
         keyed by label, moved off a key the data or tiles use."""
         if own_fks.get(label):
@@ -403,8 +403,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                 n += 1
                 new = f"{key}_{n}"
             assets[new] = asset
-        exts = [stac.TABLE_EXT] if any("table:columns" in a for a in assets.values()) else []
-        return assets, exts
+        return assets
 
     mosaic = ([stac.related_link(
         "ugs-geologic-maps", f"geologic-maps-{mosaic_tier}",
@@ -422,8 +421,7 @@ def build_publication(p: dict, attachments: list[dict], *,
             plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
                                          "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
         items.append(item(plate_item_id(sid), "Map plate", plate_assets, geometry=aoi, item_bbox=aoi_bbox,
-                          footprint_source=aoi_source, links=mosaic,
-                          extensions=[stac.PROJ_EXT] if any(k.startswith("proj:") for k in plate_assets["cog"]) else None))
+                          footprint_source=aoi_source, links=mosaic))
     if has_units:
         # The units GeoParquet is written in EPSG:4326.
         items.append(item(f"{pub_id}_units", "Geologic unit polygons", {"data": {
@@ -441,7 +439,8 @@ def build_publication(p: dict, attachments: list[dict], *,
         # The manifest's recorded schema rides the data asset, as on a companion table.
         if meta.get("columns"):
             data["table:columns"] = meta["columns"]
-        assets, exts = with_related(label, data)
+        assets = with_related(label, data)
+        exts: list[str] = []
         links = []
         # Tiles carry the same asset + web-map link as a serving topic's, so the viewer previews
         # the layer and adds it to the map the same way. The item's `proj:*` is the layer's native
@@ -450,7 +449,7 @@ def build_publication(p: dict, attachments: list[dict], *,
             pm_url = config.public_url(pmtiles_object(sid.upper(), label))
             assets["pmtiles"] = {**stac.pmtiles_asset(pm_url), "proj:code": "EPSG:4326"}
             links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
-            exts += [stac.WEB_MAP_LINKS_EXT, stac.PROJ_EXT]
+            exts.append(stac.WEB_MAP_LINKS_EXT)
             if meta.get("style"):  # restyle binds this file; an ugs-styles style for the Item wins
                 generated = config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{meta['style']}")
         items.append(item(ids[label], ltitle, assets,
@@ -467,14 +466,14 @@ def build_publication(p: dict, attachments: list[dict], *,
                  "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
         if t.get("columns"):
             asset["table:columns"] = t["columns"]
-        assets, exts = with_related(label, asset)
+        assets = with_related(label, asset)
         items.append(item(ids[label], ltitle, assets,
                           geometry=aoi, item_bbox=aoi_bbox,
                           footprint_source=TABLE_FOOTPRINT_SOURCE if geom else FOOTPRINT_FALLBACK,
                           extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
                                  **({"description": ldesc} if ldesc else {}),
                                  **kind_props(label, False)},
-                          links=rel_links.get(label), extensions=exts or None))
+                          links=rel_links.get(label)))
     if has_3d:
         items.append(item(f"{pub_id}_fence", "3D fence diagram", {
             "fence_polygons": {"href": config.public_url(threed_object(sid, POLY_NAME)), "type": PARQUET_MIME,

@@ -74,7 +74,7 @@ func IDs(ids *query.IDs) []byte {
 	b := str(nil, 1, ids.IDField)
 	var packed []byte
 	for _, v := range ids.IDs {
-		if f, ok := number(v); ok {
+		if f, ok := js.AsNumber(v); ok {
 			packed = protowire.AppendVarint(packed, uint64(int64(f)))
 		}
 	}
@@ -181,16 +181,6 @@ func sortedOrder(attrs []jsonx.KV, types map[string]string) (keys []string, orde
 	return keys, order, kinds
 }
 
-func number(v any) (float64, bool) {
-	switch x := v.(type) {
-	case int64:
-		return float64(x), true
-	case float64:
-		return x, true
-	}
-	return 0, false
-}
-
 // toInt32 is JavaScript's `v | 0`.
 func toInt32(f float64) int32 {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
@@ -209,7 +199,7 @@ func value(b []byte, fieldType string, v any) []byte {
 	}
 	switch fieldType {
 	case "esriFieldTypeOID":
-		if f, ok := number(v); ok && f == math.Trunc(f) {
+		if f, ok := js.AsNumber(v); ok && f == math.Trunc(f) {
 			return varint(b, 5, uint64(uint32(toInt32(f))))
 		}
 		return str(b, 1, js.String(v))

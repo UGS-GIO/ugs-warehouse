@@ -10,6 +10,7 @@ import (
 
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/esri"
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/geom"
+	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/js"
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/jsonx"
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/where"
 )
@@ -297,7 +298,7 @@ func (w *winnow) idMatch(ft *Feature) bool {
 	if w.idIndex < 0 {
 		return false
 	}
-	f, ok := number(ft.Props[w.idIndex])
+	f, ok := js.AsNumber(ft.Props[w.idIndex])
 	if !ok {
 		return false
 	}

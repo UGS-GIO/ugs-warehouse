@@ -12,7 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
-	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/parquet-go/parquet-go"
@@ -76,8 +76,6 @@ func (l *Layer) Version() string { return l.file.Version }
 // Has reports whether the file has a top-level column called name.
 func (l *Layer) Has(name string) bool { _, ok := l.leaves[name]; return ok }
 
-var zLike = regexp.MustCompile(` Z$`)
-
 // Open reads the file's footer and works out its schema, geometry type, extent and row groups.
 func (r *Reader) Open(ctx context.Context, url string) (*Layer, error) {
 	f, err := r.store.Open(ctx, url)
@@ -124,12 +122,7 @@ func (r *Reader) Open(ctx context.Context, url string) (*Layer, error) {
 			l.Columns = append(l.Columns, Column{el.Name, fieldType(el)})
 		}
 	}
-	l.HasBBox = true
-	for _, n := range BBox {
-		if !l.Has(n) {
-			l.HasBBox = false
-		}
-	}
+	l.HasBBox = !slices.ContainsFunc(BBox, func(n string) bool { return !l.Has(n) })
 
 	var start int64
 	for _, rg := range md.RowGroups {
@@ -149,13 +142,9 @@ func (r *Reader) Open(ctx context.Context, url string) (*Layer, error) {
 		}
 		l.Extent = &e
 	}
-	var types []string
-	if c, ok := geo.Columns[l.Geom]; ok {
-		types = c.Types
-	}
 	t := ""
-	if len(types) > 0 {
-		t = zLike.ReplaceAllString(types[0], "")
+	if types := geo.Columns[l.Geom].Types; len(types) > 0 {
+		t = types[0]
 	}
 	switch {
 	case strings.Contains(t, "Point"):
@@ -167,12 +156,9 @@ func (r *Reader) Open(ctx context.Context, url string) (*Layer, error) {
 	}
 	l.Point = l.GeometryType == "Point"
 	// feature_id is the row number + 1 in every archive we write; trust it only where stats say so.
-	l.IDIsRow = true
-	for _, g := range l.Groups {
-		if g.IDMin != float64(g.Start+1) || g.IDMax != float64(g.Start+g.Rows) {
-			l.IDIsRow = false
-		}
-	}
+	l.IDIsRow = !slices.ContainsFunc(l.Groups, func(g Group) bool {
+		return g.IDMin != float64(g.Start+1) || g.IDMax != float64(g.Start+g.Rows)
+	})
 	if gl, ok := l.leaves[l.Geom]; ok && len(md.RowGroups) > 0 {
 		l.Paged = md.RowGroups[0].Columns[gl.index].OffsetIndexOffset != 0
 	}

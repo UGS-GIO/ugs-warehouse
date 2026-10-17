@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 
 # GCS bucket all artifacts are written to (private; served publicly via the CDN).
 BUCKET = os.environ.get("WAREHOUSE_BUCKET", "ut-dnr-ugs-maps-prod-public")
@@ -82,7 +83,7 @@ OVERRIDES_PREFIX = os.environ.get("WAREHOUSE_OVERRIDES_PREFIX", "warehouse/overr
 # The layer list the OGC API Features service (featureserv/) reads at startup, written by the
 # catalog refresh. Next to the catalog it lists, so a sandbox refresh never replaces prod's.
 FEATURES_PREFIX = os.environ.get("WAREHOUSE_FEATURES_PREFIX",
-                                 f"{STAC_PREFIX.rpartition('/')[0] or 'warehouse'}/featureserv")
+                                 posixpath.join(posixpath.dirname(STAC_PREFIX), "featureserv"))
 
 # Canonical media types for the cloud-native artifacts — one source of truth across all producers
 # (was redefined in ~8 sink/harvest modules).

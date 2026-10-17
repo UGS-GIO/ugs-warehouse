@@ -1148,7 +1148,8 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
 
 
 @pytest.mark.parametrize("stac, expected", [("warehouse/stac", "warehouse/featureserv"),
-                                             ("warehouse-sandbox/stac", "warehouse-sandbox/featureserv")])
+                                             ("warehouse-sandbox/stac", "warehouse-sandbox/featureserv"),
+                                             ("sandbox-stac", "featureserv")])
 def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
     import os
     import subprocess

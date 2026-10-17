@@ -283,9 +283,9 @@ export function usePlate(d: StacDoc | undefined): { plate?: StacDoc; error?: unk
   return { plate: q.data, error: q.error ?? undefined };
 }
 
-// Whether the tiles service (XYZ, GL style, ArcGIS VectorTileServer) serves this item. It serves the
-// serving-topics index, whose items the vector producer stamps with `ugs:dbt_schema`; a publication
-// layer has PMTiles of its own but is not in that index. The same items' tiles carry `feature_id` as
+// Whether the FeatureServer (geoservices/) serves this item. It serves the serving-topics index,
+// whose items the vector producer stamps with `ugs:dbt_schema`; a publication layer has a GeoParquet
+// and PMTiles of its own but is not in that index. The same items' tiles carry `feature_id` as
 // the feature id, which is what joins a clicked map feature to its table row.
 export const isServingTopic = (d: StacDoc | undefined): boolean =>
   typeof (d?.properties as Record<string, unknown> | undefined)?.["ugs:dbt_schema"] === "string";
@@ -379,37 +379,18 @@ export const FEATURES_BASE = (
   || ""
 ).replace(/\/+$/, "");
 
-// XYZ vector tiles + Esri VectorTileServer (the `tiles/` service). Same shape as FEATURES_BASE:
-// baked at build time, overridable per session, and empty hides the links rather than printing
-// dead ones. The service serves every topic that has PMTiles, keyed by STAC item id.
-export const TILES_BASE = (
-  new URLSearchParams(LOC.search).get("tiles")
-  || ((import.meta as { env?: Record<string, string> }).env?.VITE_TILES_BASE)
+// ArcGIS FeatureServer (the `geoservices/` service) for Map Viewer, Experience Builder and
+// StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a layer, one per render,
+// and a topic without renders is served as `default`.
+export const GEOSERVICES_BASE = (
+  new URLSearchParams(LOC.search).get("geoservices")
+  || ((import.meta as { env?: Record<string, string> }).env?.VITE_GEOSERVICES_BASE)
   || ""
 ).replace(/\/+$/, "");
-export const xyzTilesUrl = (id: string): string | undefined =>
-  TILES_BASE ? `${TILES_BASE}/tiles/${id}/{z}/{x}/{y}.mvt` : undefined;
-export const tilesStyleUrl = (id: string, render?: string): string | undefined =>
-  TILES_BASE ? `${TILES_BASE}/styles/${id}.json${render ? `?render=${encodeURIComponent(render)}` : ""}` : undefined;
-// ArcGIS Pro / AGOL. One service per render, because Pro fetches the style with no query string
-// and so cannot reach `?render=` — see tiles/README.md.
-//
-// The `/rest/services` prefix is required, not cosmetic: AGOL's "Add layer from URL" matches
-// the path against ArcGIS Server's REST layout and rejects anything else before it makes a single
-// request ("This service type is not supported"). The service also answers on `/esri/...`, but
-// that form cannot be added in AGOL — so never hand it out here.
-// Pass the topic's full render list so this can mirror the service's folder rule: a topic whose
-// only render is `default` is a root-level SERVICE and must be addressed WITHOUT a render segment.
-// Two reasons — `/rest/services` lists it as a bare service, so the render form would disagree and
-// AGOL would make two portal items for one layer; and Esri takes the layer TITLE from the URL's
-// last segment, so the `/default/` form imports as a layer named literally "Default".
-// Omitting `renders` keeps the render segment, which is the safe default for an unknown topic.
-export const esriVectorTileUrl = (id: string, render?: string, renders?: string[]): string | undefined => {
-  if (!TILES_BASE) return undefined;
-  const soloDefault = renders?.length === 1 && renders[0] === "default";
-  const seg = render && !soloDefault ? `/${encodeURIComponent(render)}` : "";
-  return `${TILES_BASE}/rest/services/${encodeURIComponent(id)}${seg}/VectorTileServer`;
-};
+export const featureServerUrl = (id: string, render = "default"): string | undefined =>
+  GEOSERVICES_BASE
+    ? `${GEOSERVICES_BASE}/ugs/rest/services/${encodeURIComponent(id)}/${encodeURIComponent(render)}/FeatureServer/0`
+    : undefined;
 
 const isCog = (a: Asset) =>
   a.type?.includes("profile=cloud-optimized")
@@ -832,8 +813,11 @@ export function useIndexes(collections: { id: string; href: string }[]) {
 export const isParquetAsset = (a: Asset): boolean =>
   Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
 
-export const parquetAsset = (item: StacDoc): Asset | undefined =>
-  Object.values(item.assets ?? {}).find(isParquetAsset);
+// The full-detail `data` asset first: a heavy layer also has a generalized `overview` parquet.
+export const parquetAsset = (item: StacDoc): Asset | undefined => {
+  const data = item.assets?.data;
+  return data && isParquetAsset(data) ? data : Object.values(item.assets ?? {}).find(isParquetAsset);
+};
 
 export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"

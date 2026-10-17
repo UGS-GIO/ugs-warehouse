@@ -115,12 +115,18 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     def _archive() -> None:
         written["data"] = sink_archive.write(topic, con, view)
 
+    def _overview() -> None:
+        # Only beside an archive written this run; when the archive failed the old pair stays.
+        if "data" in written and (overview := sink_archive.write_overview(topic, con, view)):
+            written["overview"] = overview
+
     def _pmtiles() -> None:
         written["pmtiles"] = sink_pmtiles.build(topic, con, view)
 
     data_sinks = [] if unchanged else [
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  _archive),
+        ("overview", _overview),
         ("pmtiles",  _pmtiles),
     ]
     data_failed = False
@@ -128,7 +134,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     def _stac() -> None:
         # The hash vouches for the published artifacts, so it only moves when they were all
         # rewritten. Stamping it after a failed data sink would make the next --skip-unchanged run
-        # skip the rebuild, and hand the tiles service a new version for the old archive.
+        # skip the rebuild.
         content_hash = fingerprint.published_hash(topic) if data_failed else fp
         sink_stac.write(topic, con, view, metadata=meta, related=related_info,
                         content_hash=content_hash, file_meta=written)

@@ -172,16 +172,18 @@ ArcGIS Pro 3.2 or later is recommended.
 3. Expand the connection and drag a collection, for example `hazards_qfaults`, onto the map. Pro
    queries the service as you pan and zoom. It does not download the full layer.
 
-### Vector tiles with UGS symbology
+### Feature layers with UGS symbology
 
-Each layer that has a published style is also an ArcGIS vector tile service. The tiles draw with
-the UGS symbology. You cannot query or edit the features.
+Each vector layer is also an ArcGIS feature layer. It draws with the UGS symbology when the layer
+has a published style, and has popups and an attribute table. This also works in ArcGIS Online Map
+Viewer, Experience Builder and StoryMaps.
 
-1. Click **Add Data** > **Data From Path**.
-2. Paste the service URL, for example
-   `https://ugs-warehouse-tiles-xedvkyurga-uc.a.run.app/rest/services/hazards_qfaults/VectorTileServer`.
+1. Click **Add Data** > **Data From Path**. In Map Viewer, click **Add layer** > **Add layer from
+   URL**.
+2. Paste the layer URL, for example
+   `https://ugs-warehouse-geoservices-534590904912.us-central1.run.app/ugs/rest/services/hazards_qfaults/default/FeatureServer/0`.
 
-You can copy this URL from **Links** > **ArcGIS vector tiles** on the layer page in the viewer.
+You can copy this URL from **Links** > **ArcGIS feature layer** on the layer page in the viewer.
 
 ### Geologic map rasters (COG)
 

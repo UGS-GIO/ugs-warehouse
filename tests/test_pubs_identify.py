@@ -176,7 +176,7 @@ def test_the_tiles_cover_the_mosaics_zooms_and_tippecanoe_works_in_the_work_dir(
     for opts in run.opts:
         flags = dict(zip(opts[::2], opts[1::2], strict=False))
         by_top[flags["-z"]] = flags
-    assert set(by_top) == {"14", "12"}  # the 24k and 100k mosaics' top zooms
+    assert set(by_top) == {str(identify.TOP_ZOOM[t]) for t in ("24k", "100k")}
     assert all(f["-Z"] == str(geolmap_mosaics.MOSAIC_MINZOOM) for f in by_top.values())
     assert all(Path(f["-t"]).name.startswith("identify_") for f in by_top.values())
     assert "--no-tiny-polygon-reduction" in run.opts[0]

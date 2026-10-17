@@ -1,33 +1,44 @@
 // @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PreviewMapProvider } from "@/map/preview-map";
 import type { StacDoc } from "@/stac";
-import { EndpointsPanel } from "./endpoints-panel";
 
-const pm = "https://x/a.pmtiles";
-const withTiles = (props: Record<string, unknown>): StacDoc => ({
-  id: "a", properties: props,
-  links: [{ rel: "pmtiles", href: pm, type: "application/vnd.pmtiles", "pmtiles:layers": ["a"] }],
+const parquet = { href: "https://x/a.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
+const withParquet = (props: Record<string, unknown>, links: StacDoc["links"] = []): StacDoc => ({
+  id: "a", properties: props, assets: { data: parquet }, links,
 });
-const panel = (item: StacDoc) => render(<PreviewMapProvider><EndpointsPanel item={item} /></PreviewMapProvider>);
 
-describe("EndpointsPanel tile-service links", () => {
-  it("offers the tiles service's links for a serving topic", () => {
-    // No TILES_BASE in tests, so the ArcGIS row (which needs a published style) is the one that shows.
-    panel(withTiles({ "ugs:dbt_schema": "hazards" }));
-    expect(screen.getByText("ArcGIS vector tiles")).toBeDefined();
+// GEOSERVICES_BASE is read from ?geoservices= when stac.ts loads, so each test imports the panel
+// after setting it.
+const panel = async (item: StacDoc) => {
+  const { PreviewMapProvider } = await import("@/map/preview-map");
+  const { EndpointsPanel } = await import("./endpoints-panel");
+  return render(<PreviewMapProvider><EndpointsPanel item={item} /></PreviewMapProvider>);
+};
+
+beforeEach(() => {
+  vi.resetModules();
+  window.history.replaceState(null, "", "/?geoservices=https://gs.example");
+});
+afterEach(() => { window.history.replaceState(null, "", "/"); });
+
+describe("EndpointsPanel service links", () => {
+  it("offers the FeatureServer and OGC API Features for a serving topic", async () => {
+    await panel(withParquet({ "ugs:dbt_schema": "hazards" },
+      [{ rel: "service", href: "https://fs.example/collections/a", type: "application/json" }]));
+    expect(screen.getByText("ArcGIS feature layer")).toBeDefined();
+    expect(screen.getByText("OGC API Features")).toBeDefined();
   });
 
-  it("offers none for any item without the ugs:dbt_schema stamp", () => {
-    const { container } = panel(withTiles({}));
+  it("offers none for any item without the ugs:dbt_schema stamp", async () => {
+    const { container } = await panel(withParquet({}));
     expect(container.textContent).toBe("");
   });
 
-  it("offers none for a publication layer, which the tiles service does not serve", () => {
-    const { container } = panel(withTiles({ "ugs:series_id": "M-246DM" }));
-    expect(screen.queryByText("ArcGIS vector tiles")).toBeNull();
+  it("offers none for a publication layer, which neither service serves", async () => {
+    const { container } = await panel(withParquet({ "ugs:series_id": "M-246DM" }));
+    expect(screen.queryByText("ArcGIS feature layer")).toBeNull();
     expect(container.textContent).toBe("");
   });
 });

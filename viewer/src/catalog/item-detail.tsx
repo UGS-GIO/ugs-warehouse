@@ -23,7 +23,7 @@ import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@
 import { CiteMenu } from "./cite-menu";
 import { citationFields } from "./citation";
 import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, describeData, geopackageAsset, hasFootprint, inferredKey,
-  inferredTitle, isReferenceAsset, isTableKind, IS_REVIEW, partitionRelated, ownForeignKeys, relatedAssets,
+  inferredTitle, isReferenceAsset, isTableKind, IS_REVIEW, partitionRelated, ownForeignKeys, parquetAsset, relatedAssets,
   pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { ReferenceTables } from "@/map/reference-tables";
@@ -302,8 +302,7 @@ function PartOfLine({ partOf }: { partOf?: PartOf }) {
 // item-level comment thread, and a per-column comment button (flag a wrong name/unit/type).
 function CatalogReview({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
-  const geoparquet = Object.entries(item.assets ?? {})
-    .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
+  const geoparquet = parquetAsset(item)?.href;
   const cols = tableColumns(item);
   const [openCol, setOpenCol] = useState<string | null>(null);
   if (!id) return null;

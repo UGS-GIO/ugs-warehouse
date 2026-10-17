@@ -70,15 +70,9 @@ PMTILES_MIME = config.PMTILES_MIME
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-# Max web-mercator zoom per tier for a STATEWIDE build. `gdal raster tile --max-zoom` enforces this
-# directly (the old bake passed -co ZOOM_LEVEL, which the MBTiles driver silently ignored, then
-# worked around it by resampling the VRT). The 24k tier is the flagship and its TARGET is z17 (the
-# 600 DPI COGs' native detail), BUT a statewide z17 build produces ~tens of GB of tiles, which does
-# not fit the RAM-backed /tmp of the current job — so the default stays at a RAM-safe cap until the
-# disk-backed / tile-sharded statewide build lands (the ALL-5993 scale follow-up). Run a higher zoom
-# explicitly with --maxzoom (and MOSAIC_WORK_DIR on a real disk) once that is in place. A scoped
-# --quads build renders at native zoom (full detail on a few maps).
-TIER_MAXZOOM = {"24k": 14, "100k": 12, "250k": 12, "500k": 12}
+# Max zoom per tier for a STATEWIDE build. 24k and 100k bake on Cloud Batch, where
+# submit_mosaics_batch.sh passes z17 and z15; a --quads build without --maxzoom renders native.
+TIER_MAXZOOM = {"24k": 14, "100k": 15, "250k": 12, "500k": 12}
 # Lowest zoom to build overviews down to (off the base tiles). A statewide extent is ~1 tile at low
 # zoom, so a full pyramid to MOSAIC_MINZOOM is cheap and lets the layer draw when zoomed out.
 MOSAIC_MINZOOM = max(0, int(os.environ.get("MOSAIC_MINZOOM", "4")))
@@ -579,8 +573,8 @@ def build(scales: list[str], maxz: int | None = None,
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build per-scale raster PMTiles mosaics of geologic maps")
     ap.add_argument("--scale", choices=(*TIERS, "all"), action="append",
-                    help="Scale tier to build; repeat for several (default all). The statewide 24k tier "
-                         "at z17 runs on Cloud Batch (scripts/submit_mosaics_batch.sh).")
+                    help="Scale tier to build; repeat for several (default all). The statewide 24k and "
+                         "100k tiers run on Cloud Batch (scripts/submit_mosaics_batch.sh).")
     ap.add_argument("--maxzoom", type=int, default=None,
                     help="Cap the base (native) zoom level; default lets GDAL pick from resolution.")
     ap.add_argument("--editions", choices=("current", "all"), default="current",

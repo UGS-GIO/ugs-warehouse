@@ -258,13 +258,18 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
     return counts
 
 
+# Identify needs the unit under the cursor, not the mosaic's sharp edges: a map's own linework is
+# coarser than a pixel at these zooms, and the tiles stay small enough to build statewide.
+TOP_ZOOM = {"24k": 14, "100k": 12, "250k": 12, "500k": 12}
+
+
 def build_tier(tier: str, order: list[str], sums: dict[str, str], sig: dict) -> dict | None:
     """Build and upload the tier's identify PMTiles. Returns the state to record, or None when no
-    member has any polygon (nothing is written). The tiles cover the zooms the mosaic shows, up to
-    the tier's top zoom."""
+    member has any polygon (nothing is written). The tiles start at the mosaic's lowest zoom and
+    stop at `TOP_ZOOM`; the map overzooms them past that."""
     from . import geolmap_mosaics
 
-    maxz = geolmap_mosaics.TIER_MAXZOOM[tier]
+    maxz = TOP_ZOOM[tier]
     minz = min(geolmap_mosaics.MOSAIC_MINZOOM, maxz)
     with tempfile.TemporaryDirectory(prefix=f"identify_{tier}_") as work:
         geojsonl = os.path.join(work, "units.geojsonl")

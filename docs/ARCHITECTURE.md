@@ -30,7 +30,7 @@ flowchart LR
   subgraph S["Serving"]
     direction TB
     VW["STAC viewer<br/>browse · map · zarr datacubes · export"]
-    FS["OGC Features · tiles<br/>pygeoapi · XYZ · Esri VTS"]
+    FS["OGC Features · FeatureServer<br/>pygeoapi · Go"]
   end
 
   CDN --> VW
@@ -77,7 +77,9 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
 - Reproject every source CRS → **EPSG:4326**; add an H3 r9 cell; Hilbert-sort so Parquet row-groups
   bbox-prune well. (Unstamped SRID-0 geometry errors loudly rather than assuming 4326.)
 - **Four sinks per topic:** DuckLake table · GeoParquet (`latest` + dated, citable) · PMTiles
-  (tippecanoe, `-r1`) · STAC item (the discovery + linking layer).
+  (tippecanoe, `-r1`) · STAC item (the discovery + linking layer). The GeoParquet has a page index,
+  and a heavy line or polygon layer also gets an `overview` asset: the same rows simplified to
+  ~50 m, for small-scale drawing. Downloads and tables read `data`, never `overview`.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.
@@ -424,8 +426,9 @@ which preserves object paths.
 - Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.
 - STAC viewer: catalog browse + map + COG preview + zarr datacube layers + client-side export.
 - OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
-- `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
-  so AGOL and Pro can add a layer at all.
+- `ugs-warehouse-geoservices`: an ArcGIS FeatureServer over the GeoParquet, one layer per ugs-styles
+  render, so Map Viewer, Experience Builder and StoryMaps get the symbology, popups and attribute
+  tables (`geoservices/README.md`).
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
 - External catalogs (USWB) federate in as children of the root, so one catalog URL covers them.
 
@@ -444,6 +447,11 @@ The vector pipeline is end-to-end in production. The honest gaps:
   don't render on the viewer map because the visual asset is the native-CRS COG (#84), `native_crs`
   is trusted text that's never verified against the promoted COG (#83), and promote shares an
   instance with ingest with no dead-letter policy, so one bad message is an outage (#81).
+- 🟧 **FeatureServer at scale** — every query is computed at the origin. Map Viewer asks for the
+  same fixed grid of tile queries for every user, so the plan is: a CDN in front that caches GET
+  responses (purged on reingest), z5-z10 tile responses of heavy layers baked to the bucket at
+  reingest, a native origin with an encoded-response cache and load shedding, the paged archive and
+  overviews, and min-instances 1 with concurrency set from the measured breaking point.
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
 - 🟧 **Legacy pubs** — 1,163 catalog items, mostly legacy mining district scans, have no record in

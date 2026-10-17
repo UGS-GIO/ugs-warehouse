@@ -1,4 +1,4 @@
-"""The GeoParquet COPY must bound its row group size.
+"""The archive GeoParquet must bound its row group size.
 
 A row group is the smallest unit a range-reading client can fetch, so it sets the floor on the
 viewer's first page. DuckDB's default (122,880 rows) put wetlands_riverine in two groups and made
@@ -10,29 +10,16 @@ from ugs_warehouse.vector import sink_archive
 
 
 class _FakeCon:
-    """Records the COPY, and answers the bytes-per-row sample with `per_row`."""
+    """Answers the bytes-per-row sample with `per_row`."""
 
-    def __init__(self, per_row: float = 2_000.0) -> None:
-        self.sql = ""
+    def __init__(self, per_row: float) -> None:
         self._per_row = per_row
 
     def execute(self, sql: str):
-        if sql.lstrip().upper().startswith("SELECT"):
-            return self
-        self.sql = sql
         return self
 
     def fetchone(self):
         return (self._per_row,)
-
-    def fetchall(self):
-        return [("MULTIPOLYGON", False)]
-
-
-def test_copy_bounds_the_row_group_size() -> None:
-    con = _FakeCon()
-    sink_archive._copy_geoparquet(con, "v", "/tmp/out.parquet")
-    assert "ROW_GROUP_SIZE " in con.sql
 
 
 def test_row_group_size_targets_bytes_not_rows() -> None:
@@ -49,11 +36,38 @@ def test_row_group_size_targets_bytes_not_rows() -> None:
     assert 147_506 / riverine > 20, f"{riverine} rows/group still leaves too few groups"
 
 
-def test_copy_still_writes_the_bbox_covering_columns() -> None:
-    con = _FakeCon()
-    sink_archive._copy_geoparquet(con, "v", "/tmp/out.parquet")
-    for col in ("bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"):
-        assert col in con.sql
+def _written(tmp_path, rows: int = 5000):
+    import duckdb
+    import pyarrow.parquet as pq
+
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    con.execute(f"CREATE VIEW v AS SELECT i AS id, 'unit ' || i AS name, "
+                f"ST_Buffer(ST_Point(i % 100, i // 100), 0.4) AS geom FROM range({rows}) s(i)")
+    path = str(tmp_path / "out.parquet")
+    sink_archive._copy_geoparquet(con, "v", path)
+    return sink_archive._row_group_size(con, "v"), pq.ParquetFile(path)
+
+
+def test_copy_bounds_the_row_group_size(tmp_path) -> None:
+    rows_per_group, f = _written(tmp_path)
+    groups = [f.metadata.row_group(i).num_rows for i in range(f.metadata.num_row_groups)]
+    assert max(groups) <= rows_per_group and sum(groups) == 5000
+
+
+def test_copy_still_writes_the_bbox_covering_columns(tmp_path) -> None:
+    _, f = _written(tmp_path)
+    for col in ("bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax", "bbox"):
+        assert col in f.schema_arrow.names
+
+
+def test_copy_writes_a_page_index_and_no_geometry_dictionary(tmp_path) -> None:
+    """What lets a reader fetch only the pages a bbox touches inside a row group."""
+    _, f = _written(tmp_path)
+    geom = f.metadata.row_group(0).column(f.schema_arrow.names.index("geom"))
+    assert geom.has_offset_index and geom.has_column_index
+    assert not geom.has_dictionary_page
+    assert b"geo" in f.schema_arrow.metadata
 
 
 # A row group is the floor on what a clipped export downloads, so it has to be bounded in BYTES.

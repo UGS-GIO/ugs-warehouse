@@ -879,10 +879,11 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
 # place on the map. The index leaves their bbox out and the viewer keeps them off the map.
 NON_MAPPABLE_KINDS = ("table", "supporting")
 # The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
-INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
+# The overview's tolerance is how the FeatureServer (geoservices/) picks it for small scales.
+INDEX_ASSET_KEYS = ("href", "type", "roles", "title", "ugs:simplify_tolerance")
 # The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
-# topic's data or tiling does. Read by the ingest's skip check, the thumbnail job's content hash, and
-# tiles/app.py (as a literal, from its own image) to version tile URLs, so a rename must change all.
+# topic's data or tiling does. Read by the ingest's skip check and the thumbnail job's content hash,
+# so a rename must change both.
 CONTENT_HASH_PROP = "ugs:content_hash"
 
 
@@ -1086,7 +1087,7 @@ SERIES_DESC = {
 # differ — SERIES_DESC is verbatim UGS copy from geology.utah.gov/map-pub, inherited, not written.
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
-# one-URL consumers (the tiles service, the ops console) working across a split
+# one-URL consumers (the FeatureServer, the ops console) working across a split
 # without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
 ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 

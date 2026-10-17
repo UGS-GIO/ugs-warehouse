@@ -153,6 +153,8 @@ def _run_with_failing(failing=None, published="old-hash"):
          patch("ugs_warehouse.vector.fingerprint.published_hash", return_value=published), \
          patch("ugs_warehouse.vector.sink_ducklake.write", side_effect=effect("ducklake")), \
          patch("ugs_warehouse.vector.sink_archive.write", side_effect=effect("archive")), \
+         patch("ugs_warehouse.vector.sink_archive.write_overview",
+               side_effect=effect("overview")) as overview, \
          patch("ugs_warehouse.vector.sink_pmtiles.build", side_effect=effect("pmtiles")), \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -160,27 +162,32 @@ def _run_with_failing(failing=None, published="old-hash"):
 
         rc = _ingest(topic, dry_run=False, skip_refresh=False)
 
-    return rc, stac_write.call_args.kwargs["content_hash"]
+    return rc, stac_write.call_args.kwargs["content_hash"], overview.call_count
 
 
-@pytest.mark.parametrize("failing", ["ducklake", "archive", "pmtiles"])
+@pytest.mark.parametrize("failing", ["ducklake", "archive", "overview", "pmtiles"])
 def test_a_failed_data_sink_keeps_the_published_hash(failing):
     """The hash vouches for the published artifacts. If it moved while an old one stayed, the next
-    --skip-unchanged run would skip the rebuild, and the tiles service would cache the old
-    PMTiles under the new version for a year."""
-    rc, content_hash = _run_with_failing(failing)
+    --skip-unchanged run would skip the rebuild."""
+    rc, content_hash, _ = _run_with_failing(failing)
     assert rc == 1
     assert content_hash == "old-hash"
 
 
+def test_no_overview_beside_a_failed_archive():
+    """The published overview is of the published archive, so a run whose archive failed keeps both."""
+    *_, overview_calls = _run_with_failing("archive")
+    assert overview_calls == 0
+
+
 def test_a_failed_first_ingest_stamps_no_hash():
-    rc, content_hash = _run_with_failing("pmtiles", published=None)
+    rc, content_hash, _ = _run_with_failing("pmtiles", published=None)
     assert rc == 1
     assert content_hash is None  # nothing published to vouch for, so the next run rebuilds
 
 
 def test_a_clean_run_stamps_the_fresh_hash():
-    rc, content_hash = _run_with_failing()
+    rc, content_hash, _ = _run_with_failing()
     assert rc == 0
     assert content_hash == "fresh-hash"
 

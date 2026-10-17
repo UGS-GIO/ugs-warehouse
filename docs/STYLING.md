@@ -67,9 +67,7 @@ layers asking for `Arial`, a font no open glyph server can serve (#116). ugs-sty
 the fontstacks it uses (`Noto Sans Regular/Bold/Italic`, next to the styles and sprites) and fails
 its build on any other name, so a style can only ask for type we host.
 
-Label renders carry `glyphs` in `ugs:renders` alongside `sprite`; the tiles service passes it into
-`/styles/{topic}.json`, and re-points it at `…/VectorTileServer/resources/fonts/…` for Esri, which
-reads fonts from under the service. The viewer's base styles (Protomaps Streets/Light, satellite)
+Label renders carry `glyphs` in `ugs:renders` alongside `sprite`. The viewer's base styles (Protomaps Streets/Light, satellite)
 name the same URL.
 
 ## Legend

@@ -596,7 +596,7 @@ def test_build_tier_gdal_cache_follows_the_environment(monkeypatch, env_value, e
     ([], ["24k", "100k", "250k", "500k"]),
     (["--scale", "all"], ["24k", "100k", "250k", "500k"]),
     (["--scale", "100k", "--scale", "500k"], ["100k", "500k"]),
-    (["--scale=100k", "--scale=500k"], ["100k", "500k"]),   # the Cloud Run job's args (cloudbuild.yaml)
+    (["--scale=100k", "--scale=500k"], ["100k", "500k"]),   # the --scale=<tier> form
     (["--scale", "500k", "--scale", "500k"], ["500k"]),
 ])
 def test_main_scale_is_repeatable(argv, expected):

@@ -15,7 +15,6 @@ substitutions:
   _SQL_INSTANCE: ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db
   _API_SERVICE: ugs-warehouse-api-dev
   _FEATURES_SERVICE: ugs-warehouse-features-dev
-  _TILES_SERVICE: ugs-warehouse-tiles-dev
   _ADMIN_SERVICE: ugs-warehouse-admin-dev
   _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com
   _ADMIN_HOSTS: .run.app
@@ -48,17 +47,6 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:dev
       - featureserv/
 
-  - id: build-tiles
-    waitFor: ['-']
-    name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:dev
-      - tiles/
-
   - id: build-admin
     waitFor: ['-']
     name: gcr.io/cloud-builders/docker
@@ -83,11 +71,6 @@ steps:
     waitFor: [build-features]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features']
-
-  - id: push-tiles
-    waitFor: [build-tiles]
-    name: gcr.io/cloud-builders/docker
-    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles']
 
   - id: push-admin
     waitFor: [build-admin]
@@ -128,24 +111,6 @@ steps:
       - --memory=2Gi
       - --timeout=120
       - --concurrency=4
-      - --max-instances=5
-
-  - id: deploy-tiles
-    waitFor: [push-tiles]
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_TILES_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
-      - --region=${_REGION}
-      - --service-account=${_RUNTIME_SA}
-      - --allow-unauthenticated
-      - --port=8080
-      - --cpu=1
-      - --memory=512Mi
-      - --timeout=60
       - --max-instances=5
 
   - id: deploy-admin

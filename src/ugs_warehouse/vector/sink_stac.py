@@ -17,7 +17,7 @@ import sys
 import duckdb
 
 from ..core import config, gcs, stac
-from . import ducklake, introspect
+from . import ducklake, introspect, sink_archive
 from .topics import Topic
 
 # The nesting catalog. A topic's own collection is its dbt mart schema, one level down — the
@@ -173,6 +173,13 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
+    # Generalized copy of a heavy layer, for small-scale display (vector/sink_archive.py). Presence-
+    # driven like the thumbnail: the archive sink writes or removes it with the archive.
+    overview_path = config.overview_path(topic.stem)
+    if gcs.exists(overview_path):
+        assets["overview"] = {"href": config.public_url(overview_path), "type": PARQUET_MIME,
+                              "roles": ["data"], "title": "GeoParquet generalized for small-scale display",
+                              "ugs:simplify_tolerance": sink_archive.OVERVIEW_TOLERANCE}
     # DuckLake table locator — REVIEW CATALOG ONLY. It's a gs:// table id, not a fetchable object:
     # a browser can't open gs://, the bucket is private (IAM-gated), and even with the parquet
     # chunks a consumer can't materialise the table without the private DuckLake catalog DSN. So the

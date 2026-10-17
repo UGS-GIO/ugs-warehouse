@@ -205,10 +205,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
             continue
         asset.update(stac.file_fields((file_meta or {}).get(key)) or carried.get(key, {}))
 
-    # Table extension is in play iff any asset describes its columns.
     exts = [stac.WEB_MAP_LINKS_EXT]
-    if any("table:columns" in a for a in assets.values()):
-        exts.append(stac.TABLE_EXT)
 
     item = stac.build_item(
         item_id=topic.stem, collection=topic.schema,

@@ -739,9 +739,7 @@ def _layer_collection_doc(item: dict, path: str) -> dict:
     props = item.get("properties") or {}
     assets = item.get("assets") or {}
     title = props.get("title") or prettify(item["id"])
-    exts = [PORTOLAN_SCHEMA, WEB_MAP_LINKS_EXT]
-    if any("table:columns" in a for a in assets.values()):
-        exts.append(TABLE_EXT)
+    exts = _declare_proj_table([PORTOLAN_SCHEMA, WEB_MAP_LINKS_EXT], {}, assets)
     if any("file:size" in a or "file:checksum" in a for a in assets.values()):
         exts.append(FILE_EXT)
     depth = path.count("/") + 2

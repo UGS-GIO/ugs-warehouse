@@ -278,10 +278,17 @@ def test_sink_stac_wires_related(monkeypatch):
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
     monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
-    monkeypatch.setattr(sink_stac.stac, "build_item",
-                        lambda **k: captured.update(k) or {"assets": k["assets"]})
+    real_build = sink_stac.stac.build_item
+
+    def build(**k):
+        captured.update(k)
+        captured["item"] = real_build(**k)
+        return captured["item"]
+
+    monkeypatch.setattr(sink_stac.stac, "build_item", build)
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "stamp_file_meta", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 
     related_info = {
@@ -304,7 +311,7 @@ def test_sink_stac_wires_related(monkeypatch):
     assert "related" in assets["boxes"]["roles"]
     # related link appended to the item's links; Table ext declared (boxes has table:columns).
     assert any(lk.get("rel") == "related" for lk in captured["extra_links"])
-    assert sink_stac.stac.TABLE_EXT in captured["stac_extensions"]
+    assert sink_stac.stac.TABLE_EXT in captured["item"]["stac_extensions"]
 
 
 def test_sink_stac_ducklake_review_only(monkeypatch):

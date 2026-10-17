@@ -163,7 +163,7 @@ def test_a_tier_with_no_polygons_builds_nothing(run, tmp_path):
         gcs.get_bytes(identify.state_object("250k"))
 
 
-def test_the_tiles_cover_the_mosaics_zooms_and_tippecanoe_works_in_the_work_dir(run, tmp_path):
+def test_the_tiles_stop_at_identifys_top_zoom_and_tippecanoe_works_in_the_work_dir(run, tmp_path):
     from ugs_warehouse.pubs import geolmap_mosaics
 
     _own(tmp_path, "A-1", ["Qal"], -112.0)
@@ -176,7 +176,7 @@ def test_the_tiles_cover_the_mosaics_zooms_and_tippecanoe_works_in_the_work_dir(
     for opts in run.opts:
         flags = dict(zip(opts[::2], opts[1::2], strict=False))
         by_top[flags["-z"]] = flags
-    assert set(by_top) == {str(identify.TOP_ZOOM[t]) for t in ("24k", "100k")}
+    assert set(by_top) == {"14", "12"}
     assert all(f["-Z"] == str(geolmap_mosaics.MOSAIC_MINZOOM) for f in by_top.values())
     assert all(Path(f["-t"]).name.startswith("identify_") for f in by_top.values())
     assert "--no-tiny-polygon-reduction" in run.opts[0]

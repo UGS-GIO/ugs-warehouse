@@ -249,7 +249,8 @@ from the seamless `geolmap/units/units.parquet` (`unit_symbol`, `unit_name`, `ag
 filtered by `series_id`. The 24k layer is built although its mosaic is not published. Tiling uses
 the pub-layer flags (`sink_pmtiles.TILE_OPTS`: no feature or tile-size limit, no drop rate) plus
 `--no-tiny-polygon-reduction`, so no polygon is dropped. Tiles run from the mosaics' minimum zoom
-(`MOSAIC_MINZOOM`) to the tier's top zoom (`TIER_MAXZOOM`). `_identify/<tier>.state.json` holds the
+(`MOSAIC_MINZOOM`) to identify's own top zoom (`identify.TOP_ZOOM`: z14 for 24k, z12 above), and
+the map overzooms them past that. `_identify/<tier>.state.json` holds the
 membership, each member's `unit_polys` checksum and the seamless file's etag; a tier is built only
 when one changed. The mosaic Item's `units` asset is added by the mosaics job's item writer
 (`_write_item`) and, for a mosaic already published, patched in place (`stac.patch_published`,

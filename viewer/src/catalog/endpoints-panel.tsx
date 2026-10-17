@@ -72,16 +72,16 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   // Raster and publication items have neither, so they get no row instead of a link to a
   // collection that never existed (#85: featureserv is keyed by item id, not collection id).
   const coll = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(id) : undefined);
-  const esriRenders = Object.keys(rendersOf(item)).sort();
+  const renders = Object.keys(rendersOf(item)).sort();
   // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
   const { render: shown } = usePreviewMap();
   const [pickedRender, setPickedRender] = useState<string>();
   // Explicit choice wins; otherwise track the map so the two never disagree silently.
-  const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
-  const renderPick = esriRenders.length > 1 ? (
+  const chosen = [pickedRender, shown].find((r) => r && renders.includes(r)) ?? renders[0];
+  const renderPick = renders.length > 1 ? (
     <UiSelect value={chosen} onValueChange={setPickedRender}
       title="Which published symbology this service serves"
-      items={esriRenders.map((r) => ({ value: r, label: r }))}
+      items={renders.map((r) => ({ value: r, label: r }))}
       className="max-w-[11rem] shrink-0 text-sm" />
   ) : undefined;
   type Row = { label: string; desc: string; url: string; pick?: React.ReactNode };

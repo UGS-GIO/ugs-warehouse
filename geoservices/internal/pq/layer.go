@@ -334,20 +334,15 @@ func (l *Layer) GeomBytes(rows []int64) int64 {
 		return 0
 	}
 	var n int64
-	for i := 0; i < len(rows); {
-		g := l.groupOf(rows[i])
-		first, end := l.Groups[g].Start, l.Groups[g].Start+l.Groups[g].Rows
-		var rel []int64
-		for ; i < len(rows) && rows[i] < end; i++ {
-			rel = append(rel, rows[i]-first)
-		}
-		lay, known := l.reader.layouts.Get(chunkKey{l.ID(), lf.index, g})
+	spans, _ := l.spans(rows)
+	for _, sp := range spans {
+		lay, known := l.reader.layouts.Get(chunkKey{l.ID(), lf.index, sp.g})
 		if !known {
-			start, stop := l.chunkRange(lf, g)
+			start, stop := l.chunkRange(lf, sp.g)
 			n += stop - start
 			continue
 		}
-		for _, p := range pagesFor(lay.firsts(), rel) {
+		for _, p := range pagesFor(lay.firsts(), sp.rel) {
 			n += lay.pages[p].size
 		}
 	}

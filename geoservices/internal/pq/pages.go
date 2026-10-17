@@ -205,12 +205,11 @@ func (l *Layer) readLayout(ctx context.Context, lf leaf, g int) (*layout, error)
 		switch {
 		case h.Type == format.DictionaryPage:
 			lay.dict = [2]int64{start + off, start + off + size}
-		case h.DataPageHeader.Valid:
+		case h.DataPageHeader.Valid || h.DataPageHeaderV2.Valid:
 			n := int64(h.DataPageHeader.V.NumValues) // a flat column: one value per row
-			lay.pages = append(lay.pages, pageLoc{start + off, size, row, n, int64(h.UncompressedPageSize)})
-			row += n
-		case h.DataPageHeaderV2.Valid:
-			n := int64(h.DataPageHeaderV2.V.NumRows)
+			if h.DataPageHeaderV2.Valid {
+				n = int64(h.DataPageHeaderV2.V.NumRows)
+			}
 			lay.pages = append(lay.pages, pageLoc{start + off, size, row, n, int64(h.UncompressedPageSize)})
 			row += n
 		}

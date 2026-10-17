@@ -106,24 +106,23 @@ func (r *Reader) Open(ctx context.Context, url string) (*Layer, error) {
 		l.Geom = "geom"
 	}
 
-	// Walk the flattened schema: top-level fields, and the leaf column index of each primitive.
-	schema := md.Schema
-	leafIndex := 0
-	for i := 1; i < len(schema); {
-		el := &schema[i]
-		if n, ok := el.NumChildren.Get(); ok && n > 0 {
-			skip, leaves := subtree(schema, i)
-			i += skip
-			leafIndex += leaves
+	// The schema elements of the leaf columns, by leaf column index; top-level leaves are fields.
+	var elements []*format.SchemaElement
+	for i := range md.Schema {
+		if md.Schema[i].Type.Valid {
+			elements = append(elements, &md.Schema[i])
+		}
+	}
+	for _, c := range pf.Root().Columns() {
+		if !c.Leaf() {
 			continue
 		}
+		el := elements[c.Index()]
 		kind, conv := converter(el, el.Name == l.Geom)
-		l.leaves[el.Name] = leaf{leafIndex, kind, conv}
+		l.leaves[el.Name] = leaf{c.Index(), kind, conv}
 		if el.Name != l.Geom && !internal[el.Name] {
 			l.Columns = append(l.Columns, Column{el.Name, fieldType(el)})
 		}
-		leafIndex++
-		i++
 	}
 	l.HasBBox = true
 	for _, n := range BBox {
@@ -178,23 +177,6 @@ func (r *Reader) Open(ctx context.Context, url string) (*Layer, error) {
 		l.Paged = md.RowGroups[0].Columns[gl.index].OffsetIndexOffset != 0
 	}
 	return l, nil
-}
-
-// subtree is how many schema elements and leaves the group at i spans.
-func subtree(schema []format.SchemaElement, i int) (elements, leaves int) {
-	n, _ := schema[i].NumChildren.Get()
-	elements = 1
-	for c := 0; c < int(n); c++ {
-		if k, ok := schema[i+elements].NumChildren.Get(); ok && k > 0 {
-			e, l := subtree(schema, i+elements)
-			elements += e
-			leaves += l
-		} else {
-			elements++
-			leaves++
-		}
-	}
-	return
 }
 
 // stat is a row group's min or max statistic for a numeric column, NaN when absent.

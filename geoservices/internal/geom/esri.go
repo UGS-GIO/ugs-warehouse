@@ -1,6 +1,8 @@
 package geom
 
 import (
+	"slices"
+
 	"github.com/paulmach/orb"
 
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/jsonx"
@@ -55,7 +57,8 @@ func ToEsri(g orb.Geometry) (Esri, bool) {
 	return Esri{}, false
 }
 
-func closeRing(r []orb.Point) []orb.Point {
+// CloseRing repeats a ring's first point at its end when it is not there already.
+func CloseRing(r []orb.Point) []orb.Point {
 	if len(r) > 0 && r[0] != r[len(r)-1] {
 		out := make([]orb.Point, len(r), len(r)+1)
 		copy(out, r)
@@ -64,7 +67,8 @@ func closeRing(r []orb.Point) []orb.Point {
 	return r
 }
 
-func clockwise(r []orb.Point) bool {
+// Clockwise is a ring's winding by the shoelace sum, as @terraformer/arcgis tests it.
+func Clockwise(r []orb.Point) bool {
 	total := 0.0
 	for i := 0; i < len(r)-1; i++ {
 		total += (r[i+1][0] - r[i][0]) * (r[i+1][1] + r[i][1])
@@ -73,10 +77,8 @@ func clockwise(r []orb.Point) bool {
 }
 
 func reversed(r []orb.Point) []orb.Point {
-	out := make([]orb.Point, len(r))
-	for i, p := range r {
-		out[len(r)-1-i] = p
-	}
+	out := slices.Clone(r)
+	slices.Reverse(out)
 	return out
 }
 
@@ -84,18 +86,18 @@ func orient(p orb.Polygon) [][]orb.Point {
 	if len(p) == 0 {
 		return nil
 	}
-	outer := closeRing(p[0])
+	outer := CloseRing(p[0])
 	if len(outer) < 4 {
 		return [][]orb.Point{}
 	}
-	if !clockwise(outer) {
+	if !Clockwise(outer) {
 		outer = reversed(outer)
 	}
 	out := [][]orb.Point{outer}
 	for _, h := range p[1:] {
-		hole := closeRing(h)
+		hole := CloseRing(h)
 		if len(hole) >= 4 {
-			if clockwise(hole) {
+			if Clockwise(hole) {
 				hole = reversed(hole)
 			}
 			out = append(out, hole)

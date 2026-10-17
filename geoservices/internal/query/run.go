@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/paulmach/orb"
+	"github.com/paulmach/orb/project"
 
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/esri"
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/geom"
@@ -315,12 +316,13 @@ func (w *winnow) outGeometry(g orb.Geometry) orb.Geometry {
 	if g == nil {
 		return nil
 	}
+	// g may be a cached shape: project.Geometry works in place, so it gets a copy.
 	if w.toMercator {
-		g = geom.Map(g, geom.ToMercator)
+		g = project.Geometry(orb.Clone(g), geom.ToMercator)
 	}
 	if w.precision != nil {
 		d := *w.precision
-		g = geom.Map(g, func(p orb.Point) orb.Point { return orb.Point{toFixed(p[0], d), toFixed(p[1], d)} })
+		g = project.Geometry(orb.Clone(g), func(p orb.Point) orb.Point { return orb.Point{toFixed(p[0], d), toFixed(p[1], d)} })
 	}
 	return g
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/paulmach/orb"
 	"github.com/paulmach/orb/planar"
+	"github.com/paulmach/orb/project"
 
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/geom"
 )
@@ -61,7 +62,7 @@ func filterGeometry(v any, inSR any) (orb.Geometry, error) {
 		return nil, bad("Unsupported spatial reference: " + strconv.Itoa(srid))
 	}
 	if geom.Mercator[srid] || srid == 3785 {
-		g = geom.Map(g, geom.ToLonLat)
+		g = project.Geometry(g, geom.ToLonLat)
 	}
 	return g, nil
 }
@@ -136,11 +137,8 @@ func esriToGeometry(m map[string]any) (orb.Geometry, error) {
 			if !ok {
 				return nil, bad("Invalid geometry")
 			}
-			ring := orb.Ring(pts)
-			if len(ring) > 0 && ring[0] != ring[len(ring)-1] {
-				ring = append(ring, ring[0])
-			}
-			if esriClockwise(ring) {
+			ring := orb.Ring(geom.CloseRing(pts))
+			if geom.Clockwise(ring) {
 				outers = append(outers, orb.Polygon{ring})
 			} else {
 				holes = append(holes, ring)
@@ -162,12 +160,4 @@ func esriToGeometry(m map[string]any) (orb.Geometry, error) {
 		return orb.MultiPolygon(outers), nil
 	}
 	return nil, bad("Invalid geometry")
-}
-
-func esriClockwise(r orb.Ring) bool {
-	total := 0.0
-	for i := 0; i+1 < len(r); i++ {
-		total += (r[i+1][0] - r[i][0]) * (r[i+1][1] + r[i][1])
-	}
-	return total >= 0
 }

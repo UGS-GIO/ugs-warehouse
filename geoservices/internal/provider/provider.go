@@ -3,6 +3,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -233,15 +234,7 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 				feats[i].size = spread(feats[i].f.Geom)
 			}
 		}
-		slices.SortStableFunc(feats, func(a, b shaped) int {
-			switch {
-			case a.size > b.size:
-				return -1
-			case a.size < b.size:
-				return 1
-			}
-			return 0
-		})
+		slices.SortStableFunc(feats, func(a, b shaped) int { return cmp.Compare(b.size, a.size) })
 	}
 	// Mirrors JavaScript's `!tile && (over || (thin && read past))`, where thin is null without a page.
 	switch {
@@ -472,11 +465,9 @@ func overview(item *catalog.Item, tolerance float64) string {
 
 func projectExtent(e *[4]float64, wkid int) jsonx.Obj {
 	if !geom.Mercator[wkid] {
-		return jsonx.Obj{{K: "xmin", V: e[0]}, {K: "ymin", V: e[1]}, {K: "xmax", V: e[2]}, {K: "ymax", V: e[3]},
-			{K: "spatialReference", V: jsonx.Obj{{K: "wkid", V: 4326}}}}
+		return query.Extent(jsonx.Obj{{K: "wkid", V: 4326}}, e[0], e[1], e[2], e[3])
 	}
 	xmin, ymin := geom.ExtentToMercator(e[0], e[1])
 	xmax, ymax := geom.ExtentToMercator(e[2], e[3])
-	return jsonx.Obj{{K: "xmin", V: xmin}, {K: "ymin", V: ymin}, {K: "xmax", V: xmax}, {K: "ymax", V: ymax},
-		{K: "spatialReference", V: jsonx.Obj{{K: "wkid", V: 102100}, {K: "latestWkid", V: 3857}}}}
+	return query.Extent(jsonx.Obj{{K: "wkid", V: 102100}, {K: "latestWkid", V: 3857}}, xmin, ymin, xmax, ymax)
 }

@@ -1150,11 +1150,13 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
 @pytest.mark.parametrize("stac, expected", [("warehouse/stac", "warehouse/featureserv"),
                                              ("warehouse-sandbox/stac", "warehouse-sandbox/featureserv")])
 def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
+    import os
     import subprocess
     import sys
 
     code = "from ugs_warehouse.core import config; print(config.FEATURES_PREFIX)"
-    env = {"PATH": "", "WAREHOUSE_STAC_PREFIX": stac}
+    env = {k: v for k, v in os.environ.items() if k != "WAREHOUSE_FEATURES_PREFIX"}
+    env["WAREHOUSE_STAC_PREFIX"] = stac
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert out.stdout.strip() == expected, out.stderr
 

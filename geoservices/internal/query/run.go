@@ -306,13 +306,16 @@ func (w *winnow) outGeometry(g orb.Geometry) orb.Geometry {
 	if g == nil {
 		return nil
 	}
-	// g may be a cached shape: project.Geometry works in place, so it gets a copy.
+	// g may be a cached shape: project.Geometry works in place, so it gets one copy.
+	if w.toMercator || w.precision != nil {
+		g = orb.Clone(g)
+	}
 	if w.toMercator {
-		g = project.Geometry(orb.Clone(g), geom.ToMercator)
+		g = project.Geometry(g, geom.ToMercator)
 	}
 	if w.precision != nil {
 		d := *w.precision
-		g = project.Geometry(orb.Clone(g), func(p orb.Point) orb.Point { return orb.Point{toFixed(p[0], d), toFixed(p[1], d)} })
+		g = project.Geometry(g, func(p orb.Point) orb.Point { return orb.Point{toFixed(p[0], d), toFixed(p[1], d)} })
 	}
 	return g
 }

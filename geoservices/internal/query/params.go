@@ -74,7 +74,8 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
-func bad(msg string, details ...string) *Error {
+// Bad is a 400 error; details default to none.
+func Bad(msg string, details ...string) *Error {
 	if details == nil {
 		details = []string{}
 	}
@@ -90,37 +91,37 @@ func (p Params) Validate() error {
 		switch s {
 		case "json", "pjson", "pbf", "geojson":
 		default:
-			return bad("Invalid format", `"f" must be one of [json, pjson, pbf, geojson]`)
+			return Bad("Invalid format", `"f" must be one of [json, pjson, pbf, geojson]`)
 		}
 	}
 	for _, c := range [][2]string{{"resultRecordCount", "number"}, {"resultOffset", "number"},
 		{"returnGeometry", "boolean"}, {"returnCountOnly", "boolean"}, {"outFields", "string"}, {"orderByFields", "string"}} {
 		if v, ok := p[c[0]]; ok && typeOf(v) != c[1] {
 			m := `"` + c[0] + `" must be a ` + c[1]
-			return bad(m, m)
+			return Bad(m, m)
 		}
 	}
 	if v, ok := p["objectIds"]; ok {
 		if f, num := v.(float64); typeOf(v) != "string" && !(num && isInt(f)) {
 			m := `"objectIds" does not match any of the allowed types`
-			return bad(m, m)
+			return Bad(m, m)
 		}
 	}
 	if v, ok := p["outSR"]; ok {
 		if _, ok := wkid(v); !ok {
 			m := `"outSR" does not match any of the allowed types`
-			return bad(m, m)
+			return Bad(m, m)
 		}
 	}
 	if v, ok := p["quantizationParameters"]; ok {
 		if _, ok := ParseQuantization(v); !ok {
-			return bad("'quantizationParameters' parameter is invalid", `"quantizationParameters" must be of type object`)
+			return Bad("'quantizationParameters' parameter is invalid", `"quantizationParameters" must be of type object`)
 		}
 	}
 	for _, k := range []string{"outSR", "inSR"} {
 		if v, ok := p[k]; ok {
 			if id, ok := wkid(v); ok && !supported(id) {
-				return bad("Unsupported spatial reference: "+strconv.Itoa(id), "Only 4326 and Web Mercator (102100, 3857) are supported")
+				return Bad("Unsupported spatial reference: "+strconv.Itoa(id), "Only 4326 and Web Mercator (102100, 3857) are supported")
 			}
 		}
 	}

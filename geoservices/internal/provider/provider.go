@@ -163,7 +163,7 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	}
 	p, err := plan.New(params, plan.Layer{Columns: layer.Columns, Point: layer.Point}, maxRecords)
 	if err != nil {
-		return nil, &query.Error{Code: 400, Message: err.Error(), Details: []string{}}
+		return nil, query.Bad(err.Error())
 	}
 	// Small-scale requests on a heavy layer read its coarsest generalized copy that is still finer
 	// than the request (vector/sink_archive.py).
@@ -173,7 +173,7 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 			return nil, err
 		}
 		if p, err = plan.New(params, plan.Layer{Columns: source.Columns, Point: source.Point}, maxRecords); err != nil {
-			return nil, &query.Error{Code: 400, Message: err.Error(), Details: []string{}}
+			return nil, query.Bad(err.Error())
 		}
 	}
 	if p.Kind != plan.Features {

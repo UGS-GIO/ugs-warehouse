@@ -28,7 +28,7 @@ func filterGeometry(v any, inSR any) (orb.Geometry, error) {
 				if i == 4 {
 					break
 				}
-				return nil, bad("Invalid geometry: " + x)
+				return nil, Bad("Invalid geometry: " + x)
 			}
 			if i == 4 {
 				srid = int(f)
@@ -42,7 +42,7 @@ func filterGeometry(v any, inSR any) (orb.Geometry, error) {
 		case 4:
 			g = envelope(nums[0], nums[1], nums[2], nums[3])
 		default:
-			return nil, bad("Invalid geometry: " + x)
+			return nil, Bad("Invalid geometry: " + x)
 		}
 	case map[string]any:
 		if sr, ok := x["spatialReference"]; ok {
@@ -53,13 +53,13 @@ func filterGeometry(v any, inSR any) (orb.Geometry, error) {
 			return nil, err
 		}
 	default:
-		return nil, bad("Invalid geometry")
+		return nil, Bad("Invalid geometry")
 	}
 	if srid == 0 && inSR != nil {
 		srid, _ = wkid(inSR)
 	}
 	if srid != 0 && !supported(srid) {
-		return nil, bad("Unsupported spatial reference: " + strconv.Itoa(srid))
+		return nil, Bad("Unsupported spatial reference: " + strconv.Itoa(srid))
 	}
 	if geom.Mercator[srid] || srid == 3785 {
 		g = project.Geometry(g, geom.ToLonLat)
@@ -111,7 +111,7 @@ func esriToGeometry(m map[string]any) (orb.Geometry, error) {
 	if ps, ok := m["points"]; ok {
 		pts, ok := points(ps)
 		if !ok {
-			return nil, bad("Invalid geometry")
+			return nil, Bad("Invalid geometry")
 		}
 		return orb.MultiPoint(pts), nil
 	}
@@ -120,7 +120,7 @@ func esriToGeometry(m map[string]any) (orb.Geometry, error) {
 		for _, p := range paths {
 			pts, ok := points(p)
 			if !ok {
-				return nil, bad("Invalid geometry")
+				return nil, Bad("Invalid geometry")
 			}
 			mls = append(mls, pts)
 		}
@@ -135,7 +135,7 @@ func esriToGeometry(m map[string]any) (orb.Geometry, error) {
 		for _, r := range rings {
 			pts, ok := points(r)
 			if !ok {
-				return nil, bad("Invalid geometry")
+				return nil, Bad("Invalid geometry")
 			}
 			ring := orb.Ring(geom.CloseRing(pts))
 			if geom.Clockwise(ring) {
@@ -159,5 +159,5 @@ func esriToGeometry(m map[string]any) (orb.Geometry, error) {
 		}
 		return orb.MultiPolygon(outers), nil
 	}
-	return nil, bad("Invalid geometry")
+	return nil, Bad("Invalid geometry")
 }

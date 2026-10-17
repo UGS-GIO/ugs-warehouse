@@ -27,12 +27,12 @@ func (w *winnow) parseStatistics() error {
 	}
 	list, ok := v.([]any)
 	if !ok {
-		return bad("Invalid outStatistics")
+		return Bad("Invalid outStatistics")
 	}
 	for _, e := range list {
 		m, ok := e.(map[string]any)
 		if !ok {
-			return bad("Invalid outStatistics")
+			return Bad("Invalid outStatistics")
 		}
 		kind, _ := m["statisticType"].(string)
 		field, _ := m["onStatisticField"].(string)
@@ -44,7 +44,7 @@ func (w *winnow) parseStatistics() error {
 		switch a.kind {
 		case "COUNT", "SUM", "MIN", "MAX", "AVG", "STDDEV", "VAR":
 		default:
-			return bad("Unsupported statisticType: " + kind)
+			return Bad("Unsupported statisticType: " + kind)
 		}
 		w.aggregates = append(w.aggregates, a)
 	}

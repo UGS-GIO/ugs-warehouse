@@ -78,7 +78,7 @@ func Run(c *Collection, p Params) (*Response, error) {
 		return &Response{JSON: jsonx.Obj{{K: "extent", V: c.Extent}}}, nil
 	}
 	if f == "pbf" && p.True("returnExtentOnly") {
-		return nil, bad("Bad Request")
+		return nil, Bad("Bad Request")
 	}
 
 	w, err := newWinnow(c, p)
@@ -168,7 +168,7 @@ func newWinnow(c *Collection, p Params) (*winnow, error) {
 	if v, ok := p["where"]; ok {
 		s, isStr := v.(string)
 		if !isStr {
-			return nil, bad((&where.Error{Where: "must be a string if defined"}).Error())
+			return nil, Bad((&where.Error{Where: "must be a string if defined"}).Error())
 		}
 		whereStr = s
 	}
@@ -176,7 +176,7 @@ func newWinnow(c *Collection, p Params) (*winnow, error) {
 	if !selectAll.MatchString(whereStr) && strings.TrimSpace(whereStr) != "" {
 		e, err := where.Parse(whereStr, w.resolve)
 		if err != nil {
-			return nil, bad(err.Error())
+			return nil, Bad(err.Error())
 		}
 		w.where = e
 	}
@@ -245,7 +245,7 @@ func newWinnow(c *Collection, p Params) (*winnow, error) {
 	if n, ok := p.Number("geometryPrecision"); ok && n != 0 {
 		// Koop's Number.prototype.toFixed throws outside 0..100; past it, formatting is unbounded work.
 		if n < 0 || n > 100 {
-			return nil, bad("geometryPrecision must be between 0 and 100")
+			return nil, Bad("geometryPrecision must be between 0 and 100")
 		}
 		v := int(n)
 		w.precision = &v

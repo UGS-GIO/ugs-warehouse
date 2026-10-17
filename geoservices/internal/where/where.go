@@ -100,7 +100,11 @@ func lex(s string) ([]token, error) {
 			out = append(out, token{kind: tString, text: strings.ReplaceAll(m[1:len(m)-1], "''", "'")})
 			i += len(m)
 		case c == '"' || c == '`' || c == '[':
-			j := strings.IndexByte(s[i+1:], map[byte]byte{'"': '"', '`': '`', '[': ']'}[c])
+			end := c
+			if c == '[' {
+				end = ']'
+			}
+			j := strings.IndexByte(s[i+1:], end)
 			if j < 0 {
 				return nil, fmt.Errorf("unterminated identifier")
 			}

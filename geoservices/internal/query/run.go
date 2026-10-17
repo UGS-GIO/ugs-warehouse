@@ -377,11 +377,14 @@ func page[T any](w *winnow, out []T) ([]T, bool) {
 // distinct drops the items whose JSON an earlier item already has.
 func distinct[T any](xs []T, appendJSON func(T, []byte) []byte) []T {
 	seen := map[string]bool{}
+	var buf []byte
 	return slices.DeleteFunc(xs, func(x T) bool {
-		k := string(appendJSON(x, nil))
-		dup := seen[k]
-		seen[k] = true
-		return dup
+		buf = appendJSON(x, buf[:0])
+		if seen[string(buf)] {
+			return true
+		}
+		seen[string(buf)] = true
+		return false
 	})
 }
 

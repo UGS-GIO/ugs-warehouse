@@ -1,14 +1,14 @@
 # Tears down a PR's previews on close (#154 / #156 / #159).
 #
-# Why GitHub Actions and not a Cloud Build trigger, like the other two preview builds: Cloud
+# Why GitHub Actions and not a Cloud Build trigger, like the other preview builds: Cloud
 # Build's GitHub-App trigger only fires pull_request on opened/reopened/synchronize — there is no
 # "closed" event to hook. `pull_request: types: [closed]` is a GitHub Actions primitive Cloud
 # Build's trigger config has no equivalent for.
 #
 # Auth is WIF (no long-lived key): github-actions-sa's federation already allows this repo. This
 # job itself only submits the build — the actual deletes run under `ugs-warehouse-preview-build`
-# (--service-account below), the same least-trusted identity the viewer/tiles preview triggers use,
-# so a compromised Actions run still can't reach past the previews bucket + the tiles preview service's tags.
+# (--service-account below), the same least-trusted identity the viewer preview trigger uses,
+# so a compromised Actions run still can't reach past the previews bucket.
 name: PR preview cleanup
 
 on:

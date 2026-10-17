@@ -168,8 +168,7 @@ def _run_with_failing(failing=None, published="old-hash"):
 @pytest.mark.parametrize("failing", ["ducklake", "archive", "overview", "pmtiles"])
 def test_a_failed_data_sink_keeps_the_published_hash(failing):
     """The hash vouches for the published artifacts. If it moved while an old one stayed, the next
-    --skip-unchanged run would skip the rebuild, and the tiles service would cache the old
-    PMTiles under the new version for a year."""
+    --skip-unchanged run would skip the rebuild."""
     rc, content_hash, _ = _run_with_failing(failing)
     assert rc == 1
     assert content_hash == "old-hash"

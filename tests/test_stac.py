@@ -284,6 +284,12 @@ def test_index_entry_assets_stay_summaries():
     assert "ugs:foreign_keys" not in asset and "table:columns" not in asset
 
 
+def test_index_entry_keeps_the_overview_tolerance():
+    overview = {"href": "x_overview.parquet", "ugs:simplify_tolerance": 0.0005, "file:size": 1}
+    asset = stac._index_entry({"id": "x", "assets": {"overview": overview}})["assets"]["overview"]
+    assert asset == {"href": "x_overview.parquet", "ugs:simplify_tolerance": 0.0005}
+
+
 def test_index_entry_keeps_web_map_links_alongside_self():
     item = {**_related_item(), "links": [
         {"rel": "self", "href": "./enmin_ucrc_wells.json"},          # item-relative, not reusable
@@ -1145,6 +1151,24 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
     elsewhere = {"data": {"href": "https://example.com/x.parquet", "type": config.PARQUET_MIME}}
     assert feature_service.collection({"id": "a", "assets": elsewhere}) is None
     assert feature_service.collection({"id": "b", "assets": {}}) is None
+
+
+@pytest.mark.parametrize("stac, expected", [("warehouse/stac", "warehouse/featureserv"),
+                                             ("warehouse-sandbox/stac", "warehouse-sandbox/featureserv"),
+                                             ("sandbox-stac", "featureserv"),
+                                             ("warehouse/stac/", "warehouse/featureserv")])
+def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
+    import os
+    import subprocess
+    import sys
+
+    code = "from ugs_warehouse.core import config; print(config.FEATURES_PREFIX)"
+    env = {k: v for k, v in os.environ.items() if k != "WAREHOUSE_FEATURES_PREFIX"}
+    env["WAREHOUSE_STAC_PREFIX"] = stac
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)  # finds the package without an install
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == expected, out.stderr
 
 
 def test_feature_service_serves_the_data_asset_not_the_overview():

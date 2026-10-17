@@ -23,11 +23,6 @@ export function mapKindOf(f: MapKindFlags): MapKind {
   return "none";
 }
 
-// The footprint flag for mapKindOf: an item is footprint-drawable if it has geometry or a real bbox.
-export function hasFootprint(item: StacDoc | undefined): boolean {
-  return Boolean(item && (item.geometry || (Array.isArray(item.bbox) && item.bbox.length >= 4)));
-}
-
 // A [w,s,e,n] lon/lat bbox, or undefined if the item's bbox is missing/malformed. Handles the STAC
 // 2D (4 = [w,s,e,n]) and 3D (6 = [w,s,minZ,e,n,maxZ]) forms, and REJECTS out-of-range values — some
 // catalog items carry a bad bbox (projected metres, or a longitude leaked into the latitude slot).
@@ -101,6 +96,8 @@ export type ActiveLayer = {
   tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
+  unitsHref?: string;   // a plate or mosaic's `units` PMTiles, loaded as an invisible identify layer
+  pubTitle?: string;    // the publication a plate belongs to, for the scan-only notice
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
   // pin. Resolved from STAC once, so the layer list and the map agree on what is drawn.
   // `variable`/`selection` = what is drawn (the URL's pick, else the defaults); `variables` and
@@ -122,6 +119,27 @@ export const GEOM_FILTER: Record<"fill" | "line" | "point", GeomFilter> = {
   line: ["match", ["geometry-type"], ["LineString", "MultiLineString", "Polygon", "MultiPolygon"], true, false],
   point: ["match", ["geometry-type"], ["Point", "MultiPoint"], true, false],
 };
+
+// How a vector layer draws when it has no bound ugs-styles render (a publication layer, or a topic
+// whose style has not loaded): one layer per geometry type, so whatever it holds shows. Polygons get
+// a translucent fill and an outline (the line layer's filter takes polygons too), lines a line, points
+// a circle. The preview passes a neutral colour; the Map page the layer's swatch colour.
+export const defaultVectorLayers = (color: string) => [
+  { kind: "fill" as const, type: "fill" as const, filter: GEOM_FILTER.fill,
+    paint: { "fill-color": color, "fill-opacity": 0.15, "fill-outline-color": color } },
+  { kind: "line" as const, type: "line" as const, filter: GEOM_FILTER.line,
+    paint: { "line-color": color, "line-width": 1.2 } },
+  { kind: "circle" as const, type: "circle" as const, filter: GEOM_FILTER.point,
+    paint: { "circle-color": color, "circle-radius": 3.5, "circle-opacity": 0.85,
+             "circle-stroke-color": "#ffffff", "circle-stroke-width": 0.5 } },
+];
+
+// The two unstyled renders, both from defaultVectorLayers so they cannot drift: the preview's in a
+// neutral colour, the Map page's in the layer's swatch colour (the tray and legend show the same).
+export const NEUTRAL_VECTOR_COLOR = "#374151";
+export const previewDefaultLayers = () =>
+  defaultVectorLayers(NEUTRAL_VECTOR_COLOR).map(({ type, filter, paint }) => ({ type, filter, paint }));
+export const mapDefaultLayers = (layerId: string) => defaultVectorLayers(colorForId(layerId));
 
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
@@ -174,9 +192,13 @@ export const reorderLayers = (ids: string[], from: number, to: number): string[]
 // the map render and the reorder reconcile so their ids can't drift.
 export const slugOf = (id: string): string => id.replace(/[^a-zA-Z0-9_]/g, "_");
 
+// Source and layer ids of a raster's identify layer, keyed by the raster's slug.
+export const identifyIds = (slug: string) => ({ source: `idn-${slug}`, layer: `idn-${slug}-fill` });
+
 // The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
 // a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
-// protocol is ready); a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
+// protocol is ready); either with a `units` asset also its `idn-<slug>-fill` identify layer; a
+// vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
 // the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
 // it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
 // can walk the list and moveLayer each. Pure so it's unit-tested against the render.
@@ -187,8 +209,10 @@ export function orderedSublayerIds(
   return layers.flatMap((l) => {
     const s = slugOf(l.id);
     if (l.zarr) return [];
-    if (l.rasterPmHref) return [`rpm-${s}-raster`];
-    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`] : [];
+    // The identify layer sits just above its raster, so it leaves with it and orders with it.
+    const idn = l.unitsHref ? [identifyIds(s).layer] : [];
+    if (l.rasterPmHref) return [`rpm-${s}-raster`, ...idn];
+    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`, ...idn] : [];
     const n = opts.styledCount(l.id);
     // map.tsx renders `styleLayers ? styleLayers.map(...) : fallback` — a resolved-but-empty style
     // ([]) is truthy there and draws nothing, so mirror it with `n != null` (0 → no ids), not `n > 0`.

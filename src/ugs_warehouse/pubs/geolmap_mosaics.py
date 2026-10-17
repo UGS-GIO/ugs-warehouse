@@ -47,10 +47,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import xml.etree.ElementTree as ET
 from array import array
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from pmtiles.convert import mbtiles_to_header_json
 from pmtiles.tile import tileid_to_zxy, zxy_to_tileid
@@ -60,6 +62,8 @@ from ..core import config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
+
+GEOJSON = "application/geo+json"
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
@@ -305,18 +309,44 @@ def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
         return dict(zip(sids, ex.map(one, sids)))
 
 
-def _byte_members(tier: str, sids: list[str], env: dict) -> list[str]:
+def _byte_members(tier: str, sids: list[str], env: dict,
+                  types: dict[str, list[str]] | None = None) -> list[str]:
     """`sids` minus any COG whose bands aren't all Byte, order kept. gdalbuildvrt keeps only sources
     matching the FIRST source's data type and just warns about the rest, so one 16-bit COG in the
     list would silently drop maps (or, listed first, nearly the whole tier). Excluded COGs are named
-    on stderr so the gap is visible."""
-    types = _band_types(sids, env)
+    on stderr so the gap is visible. `types` are the COGs' band types when the caller already has
+    them (the identify layers cache them); otherwise each header is read."""
+    types = _band_types(sids, env) if types is None else types
     bad = {s: t for s, t in types.items() if not t or any(bt != "Byte" for bt in t)}
     if bad:
         detail = ", ".join(f"{s} ({'/'.join(sorted(set(t)))})" for s, t in bad.items())
         print(f"[mosaics] WARNING {tier}: excluding {len(bad)} non-8-bit COG(s) that gdalbuildvrt "
               f"would silently drop or let displace the tier: {detail}", file=sys.stderr)
     return [s for s in sids if s not in bad]
+
+
+def tier_members(tier: str, sids: list[str], by_sid: dict[str, dict], env: dict,
+                 types: dict[str, list[str]] | None = None) -> list[str]:
+    """The maps a tier's mosaic is stitched from, in draw order: `sids` minus the non-8-bit COGs
+    (`_byte_members`), then `_vrt_order`. The bake and the identify layers both take their members
+    from here."""
+    return _vrt_order(_byte_members(tier, sids, env, types), by_sid)
+
+
+def gdal_env() -> dict:
+    """The GDAL environment for reading the COGs in place over /vsigs, tuned for speed."""
+    env = os.environ.copy()
+    env.update({
+        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
+        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
+        "VSI_CACHE": "TRUE",
+        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
+        "GDAL_HTTP_MAX_RETRY": "10",
+        "GDAL_HTTP_RETRY_DELAY": "1",
+    })
+    env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
+    return env
 
 
 def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
@@ -332,33 +362,24 @@ def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
 
 
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
-                *, suffix: str = "", write_stac_item: bool = True) -> bool:
+                *, suffix: str = "", write_stac_item: bool = True,
+                published: PublishedPubs | None = None) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
     empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
-    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`."""
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item, see `build()`.
+    `published` (see `published_pubs`) is read from the catalog when not given."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
-    # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
-    gdal_env = os.environ.copy()
-    gdal_env.update({
-        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
-        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
-        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
-        "VSI_CACHE": "TRUE",
-        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
-        "GDAL_HTTP_MAX_RETRY": "10",
-        "GDAL_HTTP_RETRY_DELAY": "1",
-    })
-    gdal_env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
-    sids = _byte_members(tier, sids, gdal_env)
+    env = gdal_env()
+    sids = tier_members(tier, sids, by_sid, env)
     if not sids:
         print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)
         return False
     with tempfile.TemporaryDirectory(dir=MOSAIC_WORK_DIR) as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
-        members = [_vsigs(s) for s in _vrt_order(sids, by_sid)]
+        members = [_vsigs(s) for s in sids]
         with open(listfile, "w") as fh:
             fh.write("\n".join(members) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
@@ -371,13 +392,13 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         # map beneath at a quad seam (last-wins + mask fallthrough — no custom compositing needed).
         print(f"[mosaics] {tier}: VRT over {len(sids)} COGs")
         subprocess.run(["gdalbuildvrt", "-q", "-resolution", "highest", "-addalpha",
-                        "-input_file_list", listfile, vrt], env=gdal_env, check=True)
+                        "-input_file_list", listfile, vrt], env=env, check=True)
         _check_vrt_sources(vrt, members)
 
         # `gdal raster tile` (GDAL 3.11+) tiles the VRT multithreaded and builds the overview pyramid in
         # one pass. nearest is a pixel-exact copy only when the source sits on the native zoom's grid
         # and the tier isn't capped below it; anything else is resampled with average.
-        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, gdal_env)
+        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, env)
         base_maxz = maxz if maxz is not None else native
         base_resampling = "nearest" if aligned and base_maxz >= native else "average"
         minz_arg = min(MOSAIC_MINZOOM, base_maxz)      # never emit --min-zoom > --max-zoom
@@ -389,7 +410,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
              "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
              "--skip-blank", "--convention", "xyz", "--webviewer", "none",
              "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
-             vrt, tiledir], env=gdal_env, check=True)
+             vrt, tiledir], env=env, check=True)
 
         print(f"[mosaics] {tier}: writing tiles -> PMTiles")
         n_tiles, minz, maxz_built = _write_pmtiles(
@@ -402,7 +423,8 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            _write_item(tier, sids, obj, by_sid, bounds=bounds)
+            _write_item(tier, sids, obj, by_sid, bounds=bounds,
+                        published=published if published is not None else published_pubs())
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
@@ -410,34 +432,82 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         return True
 
 
-def _public_item_href(collection_path: str, item_id: str) -> str:
-    """A member map's item in the PUBLIC catalog. Pub items live only there, so a mosaic baked into
-    the review catalog still links its members to the public CDN rather than to review paths that
-    don't exist."""
-    rel = stac.item_object_path(collection_path, item_id).removeprefix(config.STAC_PREFIX).lstrip("/")
+def _public_href(object_path: str) -> str:
+    """A STAC document's href in the PUBLIC catalog. Pub documents live only there, so a mosaic baked
+    into the review catalog still links its members to the public CDN rather than to review paths
+    that don't exist."""
+    rel = object_path.removeprefix(config.STAC_PREFIX).lstrip("/")
     return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
 
 
+class PublishedPubs(NamedTuple):
+    """Publication layout paths (`<group>/<SERIES>/<SID>`) in the published catalog."""
+    plates: frozenset[str]       # with a `<SID>_plate/` Item directory
+    collections: frozenset[str]  # with a collection.json
+
+
+def _public_stac_prefix() -> str:
+    """The public catalog's object prefix in the source bucket (the CDN preserves object paths)."""
+    return urllib.parse.urlparse(config.PUBLIC_CATALOG_URL).path.strip("/").rpartition("/")[0]
+
+
+def published_pubs() -> PublishedPubs:
+    """What the public catalog holds for each publication, from one listing of each publication
+    group in the source bucket, so a review bake reads the published catalog too."""
+    plates: set[str] = set()
+    collections: set[str] = set()
+    base = _public_stac_prefix()
+    strip = f"{base}/" if base else ""
+    for group in identity.PUB_GROUPS:
+        for path in gcs.list_paths(f"{strip}{group}/", bucket=config.SOURCE_BUCKET):
+            layout = stac.pub_layout_of(path.removeprefix(strip))
+            if not layout:
+                continue
+            _, series, sid, rest = layout
+            if rest == "collection.json" and sid:
+                collections.add(f"{group}/{series}/{sid}")
+            elif sid and rest.split("/")[0] == f"{sid}{stac.PLATE_SUFFIX}" and rest.count("/") == 1:
+                plates.add(f"{group}/{series}/{sid}")
+    return PublishedPubs(frozenset(plates), frozenset(collections))
+
+
+def _member_doc(p: dict, published: PublishedPubs) -> tuple[str, str]:
+    """(object path, media type) of the published document a member's mosaic link points at: its
+    plate Item, its Collection when the plate is its only data file (no plate Item), or, for a
+    publication not yet in the collection layout, its `<SID>/<SID>.json` Item."""
+    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
+
+    coll = sink_stac.pub_collection_path(p)
+    if coll in published.plates:
+        return stac.item_object_path(coll, stac.plate_item_id(p.get("series_id") or "")), GEOJSON
+    if coll in published.collections:
+        return stac.collection_object_path(coll), "application/json"
+    series, _, pub_id = coll.rpartition("/")
+    return stac.item_object_path(series, pub_id), GEOJSON
+
+
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
-                bounds: list[float]) -> None:
+                bounds: list[float], published: PublishedPubs) -> None:
     """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
     raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
     that's how the viewer tells a raster mosaic from vector tiles.
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
-    input data in the creation of this Entity") — to its real published item, routed through
-    `sink_stac.collection_group` rather than hardcoded to `ugs-publications` (a member can be
+    input data in the creation of this Entity"), to the document `_member_doc` finds for it in
+    the published catalog, routed through
+    `sink_stac.pub_collection_path` rather than hardcoded to `ugs-publications` (a member can be
     foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
     hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
     but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
     map→mosaic direction is a generic `rel:"related"` on the pub side (sink_stac) — STAC defines no
     reverse of `derived_from`."""
-    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
+    from . import identify  # function-level: it imports vectors
 
     label = TIER_LABEL.get(tier, tier)
     n_maps = len(sids)
     w, s, e, n = bounds
+    units = identify.mosaic_asset(tier)
     derived_from: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
@@ -445,11 +515,11 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
             print(f"[mosaics] {tier}: COG {sid} has no pub record — stitched into the raster but not linked (orphan)", file=sys.stderr)
             continue                      # COG present but no pub record -> no STAC item exists to link
         real_sid = (p.get("series_id") or "").strip()
-        coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"
+        doc, media = _member_doc(p, published)
         derived_from.append({
             "rel": "derived_from",
-            "href": _public_item_href(coll, sink_stac.item_id_for(real_sid)),
-            "type": "application/geo+json",
+            "href": _public_href(doc),
+            "type": media,
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 
     item = stac.build_item(
@@ -463,7 +533,8 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
                     "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
-                          "title": f"Raster PMTiles ({label})"}},
+                          "title": f"Raster PMTiles ({label})"},
+                **({"units": units} if units else {})},
         extra_links=derived_from,
         proj_epsg=4326,
     )
@@ -484,12 +555,13 @@ def build(scales: list[str], maxz: int | None = None,
         print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
               f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
+    published = published_pubs() if write_stac_item else None
     for tier in scales:
         # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
         # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
         tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
-                      suffix=suffix, write_stac_item=write_stac_item):
+                      suffix=suffix, write_stac_item=write_stac_item, published=published):
             built += 1
     if built and not quads:
         print("[mosaics] refreshing STAC catalog")

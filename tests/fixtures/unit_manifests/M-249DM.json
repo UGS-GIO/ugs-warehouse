@@ -1,0 +1,1332 @@
+{
+ "layers": [
+  {
+   "label": "A_Labels",
+   "spatial": true,
+   "rows": 58,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__CrossSections",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "integer"
+    },
+    {
+     "name": "Annotation",
+     "type": "integer"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAl",
+     "type": "integer"
+    },
+    {
+     "name": "Horizontal",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeadin",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacin",
+     "type": "number"
+    },
+    {
+     "name": "CharacterW",
+     "type": "number"
+    },
+    {
+     "name": "CharacterS",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "A_Units",
+   "spatial": true,
+   "rows": 124,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__CrossSections",
+   "columns": [
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "Subtype",
+     "type": "integer"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "B_Labels",
+   "spatial": true,
+   "rows": 40,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__CrossSections",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "integer"
+    },
+    {
+     "name": "Annotation",
+     "type": "integer"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAl",
+     "type": "integer"
+    },
+    {
+     "name": "Horizontal",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeadin",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacin",
+     "type": "number"
+    },
+    {
+     "name": "CharacterW",
+     "type": "number"
+    },
+    {
+     "name": "CharacterS",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "B_Units",
+   "spatial": true,
+   "rows": 15,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__CrossSections",
+   "columns": [
+    {
+     "name": "Unitsymbol",
+     "type": "string"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_GeologicUnits",
+   "spatial": true,
+   "rows": 763,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__Geology",
+   "columns": [
+    {
+     "name": "Rank",
+     "type": "integer"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "string"
+    },
+    {
+     "name": "Compositio",
+     "type": "string"
+    },
+    {
+     "name": "Genesis",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID_1",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_MapBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__Geology",
+   "columns": [
+    {
+     "name": "ORIGSORT",
+     "type": "integer"
+    },
+    {
+     "name": "USGS_QD_ID",
+     "type": "string"
+    },
+    {
+     "name": "QUAD_NAME",
+     "type": "string"
+    },
+    {
+     "name": "MAP_EDIT",
+     "type": "integer"
+    },
+    {
+     "name": "ST_NAME1",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME2",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME3",
+     "type": "integer"
+    },
+    {
+     "name": "ST_NAME4",
+     "type": "integer"
+    },
+    {
+     "name": "DATE_REV",
+     "type": "integer"
+    },
+    {
+     "name": "DATE_PUB",
+     "type": "integer"
+    },
+    {
+     "name": "PHOTO_R_DT",
+     "type": "integer"
+    },
+    {
+     "name": "TILE_NAME",
+     "type": "string"
+    },
+    {
+     "name": "NAME_OLD",
+     "type": "string"
+    },
+    {
+     "name": "USGS_ID",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_MapLabels",
+   "spatial": true,
+   "rows": 38,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__Geology",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "integer"
+    },
+    {
+     "name": "Annotation",
+     "type": "integer"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAl",
+     "type": "integer"
+    },
+    {
+     "name": "Horizontal",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeadin",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacin",
+     "type": "number"
+    },
+    {
+     "name": "CharacterW",
+     "type": "number"
+    },
+    {
+     "name": "CharacterS",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Quadrangle",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_UnitLabels",
+   "spatial": true,
+   "rows": 405,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "ThompsonPoint_M-249DM__Shapefiles__Geology",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "integer"
+    },
+    {
+     "name": "Annotation",
+     "type": "integer"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAl",
+     "type": "integer"
+    },
+    {
+     "name": "Horizontal",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeadin",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacin",
+     "type": "number"
+    },
+    {
+     "name": "CharacterW",
+     "type": "number"
+    },
+    {
+     "name": "CharacterS",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__ThompsonPoint_UnitLabels",
+   "spatial": true,
+   "rows": 405,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "number"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "number"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__ThompsonPoint_MapLabels",
+   "spatial": true,
+   "rows": 38,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Quadrangle",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__ThompsonPoint_MapBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "ORIGSORT",
+     "type": "integer"
+    },
+    {
+     "name": "USGS_QD_ID",
+     "type": "string"
+    },
+    {
+     "name": "QUAD_NAME",
+     "type": "string"
+    },
+    {
+     "name": "MAP_EDIT",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME1",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME2",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME3",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME4",
+     "type": "string"
+    },
+    {
+     "name": "DATE_REV",
+     "type": "string"
+    },
+    {
+     "name": "DATE_PUB",
+     "type": "string"
+    },
+    {
+     "name": "PHOTO_R_DT",
+     "type": "string"
+    },
+    {
+     "name": "TILE_NAME",
+     "type": "string"
+    },
+    {
+     "name": "NAME_OLD",
+     "type": "string"
+    },
+    {
+     "name": "USGS_ID",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__ThompsonPoint_GeologicUnits",
+   "spatial": true,
+   "rows": 763,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "Rank",
+     "type": "integer"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "string"
+    },
+    {
+     "name": "Composition",
+     "type": "string"
+    },
+    {
+     "name": "Genesis",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID_1",
+     "type": "integer"
+    },
+    {
+     "name": "Override_1",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__StateBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "STATE",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__A_Units",
+   "spatial": true,
+   "rows": 124,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "Subtype",
+     "type": "integer"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__A_Labels",
+   "spatial": true,
+   "rows": 58,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__B_Units",
+   "spatial": true,
+   "rows": 15,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "Unitsymbol",
+     "type": "string"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__B_Labels",
+   "spatial": true,
+   "rows": 40,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ThompsonPoint_M-249DM__StructureElevMask",
+   "spatial": true,
+   "rows": 11,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ThompsonPoint_M-249DM",
+   "columns": [
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

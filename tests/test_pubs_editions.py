@@ -1,5 +1,5 @@
 """Quad-based edition graph: grouping, ordering, the conservative exclusion rules, and the
-ingest wiring that hands each pub's edition to `sink_stac.build_item`."""
+ingest wiring that hands each pub's edition to `sink_stac.build_publication`."""
 from unittest.mock import patch
 
 import pytest
@@ -18,14 +18,14 @@ def test_same_quad_same_scale_links_and_deprecates_including_a_dm_variant():
     assert g["M-100"]["version"] == "1980"
     assert g["M-100"]["deprecated"] is True
     assert g["M-100"]["predecessor_href"] is None
-    assert g["M-100"]["successor_href"].endswith("/M-100DM/M-100DM.json")
+    assert g["M-100"]["successor_href"].endswith("/M-100DM/collection.json")
     # not the latest edition -> latest_href points at the newest member (M-100DM).
-    assert g["M-100"]["latest_href"].endswith("/M-100DM/M-100DM.json")
+    assert g["M-100"]["latest_href"].endswith("/M-100DM/collection.json")
 
     # a DM edition is its own publication, not collapsed into its base series_id.
     assert g["M-100DM"]["version"] == "2005"
     assert g["M-100DM"]["deprecated"] is False
-    assert g["M-100DM"]["predecessor_href"].endswith("/M-100/M-100.json")
+    assert g["M-100DM"]["predecessor_href"].endswith("/M-100/collection.json")
     assert g["M-100DM"]["successor_href"] is None
     # the latest edition never links to itself.
     assert g["M-100DM"]["latest_href"] is None
@@ -103,9 +103,9 @@ def test_edition_members_route_hrefs_to_their_real_collection_group():
 
     # M-500 (blank publisher -> UGS) is deprecated by the foreign-published BYU-12: the successor
     # href must point at BYU-12's REAL collection (ugs-external), not the hardcoded ugs-publications.
-    assert g["M-500"]["successor_href"].endswith("/ugs-external/BYU/BYU-12/BYU-12.json")
+    assert g["M-500"]["successor_href"].endswith("/ugs-external/BYU/BYU-12/collection.json")
     # BYU-12's predecessor is M-500, which really is ugs-publications-hosted.
-    assert g["BYU-12"]["predecessor_href"].endswith("/ugs-publications/M/M-500/M-500.json")
+    assert g["BYU-12"]["predecessor_href"].endswith("/ugs-publications/M/M-500/collection.json")
 
 
 def test_quad_by_sid_sources_quad_from_footprints_not_feed():
@@ -129,7 +129,7 @@ def test_quad_by_sid_sources_quad_from_footprints_not_feed():
     assert g["GQ-852"]["successor_href"] is not None
 
 
-def test_build_catalog_wires_edition_into_build_item():
+def test_build_catalog_wires_edition_into_build_publication():
     from ugs_warehouse.pubs.ingest import build_catalog
 
     with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
@@ -142,11 +142,15 @@ def test_build_catalog_wires_edition_into_build_item():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._read_vector_manifests", return_value=({}, {}, {})), \
+         patch("ugs_warehouse.pubs.vectors.units_objects", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[
              ("M-1", "", "geomaps_24k", ""), ("M-2", "", "geomaps_24k", "7_5_Quads")]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication",
+               return_value=({"_collection_path": "ugs-publications/M/M-1"}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.ingest._published_items", return_value={}), \
          patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.write_collection"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -164,9 +168,9 @@ def test_build_catalog_wires_edition_into_build_item():
         assert mock_build.call_count == 2
         by_sid = {c.args[0]["series_id"]: c.kwargs["edition"] for c in mock_build.call_args_list}
         assert by_sid["M-1"]["deprecated"] is True
-        assert by_sid["M-1"]["successor_href"].endswith("/M-2/M-2.json")
+        assert by_sid["M-1"]["successor_href"].endswith("/M-2/collection.json")
         assert by_sid["M-2"]["deprecated"] is False
-        assert by_sid["M-2"]["predecessor_href"].endswith("/M-1/M-1.json")
+        assert by_sid["M-2"]["predecessor_href"].endswith("/M-1/collection.json")
         tiers = {c.args[0]["series_id"]: c.kwargs["mosaic_tier"] for c in mock_build.call_args_list}
         assert tiers == {"M-1": "24k", "M-2": "24k"}   # from each footprint's portal layer
 

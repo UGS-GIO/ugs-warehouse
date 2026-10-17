@@ -1,0 +1,898 @@
+{
+ "layers": [
+  {
+   "label": "AntelopeIsland_GeologicFeatures_labels",
+   "spatial": true,
+   "rows": 747,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "M-127DR_Antelope_Island__M-127DR_AntelopeIsland__M-127DR_AntelopeIsland_shapefiles",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "integer"
+    },
+    {
+     "name": "Annotation",
+     "type": "integer"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAl",
+     "type": "integer"
+    },
+    {
+     "name": "Horizontal",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeadin",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacin",
+     "type": "number"
+    },
+    {
+     "name": "CharacterW",
+     "type": "number"
+    },
+    {
+     "name": "CharacterS",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "AntelopeIsland_GeologicUnits",
+   "spatial": true,
+   "rows": 970,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "M-127DR_Antelope_Island__M-127DR_AntelopeIsland__M-127DR_AntelopeIsland_shapefiles",
+   "columns": [
+    {
+     "name": "UnitRank",
+     "type": "integer"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "string"
+    },
+    {
+     "name": "Compositio",
+     "type": "string"
+    },
+    {
+     "name": "Genesis",
+     "type": "string"
+    },
+    {
+     "name": "Descriptio",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "AntelopeIsland_GeologicUnits_labels",
+   "spatial": true,
+   "rows": 583,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "M-127DR_Antelope_Island__M-127DR_AntelopeIsland__M-127DR_AntelopeIsland_shapefiles",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "integer"
+    },
+    {
+     "name": "Annotation",
+     "type": "integer"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAl",
+     "type": "integer"
+    },
+    {
+     "name": "Horizontal",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeadin",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacin",
+     "type": "number"
+    },
+    {
+     "name": "CharacterW",
+     "type": "number"
+    },
+    {
+     "name": "CharacterS",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "AntelopeIsland_MapBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "M-127DR_Antelope_Island__M-127DR_AntelopeIsland__M-127DR_AntelopeIsland_shapefiles",
+   "columns": [
+    {
+     "name": "LayerInt",
+     "type": "integer"
+    },
+    {
+     "name": "Layer",
+     "type": "string"
+    },
+    {
+     "name": "ShortName",
+     "type": "string"
+    },
+    {
+     "name": "FullName",
+     "type": "string"
+    },
+    {
+     "name": "Scale",
+     "type": "integer"
+    },
+    {
+     "name": "PubID",
+     "type": "integer"
+    },
+    {
+     "name": "Publisher",
+     "type": "string"
+    },
+    {
+     "name": "Author",
+     "type": "string"
+    },
+    {
+     "name": "YearPublis",
+     "type": "string"
+    },
+    {
+     "name": "Citation",
+     "type": "string"
+    },
+    {
+     "name": "Link",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "AntelopeIsland_ShearZones",
+   "spatial": true,
+   "rows": 34,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "M-127DR_Antelope_Island__M-127DR_AntelopeIsland__M-127DR_AntelopeIsland_shapefiles",
+   "columns": [
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    },
+    {
+     "name": "UnitRank",
+     "type": "integer"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "integer"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "integer"
+    },
+    {
+     "name": "Compositio",
+     "type": "integer"
+    },
+    {
+     "name": "Genesis",
+     "type": "integer"
+    },
+    {
+     "name": "Descriptio",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "integer"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "UtahStateBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "M-127DR_Antelope_Island__M-127DR_AntelopeIsland__M-127DR_AntelopeIsland_shapefiles",
+   "columns": [
+    {
+     "name": "STATE",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Le_1",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M-127DR_AntelopeIsland__AntelopeIsland_GeologicFeatures_labels",
+   "spatial": true,
+   "rows": 747,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M-127DR_AntelopeIsland",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "number"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "number"
+    },
+    {
+     "name": "Italic",
+     "type": "number"
+    },
+    {
+     "name": "Underline",
+     "type": "number"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "number"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "number"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M-127DR_AntelopeIsland__AntelopeIsland_GeologicUnits_labels",
+   "spatial": true,
+   "rows": 583,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M-127DR_AntelopeIsland",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "number"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M-127DR_AntelopeIsland__AntelopeIsland_ShearZones",
+   "spatial": true,
+   "rows": 34,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M-127DR_AntelopeIsland",
+   "columns": [
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    },
+    {
+     "name": "UnitRank",
+     "type": "number"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "integer"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "integer"
+    },
+    {
+     "name": "Composition",
+     "type": "integer"
+    },
+    {
+     "name": "Genesis",
+     "type": "integer"
+    },
+    {
+     "name": "Description",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "integer"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "M-127DR_AntelopeIsland__AntelopeIsland_GeologicUnits",
+   "spatial": true,
+   "rows": 970,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M-127DR_AntelopeIsland",
+   "columns": [
+    {
+     "name": "UnitRank",
+     "type": "integer"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "string"
+    },
+    {
+     "name": "Composition",
+     "type": "string"
+    },
+    {
+     "name": "Genesis",
+     "type": "string"
+    },
+    {
+     "name": "Description",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "M-127DR_AntelopeIsland__UtahStateBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M-127DR_AntelopeIsland",
+   "columns": [
+    {
+     "name": "STATE",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M-127DR_AntelopeIsland__AntelopeIsland_MapBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M-127DR_AntelopeIsland",
+   "columns": [
+    {
+     "name": "LayerInt",
+     "type": "integer"
+    },
+    {
+     "name": "Layer",
+     "type": "string"
+    },
+    {
+     "name": "ShortName",
+     "type": "string"
+    },
+    {
+     "name": "FullName",
+     "type": "string"
+    },
+    {
+     "name": "Scale",
+     "type": "integer"
+    },
+    {
+     "name": "PubID",
+     "type": "string"
+    },
+    {
+     "name": "Publisher",
+     "type": "string"
+    },
+    {
+     "name": "Author",
+     "type": "string"
+    },
+    {
+     "name": "YearPublished",
+     "type": "string"
+    },
+    {
+     "name": "Citation",
+     "type": "string"
+    },
+    {
+     "name": "Link",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

@@ -56,3 +56,14 @@ def test_write_converts_a_shapefile_path(tmp_path):
     assert meta["columns"]["geom"]["covering"] == COVERING
     assert "geom" in pq.read_schema(out).names
     assert gpd.read_parquet(out).crs.to_epsg() == 26912
+
+
+def test_write_reports_geometries_blanked_for_a_non_finite_coordinate(tmp_path, capsys):
+    inf = float("inf")
+    gdf = gpd.GeoDataFrame({"unit": ["a", "b"]},
+                           geometry=[geom.Point(-111, 40), geom.Point(-inf, 41)], crs=4326)
+    out = tmp_path / "o.parquet"
+
+    geoparquet.write(gdf, out)
+
+    assert f"{out}: 1 geometries with a non-finite coordinate written as null" in capsys.readouterr().err

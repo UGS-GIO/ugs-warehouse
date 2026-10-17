@@ -713,10 +713,15 @@ steps:
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.vectors,--all
-      - --task-timeout=3600
-      - --max-retries=1
-      - --cpu=2
-      - --memory=8Gi
+      # Measured at 8Gi: M-228DM (2.3M polygons, GeoPackage included) peaked at 61%, and DS-1's two
+      # ~1M-point layers at 81% while tiling, once killed outright. 12Gi puts DS-1 near 55%, /tmp
+      # included. The timeout leaves room to finish a pub started at the 2700 s extraction budget.
+      # No retries: exit 1 means a pub's data failed, which a rerun repeats; the next run retries it.
+      - --task-timeout=7200
+      - --max-retries=0
+      - --cpu=4
+      - --memory=12Gi
+      - --tasks=5
 
   # Prune pub STAC items the source no longer lists, before the ingest's catalog refresh. Refuses
   # when the orphans exceed 5% of the source, so an empty feed cannot wipe the catalog.

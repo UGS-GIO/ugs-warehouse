@@ -68,17 +68,23 @@ STAGES = [
 # The triggerable warehouse jobs (Cloud Run job names from cloudbuild.yaml).
 JOBS: dict[str, Job] = {j.key: j for j in [
     Job("pubs-pipeline", "ugs-pubs-pipeline", "Full refresh (one click)",
-        "Orchestrator: loops Cover thumbnails to completion, then Rebuild pubs STAC — binds covers / "
-        "in-this-issue / volume + builds the search corpus. Runs server-side for as long as it takes "
+        "Orchestrator: loops Cover thumbnails to completion, then Extract map layers (which also builds "
+        "their tiles), then Rebuild pubs STAC — binds covers / in-this-issue / volume + builds the "
+        "search corpus. Runs server-side for as long as it takes "
         "(survives closing this tab). Use this instead of the 3-step dance.", danger=True),
     Job("harvest", "geolmap-harvest", "Harvest COGs",
         "Convert publication map plates → COGs (SKIP_EXISTING; safe to re-run). Heavy. "
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),
     Job("vectors", "ugs-pubs-vectors", "Extract map layers",
         "Extract every layer and companion table from the GIS zip of each pub that has one, as "
-        "GeoParquet. Skips pubs already extracted; then Rebuild pubs STAC to bind them."),
+        "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted, then "
+        "fills in what already-extracted pubs are missing (map tiles, relationships between "
+        "layers and tables) within a time budget. Runs as 5 parallel tasks, each owning a fifth of "
+        "the pubs and printing its own summary with how much is still pending. Run it again "
+        "until every task reports 0 pending; then Rebuild pubs STAC to bind them."),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
-        "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
+        "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items, and record layer "
+        "relationships. It does not build map-layer tiles: run Extract map layers (or Full refresh)."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
         "Render each pub's PDF first page → cover WebP (every pub incl. Survey Notes; SKIP_EXISTING; "
         "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),
@@ -201,7 +207,7 @@ def run_ingest(force: bool = False) -> dict:
 
 # A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
 # `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle runs `python`, so its
-# mode names a module: the catalog rebuild an ingest ends with.
+# mode names the module too.
 MODE_ARGS = {
     "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
     "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},

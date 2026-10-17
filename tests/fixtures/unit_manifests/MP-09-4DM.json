@@ -1,0 +1,1031 @@
+{
+ "layers": [
+  {
+   "label": "CorrelationFills",
+   "spatial": true,
+   "rows": 19,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles__CorrelationDiagram",
+   "columns": [
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "GlacialUnits",
+   "spatial": true,
+   "rows": 1570,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles__GlacialMap",
+   "columns": [
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "string"
+    },
+    {
+     "name": "Glaciation",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ForestBoundariesEtc",
+   "spatial": true,
+   "rows": 7,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles__IceExtentsMap",
+   "columns": [
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "IceExtents",
+   "spatial": true,
+   "rows": 58,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles__IceExtentsMap",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "Lakes",
+   "spatial": true,
+   "rows": 10216,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles",
+   "columns": [
+    {
+     "name": "GNIS_Name",
+     "type": "string"
+    },
+    {
+     "name": "IsMajor",
+     "type": "integer"
+    },
+    {
+     "name": "Area",
+     "type": "number"
+    },
+    {
+     "name": "Display",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "MapBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles",
+   "columns": [
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "Quadrangles",
+   "spatial": true,
+   "rows": 9,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles",
+   "columns": [
+    {
+     "name": "USGS_QD_ID",
+     "type": "string"
+    },
+    {
+     "name": "QUAD_NAME",
+     "type": "string"
+    },
+    {
+     "name": "MAP_EDIT",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME1",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME2",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME3",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME4",
+     "type": "integer"
+    },
+    {
+     "name": "DATE_PUB",
+     "type": "string"
+    },
+    {
+     "name": "Area",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UtahBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UintaGlacial__MP_09-4DM___Shapefiles",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "STATEBOUND",
+     "type": "integer"
+    },
+    {
+     "name": "STATEBOU_1",
+     "type": "integer"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "FIPS",
+     "type": "integer"
+    },
+    {
+     "name": "X_CNTRD",
+     "type": "number"
+    },
+    {
+     "name": "Y_CNTRD",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__FeatureLabels",
+   "spatial": true,
+   "rows": 81,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__GlacialUnits",
+   "spatial": true,
+   "rows": 1570,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "string"
+    },
+    {
+     "name": "Glaciation",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__CorrelationLabels",
+   "spatial": true,
+   "rows": 47,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__CorrelationFills",
+   "spatial": true,
+   "rows": 19,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__ForestBoundariesEtc",
+   "spatial": true,
+   "rows": 7,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__IceExtents",
+   "spatial": true,
+   "rows": 58,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__Labels",
+   "spatial": true,
+   "rows": 50,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "number"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__Lakes",
+   "spatial": true,
+   "rows": 10216,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "GNIS_Name",
+     "type": "string"
+    },
+    {
+     "name": "IsMajor",
+     "type": "integer"
+    },
+    {
+     "name": "Area",
+     "type": "number"
+    },
+    {
+     "name": "Display",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__UtahBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "STATEBOUND",
+     "type": "integer"
+    },
+    {
+     "name": "STATEBOU_1",
+     "type": "integer"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "FIPS",
+     "type": "integer"
+    },
+    {
+     "name": "X_CNTRD",
+     "type": "number"
+    },
+    {
+     "name": "Y_CNTRD",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__MapBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__Quadrangles",
+   "spatial": true,
+   "rows": 9,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "USGS_QD_ID",
+     "type": "string"
+    },
+    {
+     "name": "QUAD_NAME",
+     "type": "string"
+    },
+    {
+     "name": "MAP_EDIT",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME1",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME2",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME3",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME4",
+     "type": "string"
+    },
+    {
+     "name": "DATE_PUB",
+     "type": "string"
+    },
+    {
+     "name": "Area",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UintaGlacial__UnitLabels",
+   "spatial": true,
+   "rows": 1309,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UintaGlacial",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "number"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

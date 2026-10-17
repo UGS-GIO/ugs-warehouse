@@ -3,7 +3,7 @@ import { qk } from "@/query-keys";
 import maplibregl from "@/map/maplibre-lib";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useQuery } from "@tanstack/react-query";
-import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Marker, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { BLANK_STYLE } from "@/offline/basemap";
@@ -12,17 +12,21 @@ import { basemapProtocol } from "@/offline/basemap-protocol";
 import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
-import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
+import { hasFootprint, type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapMenu } from "./basemap-menu";
 import lightThumb from "@/assets/basemaps/light.webp";
 import satelliteThumb from "@/assets/basemaps/satellite.webp";
 import streetsThumb from "@/assets/basemaps/streets.webp";
-import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
+import { type ActiveLayer, type Footprint, mapDefaultLayers, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { to2d } from "@/lib/bbox";
+import { RelatedLinks } from "./related-links";
+import { type IdentifyResult, identifyAt, identifyClick } from "./identify";
+import { IdentifyLayer } from "./identify-layer";
+import { IdentifyCard } from "./unit-card";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -87,12 +91,14 @@ type PopupInfo = { lng: number; lat: number; title: string; href?: string };
 
 // The related tables a clicked layer offers — names + the full-item href to resolve joins on open.
 // Named from the compact index (cheap); the join columns are read from the full item only on open.
-export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string }[] };
+export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string; rows?: number; reference?: boolean }[] };
 // What "open a related table" hands back up to the map route (which renders it in the Info panel).
 export type OpenRelated = { itemHref: string; relatedKey: string; title: string; props: Record<string, unknown> };
 // A clicked data feature's detail, lifted to the route so it can be docked (no floating feature
 // popup anywhere — the stakeholder-mandated pattern this replaces).
-export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo };
+// `identify` is a click on a geologic-map raster: the unit under it, or the scan-only notice.
+export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo;
+  identify?: IdentifyResult };
 
 // Union of bboxes → [w,s,e,n], or null.
 function unionBbox(bs: number[][]): [number, number, number, number] | null {
@@ -234,7 +240,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? to2d(item?.bbox);
+  const fitBox = unionBbox(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
@@ -317,8 +323,19 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // would land on one arbitrary feature.
   const easeZoomTo = (z: number) => mapRef.current?.getMap().easeTo({ zoom: z, duration: 600 });
 
+  // Rasters front-first. Scan-only applies to a raster that has unit data or is a publication's plate.
+  const identifyTargets = layers.filter((l) => l.cogHref || l.rasterPmHref)
+    .filter((l) => (l.unitsHref || l.pubTitle) && !gatedOut[l.id])
+    .map((l) => ({ slug: slugOf(l.id), hasUnits: !!l.unitsHref, bbox: effBox(l), pubTitle: l.pubTitle }));
+
   const onClick = (e: MapLayerMouseEvent) => {
     const f = pickFeature(e, allInteractiveIds);
+    const hit = identifyClick(f, () => identifyAt(e.target, e.point, e.lngLat, identifyTargets));
+    if (hit) {
+      onSelectFeature?.({ title: "", props: {}, identify: hit });
+      setPopup(null); setHlGeom(null);
+      return;
+    }
     if (!f) { setPopup(null); onSelectFeature?.(null); setHlGeom(null); return; }
     if (f.layer.id === "coverage-fill") {
       // A footprint: popup its title + a link to open the item (don't yank the user off the map).
@@ -456,7 +473,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Source>
       )}
 
-      {item?.geometry && (
+      {item?.geometry && hasFootprint(item) && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
           <Layer id="fp-line" type="line" paint={{ "line-color": "#888", "line-width": 1, "line-dasharray": [2, 2] }} />
         </Source>
@@ -473,9 +490,12 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         // pmtiles:// protocol as a raster source. No styling: it's the published map image.
         if (l.rasterPmHref) {
           return (
-            <Source key={l.id} id={`rpm-${s}`} type="raster" url={`pmtiles://${l.rasterPmHref}`} tileSize={256}>
-              <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": 1 }} />
-            </Source>
+            <Fragment key={l.id}>
+              <Source id={`rpm-${s}`} type="raster" url={`pmtiles://${l.rasterPmHref}`} tileSize={256}>
+                <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": 1 }} />
+              </Source>
+              {l.unitsHref && <IdentifyLayer slug={s} href={l.unitsHref} />}
+            </Fragment>
           );
         }
         // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
@@ -483,12 +503,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         if (l.cogHref) {
           if (!cogReady) return null;
           return (
-            <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-              <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 }} />
-            </Source>
+            <Fragment key={l.id}>
+              <Source id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
+                <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 }} />
+              </Source>
+              {l.unitsHref && <IdentifyLayer slug={s} href={l.unitsHref} />}
+            </Fragment>
           );
         }
-        const c = colorForId(l.id);  // keyed to id → matches the legend/tray swatch and survives reorder
         const styleLayers = styleCache[l.id];
         const pmHref = l.pmHref!;
         const pmLayer = l.pmLayer!;
@@ -510,11 +532,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               // An array, NOT a fragment: Source clones each child to inject `source`, and cloning a
               // fragment puts the prop on the fragment (three React warnings per layer, and no
               // source on the layers). Explicit `source` for the same reason — don't rely on inject.
-              [
-                <Layer key="fill" id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} filter={GEOM_FILTER.fill} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />,
-                <Layer key="line" id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} filter={GEOM_FILTER.line} paint={{ "line-color": c, "line-width": 1.2 }} />,
-                <Layer key="circle" id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} filter={GEOM_FILTER.point} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />,
-              ]
+              mapDefaultLayers(l.id).map(({ kind, type, filter, paint }) => (
+                <Layer key={kind} {...({ id: `pm-${s}-${kind}`, source: `pm-${s}`, type, "source-layer": pmLayer,
+                  filter, paint } as LayerProps)} />
+              ))
             )}
           </Source>
         );
@@ -564,33 +585,12 @@ function FeatureProps({ props }: { props: Record<string, unknown> }) {
   );
 }
 
-// Related-table affordances under the feature props. Names come straight from the index (no fetch on
-// click); the join columns, COUNT, and rows load only when one is opened, in the Info panel.
-function RelatedLinks({ info, props, onOpen }: {
-  info?: RelatedTablesInfo; props: Record<string, unknown>; onOpen: (r: OpenRelated) => void;
-}) {
-  if (!info?.tables.length) return null;
-  return (
-    <div className="mt-3 border-t border-border pt-2.5">
-      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
-      <div className="flex flex-wrap gap-1.5">
-        {info.tables.map((t) => (
-          <button key={t.key} type="button"
-            onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary">
-            {t.title} <span aria-hidden className="text-primary">→</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // A clicked data feature's props + related-table launchers, rendered in the Info dock (whose slot
 // scrolls, so no fixed height here). The footprint "Open item →" popup is a separate affordance.
 export function FeatureDetail({ feature, onOpenRelated, onClose }: {
   feature: SelectedFeature; onOpenRelated: (r: OpenRelated) => void; onClose: () => void;
 }) {
+  if (feature.identify) return <IdentifyCard result={feature.identify} onClose={onClose} />;
   return (
     <div>
       <div className="mb-2.5 flex items-start justify-between gap-2">

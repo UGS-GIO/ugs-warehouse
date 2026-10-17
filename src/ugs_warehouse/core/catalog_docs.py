@@ -70,15 +70,18 @@ def _extent_line(extent: dict | None) -> str:
 
 def readme(*, title: str, description: str, kind: str, children: int,
            extent: dict | None = None, items: list[dict] | None = None,
-           license_id: str | None = None) -> str:
+           license_id: str | None = None, publications: bool = False) -> str:
     """The human entry point. `kind` is "catalog", "collection" or "layer" (a collection holding one
-    dataset as its own assets); `children` counts what it holds."""
+    dataset as its own assets); `children` counts what it holds. `publications` marks a publication
+    series catalog, whose items.json lists its publications."""
     noun = "collections" if kind == "catalog" else "items"
     doc_type = "catalog" if kind == "catalog" else "collection"
     lic = license_id or config.DATA_LICENSE
     out = [f"# {title}\n\n", f"{description}\n\n"]
     if kind != "layer":  # a layer is one dataset: its files are assets, it holds nothing
         out.append(f"- {children} {noun}\n")
+    if publications:
+        out.append("- `items.json` lists the publications in this series, one entry each\n")
     out.append(_extent_line(extent))
     # PTL-FIL-005 wants the license and the provenance in the README itself, not only in the JSON.
     out.append(f"- License: {lic} ({config.LICENSE_URL})\n")
@@ -93,8 +96,10 @@ def readme(*, title: str, description: str, kind: str, children: int,
 
 
 def agents(*, title: str, kind: str, path: str, children: int,
-           items: list[dict] | None = None, service: bool = False) -> str:
+           items: list[dict] | None = None, service: bool = False, publications: bool = False) -> str:
     """What a program needs to use this node without fetching everything first.
+
+    `publications` is True for a publication series catalog, whose items.json lists publications.
 
     `service` is True for the nodes the Features service serves live (flat collections and the
     serving-topic schemas, per `core.stac.has_feature_service`). Those DO have a query endpoint —
@@ -125,7 +130,14 @@ def agents(*, title: str, kind: str, path: str, children: int,
                    "`ugs:item_count`, so a listing needs one fetch rather than one per child.\n")
         if not path:
             out.append("\nTo get every item at once, read `items.json` beside this file: one index "
-                       "of the whole catalog, each entry with a `self` link to its full item.\n")
+                       "of the whole catalog. It lists each publication once, with a `self` link to "
+                       "its `collection.json`; each publication's layers and tables, tagged "
+                       "`ugs:in_publication` and `ugs:publication_title`; and every other item. Each "
+                       "entry has a `self` link to its full document.\n")
+        if publications:
+            out.append("\n`items.json` beside this file lists this series' publications, one entry "
+                       "each, with a `self` link to the publication's `collection.json`. A "
+                       "publication's layers and tables are the `rel:item` links in that file.\n")
     elif kind == "layer":
         out.append(f"This collection is one dataset. Its files are the assets in `{doc}`; it has "
                    "no items.\n")

@@ -20,7 +20,10 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         # ORPHAN-9 has a COG but no pub record -> must be skipped (no item to link to)
         gm._write_item("24k", ["GQ-968", "BYU-1", "ORPHAN-9"], gm.mosaic_object("24k"), by_sid,
-                       bounds=[-112.0, 39.0, -111.5, 39.4])
+                       bounds=[-112.0, 39.0, -111.5, 39.4], published=gm.PublishedPubs(
+                           plates=frozenset({"ugs-publications/GQ/GQ-968", "ugs-external/BYU/BYU-1"}),
+                           collections=frozenset({"ugs-publications/GQ/GQ-968",
+                                                  "ugs-external/BYU/BYU-1"})))
     item = captured["item"]
     assert item["bbox"] == [-112.0, 39.0, -111.5, 39.4]   # the mosaic's real footprint, not all of Utah
     assert item["geometry"]["coordinates"][0][0] == [-112.0, 39.0]
@@ -30,8 +33,9 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     derived = [lnk for lnk in item["links"] if lnk["rel"] == "derived_from"]
     hrefs = [lnk["href"] for lnk in derived]
     assert len(derived) == 2  # ORPHAN-9 skipped
-    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968.json") for h in hrefs)
-    assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1.json") for h in hrefs)
+    assert all(h.endswith("_plate.json") for h in hrefs)
+    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json") for h in hrefs)
+    assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1_plate/BYU-1_plate.json") for h in hrefs)
     assert "ORPHAN-9" in capsys.readouterr().err  # orphan COG must warn to stderr (fail loud)
 
 
@@ -623,17 +627,77 @@ def test_a_review_bake_reads_public_cogs_and_links_members_to_the_public_catalog
 
     monkeypatch.setattr(gm.gcs, "list_paths", fake_list)
     assert gm._cog_sids() == {"M-1"} and seen["bucket"] == "ut-dnr-ugs-maps-prod-public"
-    href = gm._public_item_href("ugs-publications/GQ", "GQ-968")
+    href = gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
     assert href == ("https://maps-assets.geology.utah.gov/warehouse/stac/"
-                    "ugs-publications/GQ/GQ-968/GQ-968.json")
+                    "ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
 
 
-def test_public_item_href_matches_the_public_item_path_in_a_public_bake():
-    assert gm._public_item_href("ugs-publications/GQ", "GQ-968") == gm.config.public_url(
-        gm.stac.item_object_path("ugs-publications/GQ", "GQ-968"))
+def test_public_href_matches_the_public_item_path_in_a_public_bake():
+    assert gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate")) == gm.config.public_url(
+        gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
 
 
-def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
+def test_public_href_with_an_empty_stac_prefix(monkeypatch):
     monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
-    assert gm._public_item_href("ugs-publications/GQ", "GQ-968").endswith(
-        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968.json")
+    assert gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate")).endswith(
+        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
+
+
+def test_mosaic_links_a_single_file_member_to_its_collection_and_others_to_the_plate_item():
+    by_sid = {
+        "GQ-968": {"series_id": "GQ-968", "pub_publisher": "USGS", "pub_name": "Geologic map of Foo"},
+        "GQ-852": {"series_id": "GQ-852", "pub_publisher": "USGS", "pub_name": "Geologic map of Bar"},
+    }
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("24k", ["GQ-968", "GQ-852"], gm.mosaic_object("24k"), by_sid,
+                       bounds=[-112.0, 39.0, -111.5, 39.4], published=gm.PublishedPubs(
+                           plates=frozenset({"ugs-publications/GQ/GQ-852"}),
+                           collections=frozenset({"ugs-publications/GQ/GQ-968",
+                                                  "ugs-publications/GQ/GQ-852"})))
+    hrefs = [lk["href"] for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
+    assert any(h.endswith("/GQ/GQ-968/collection.json") for h in hrefs)
+    assert any(h.endswith("/GQ/GQ-852/GQ-852_plate/GQ-852_plate.json") for h in hrefs)
+    assert not any(h.endswith("GQ-968_plate.json") for h in hrefs)
+
+
+def test_a_member_not_yet_in_the_collection_layout_links_to_its_old_item():
+    by_sid = {"GQ-1": {"series_id": "GQ-1", "pub_publisher": "USGS", "pub_name": "Old layout"}}
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("24k", ["GQ-1"], gm.mosaic_object("24k"), by_sid, bounds=[-112, 39, -111, 40],
+                       published=gm.PublishedPubs(frozenset(), frozenset()))
+    (link,) = [lk for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
+    assert link["href"].endswith("/ugs-publications/GQ/GQ-1/GQ-1.json")
+    assert link["type"] == "application/geo+json"
+
+
+def test_published_pubs_reads_the_public_catalog_in_the_source_bucket(monkeypatch):
+    monkeypatch.setattr(gm.config, "BUCKET", "review-bucket")
+    monkeypatch.setattr(gm.config, "SOURCE_BUCKET", "public-bucket")
+    monkeypatch.setattr(gm.config, "STAC_PREFIX", "review/stac")  # a review bake
+    pfx = "warehouse/stac"  # the public catalog's prefix, from PUBLIC_CATALOG_URL
+    listing = [
+        f"{pfx}/ugs-publications/GQ/GQ-1/collection.json",
+        f"{pfx}/ugs-publications/GQ/GQ-1/GQ-1_plate/GQ-1_plate.json",
+        f"{pfx}/ugs-publications/GQ/GQ-1/GQ-1__geo__Faults/GQ-1__geo__Faults.json",
+        f"{pfx}/ugs-publications/GQ/GQ-2/collection.json",                 # single-file
+        f"{pfx}/ugs-publications/GQ/GQ-2/README.md",
+        f"{pfx}/ugs-publications/GQ/GQ-3/GQ-3.json",                        # old layout
+        f"{pfx}/ugs-publications/GQ/collection.json",                       # an old series collection
+        f"{pfx}/ugs-mining-district-files/MD/MD-5/MD-5_plate/MD-5_plate.json",
+        f"{pfx}/ugs-external/BYU/BYU-1/collection.json",
+    ]
+    seen = []
+
+    def list_paths(prefix, *, bucket=None):
+        seen.append((prefix, bucket))
+        return [p for p in listing if p.startswith(prefix)]
+
+    monkeypatch.setattr(gm.gcs, "list_paths", list_paths)
+    published = gm.published_pubs()
+    assert published.plates == {"ugs-publications/GQ/GQ-1", "ugs-mining-district-files/MD/MD-5"}
+    assert published.collections == {"ugs-publications/GQ/GQ-1", "ugs-publications/GQ/GQ-2",
+                                     "ugs-external/BYU/BYU-1"}
+    assert seen == [(f"{pfx}/{g}/", "public-bucket") for g in identity.PUB_GROUPS]
+

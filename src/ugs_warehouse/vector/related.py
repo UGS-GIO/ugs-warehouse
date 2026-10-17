@@ -66,18 +66,13 @@ def _cols(rel: dict, which: str) -> list[str]:
 
 
 def _foreign_key(rel: dict) -> dict | None:
-    """A Frictionless Table Schema foreignKey: this asset's `fields` reference `resource.fields`.
-
-    `resource` alone is a bare topic name; Frictionless resolves it inside a datapackage, which this
-    catalog has no such thing as. `href` names the file so a consumer can resolve the join."""
+    """A registry relationship as `stac.foreign_key`: this asset's columns reference the target
+    topic's archive. None when the relationship names no columns or target."""
     src, tgt = _cols(rel, "source"), _cols(rel, "target")
     target = rel.get("targetDomainTopic")
     if not (src and tgt and target):
         return None
-    return {"fields": src,
-            "reference": {"resource": target,
-                          "href": config.public_url(config.archive_path(target)),
-                          "fields": tgt}}
+    return stac.foreign_key(src, target, config.public_url(config.archive_path(target)), tgt)
 
 
 def _inverted_rel(rel: dict, parent_stem: str) -> dict:
@@ -93,14 +88,12 @@ def _inverted_rel(rel: dict, parent_stem: str) -> dict:
 
 
 def _related_link(target_stem: str, schema: str, title: str | None = None) -> dict:
-    """A STAC `related` link to a serving-topic item (absolute CDN href — no relative-depth math).
+    """`stac.related_link` to a serving-topic item.
 
     `schema` is the target's mart schema: items are nested per schema, so a link can't be built
     from the stem alone (see `_target_meta`)."""
-    href = config.public_url(
-        stac.item_object_path(sink_stac.collection_path(schema), target_stem))
-    return {"rel": "related", "href": href, "type": "application/geo+json",
-            "title": title or stac.prettify(target_stem)}
+    return stac.related_link(sink_stac.collection_path(schema), target_stem,
+                             title or stac.prettify(target_stem))
 
 
 def _target_meta(con, stems: list[str]) -> dict[str, dict]:

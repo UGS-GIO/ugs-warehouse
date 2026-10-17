@@ -1,0 +1,496 @@
+{
+ "layers": [
+  {
+   "label": "M215__counties",
+   "spatial": true,
+   "rows": 29,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "AOCBO_",
+     "type": "number"
+    },
+    {
+     "name": "AOCBO_ID",
+     "type": "number"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "FIPS",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__indian_reservations",
+   "spatial": true,
+   "rows": 311,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "AOLSA_",
+     "type": "number"
+    },
+    {
+     "name": "AOLSA_ID",
+     "type": "number"
+    },
+    {
+     "name": "USER",
+     "type": "integer"
+    },
+    {
+     "name": "CD",
+     "type": "integer"
+    },
+    {
+     "name": "NAMES",
+     "type": "string"
+    },
+    {
+     "name": "MNRL",
+     "type": "string"
+    },
+    {
+     "name": "FUND",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__upper_j_tr_outcrop",
+   "spatial": true,
+   "rows": 1027,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "UTGEOMAP_",
+     "type": "number"
+    },
+    {
+     "name": "UTGEOMAP_I",
+     "type": "number"
+    },
+    {
+     "name": "FORMATION",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__lakes",
+   "spatial": true,
+   "rows": 313,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "LAKES2_",
+     "type": "number"
+    },
+    {
+     "name": "LAKES2_ID",
+     "type": "number"
+    },
+    {
+     "name": "CODE",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR1",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR1",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR2",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR2",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR3",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR3",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR4",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR4",
+     "type": "integer"
+    },
+    {
+     "name": "NAMES",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__u_area_bondaries",
+   "spatial": true,
+   "rows": 15,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "number"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__national_parks",
+   "spatial": true,
+   "rows": 191,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "AOLSA_",
+     "type": "number"
+    },
+    {
+     "name": "AOLSA_ID",
+     "type": "number"
+    },
+    {
+     "name": "USER",
+     "type": "integer"
+    },
+    {
+     "name": "CD",
+     "type": "integer"
+    },
+    {
+     "name": "NAMES",
+     "type": "string"
+    },
+    {
+     "name": "MNRL",
+     "type": "string"
+    },
+    {
+     "name": "FUND",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__plss_2",
+   "spatial": true,
+   "rows": 2562,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "TRGRID_",
+     "type": "number"
+    },
+    {
+     "name": "TRGRID_ID",
+     "type": "number"
+    },
+    {
+     "name": "J1",
+     "type": "string"
+    },
+    {
+     "name": "J2",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR1",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR1",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR2",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR2",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR3",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR3",
+     "type": "integer"
+    },
+    {
+     "name": "QUADRANT",
+     "type": "integer"
+    },
+    {
+     "name": "SURVEY",
+     "type": "string"
+    },
+    {
+     "name": "TR",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__u_area_districts",
+   "spatial": true,
+   "rows": 58,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "number"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "POTENTIAL",
+     "type": "string"
+    },
+    {
+     "name": "NUMBER",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "M215__wilderness_areas",
+   "spatial": true,
+   "rows": 76,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "M215",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "AOLSA_",
+     "type": "number"
+    },
+    {
+     "name": "AOLSA_ID",
+     "type": "number"
+    },
+    {
+     "name": "USER",
+     "type": "integer"
+    },
+    {
+     "name": "CD",
+     "type": "integer"
+    },
+    {
+     "name": "NAMES",
+     "type": "string"
+    },
+    {
+     "name": "MNRL",
+     "type": "string"
+    },
+    {
+     "name": "ACRES",
+     "type": "number"
+    },
+    {
+     "name": "QUADRANT",
+     "type": "integer"
+    },
+    {
+     "name": "TNUM",
+     "type": "number"
+    },
+    {
+     "name": "RNUM",
+     "type": "number"
+    },
+    {
+     "name": "SECTION",
+     "type": "integer"
+    },
+    {
+     "name": "UPDATE_",
+     "type": "datetime"
+    },
+    {
+     "name": "SOURCE",
+     "type": "string"
+    },
+    {
+     "name": "SURV_ACRES",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

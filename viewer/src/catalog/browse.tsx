@@ -10,7 +10,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { idOf, useViewCtx } from "@/app";
 import { AssetChips } from "./asset-viewer";
-import { rootGroupOf } from "./catalog";
+import { itemBackTarget, rootGroupOf } from "./catalog";
 import { createComment } from "@/review/comments";
 import { ItemDetail } from "./item-detail";
 import { author, collectionLabel, county, dateOf, fmtDate, scale, series, title, typeOf, year } from "./item-view";
@@ -21,6 +21,7 @@ import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAss
 import { DataTable, Pager } from "@/data/table";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { C, humanize, toggle } from "@/ui/ui";
+import { Breadcrumb, type Crumb } from "./breadcrumb";
 import { useDataSaver } from "@/lib/data-saver";
 
 const itemIdOf = (it: ItemRef): string =>
@@ -175,20 +176,6 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
         })}
       </div>
     </>
-  );
-}
-
-function Breadcrumb({ crumbs }: { crumbs: { label: string; onClick?: () => void }[] }) {
-  return (
-    <div className="mb-1 text-sm">
-      {crumbs.map((c, i) => (
-        <span key={i}>
-          {i > 0 && <span className={C.muted}> / </span>}
-          {c.onClick ? <span className={C.crumb} onClick={c.onClick}>{c.label}</span>
-            : <span className={i === crumbs.length - 1 ? "" : C.muted}>{c.label}</span>}
-        </span>
-      ))}
-    </div>
   );
 }
 
@@ -567,11 +554,12 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 // A related item's STAC .json href → a viewer deep-link (?c=<collection>&i=<id>).
 
 // Registry-driven relationships (FK graph): related layers, this layer's references, related tables.
-// One collection's items.
-function CollectionItems({ items, itemsLoading, breadcrumb, series, onOpenItem, onSeries }: {
+// One collection's items. Exported for the render tests.
+export function CollectionItems({ items, itemsLoading, noIndex, breadcrumb, series, onOpenItem, onSeries }: {
   items: ItemRef[];
   itemsLoading: boolean;
-  breadcrumb: { label: string; onClick?: () => void }[];
+  noIndex?: boolean;               // a catalog with no item index: say so instead of an empty list
+  breadcrumb: Crumb[];
   series: string[];
   onOpenItem: (href: string) => void;
   onSeries: (codes: string[]) => void;
@@ -580,7 +568,9 @@ function CollectionItems({ items, itemsLoading, breadcrumb, series, onOpenItem, 
     <div className={C.wrap}>
       <Breadcrumb crumbs={breadcrumb} />
       {itemsLoading && <span className={C.muted}>loading items…</span>}
-      <ItemList items={items} onOpen={onOpenItem} series={series} onSeries={onSeries} />
+      {noIndex
+        ? <p role="status" className="mt-3 text-sm text-muted-foreground">This catalog has no item index.</p>
+        : <ItemList items={items} onOpen={onOpenItem} series={series} onSeries={onSeries} />}
     </div>
   );
 }
@@ -595,7 +585,7 @@ export function CollectionsGrid({
   cards: CollectionSummary[];
   allItems: ItemRef[];
   itemsLoading: boolean;
-  breadcrumb: { label: string; onClick?: () => void }[];
+  breadcrumb: Crumb[];
   atRoot: boolean;
   layerCollectionIds: string[];
   series: string[];
@@ -668,8 +658,10 @@ export function Browse() {
   if (c.collectionId && c.itemUrl) {
     return (
       <div className={C.wrap}>
-        <ItemDetail collectionId={c.collectionId} item={c.item.data} error={c.item.error} layout="page"
-          onBack={() => c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
+        <ItemDetail collectionId={c.collectionId} item={c.item.data} raw={c.item.raw} error={c.item.error}
+          missing={c.itemNotFound ? c.itemUrl : undefined}
+          partOf={c.partOf} crumbs={c.crumbs} layout="page"
+          onBack={() => c.go({ view: "catalog", ...itemBackTarget(c) })}
           onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,
                               l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })} />
       </div>
@@ -679,7 +671,7 @@ export function Browse() {
   if (c.leafColl && c.collectionId) {
     return <CollectionItems
       items={c.allItems.filter((it) => it.collId === c.collectionId)}
-      itemsLoading={c.itemsLoading} breadcrumb={c.crumbs} series={series}
+      itemsLoading={c.itemsLoading} noIndex={c.leafIndexMissing} breadcrumb={c.crumbs} series={series}
       onOpenItem={c.openItem} onSeries={c.setSeries} />;
   }
 

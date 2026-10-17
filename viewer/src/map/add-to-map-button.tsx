@@ -3,23 +3,30 @@
 // pulling in a layer while browsing keeps the ones already drawn, and flips to "✓ Added" (click to
 // remove) once it's on. The whole active set stays in the shareable URL.
 //
-// Renders nothing when the item isn't a resolvable map layer (not in the catalog's layer set), so
-// ?l= can never gain an id the Layers tray has no row for — every added layer stays manageable.
+// Renders nothing when the item isn't a resolvable map layer, so ?l= can never gain an id the Layers
+// tray has no row for and every added layer stays manageable. Resolvable means in the loaded layer
+// set, the open item drawing as one, or a passed `doc` drawing as one. The last two cover pages where
+// the root index is not loaded yet; their ids are root-index entries (a publication's plate is a
+// tagged one), so the tray gets their row once the Map loads it.
 import type { MouseEvent } from "react";
 
 import { idOf, useViewCtx } from "@/app";
+import type { StacDoc } from "@/stac";
 
-export function AddToMapButton({ layerId, compact = false, large = false }: {
+export function AddToMapButton({ layerId, doc, compact = false, large = false }: {
   // The layer to add. Omit ONLY where the component renders inside the open item's own panel (item
   // detail): it then targets the open item — idOf(itemUrl), the authoritative id for that panel.
   // Pass it explicitly (as the cards/rows do) anywhere the shown item may not be the open one.
   layerId?: string;
+  // The layer's own doc, when it is neither the open item nor in the loaded layer set yet (a
+  // publication's plate, shown on the publication page): it is a layer if it draws as one.
+  doc?: StacDoc;
   compact?: boolean;   // dense chip for a result card/row; default is a detail-panel action button
   large?: boolean;     // the item page's action row
 }) {
   const c = useViewCtx();
   const id = layerId ?? (c.itemUrl ? idOf(c.itemUrl) : undefined);
-  const isLayer = Boolean(id && c.isLayerId(id));
+  const isLayer = Boolean(id && (c.isLayerId(id) || (doc && c.drawsAsLayer(doc))));
   if (!id || !isLayer) return null;
 
   const on = c.isActive(id);

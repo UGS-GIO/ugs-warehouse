@@ -1,0 +1,166 @@
+{
+ "layers": [
+  {
+   "label": "UtahLandslideMaps__Quadrangles",
+   "spatial": true,
+   "rows": 46,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UtahLandslideMaps",
+   "columns": [
+    {
+     "name": "USGS_QD_ID",
+     "type": "string"
+    },
+    {
+     "name": "QUAD_NAME",
+     "type": "string"
+    },
+    {
+     "name": "MAP_EDIT",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME1",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME2",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME3",
+     "type": "string"
+    },
+    {
+     "name": "ST_NAME4",
+     "type": "string"
+    },
+    {
+     "name": "DATE_PUB",
+     "type": "string"
+    },
+    {
+     "name": "QUAD_NAME1",
+     "type": "string"
+    },
+    {
+     "name": "Index",
+     "type": "string"
+    },
+    {
+     "name": "Plate",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UtahLandslideMaps__LandslidePolygons",
+   "spatial": true,
+   "rows": 25590,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UtahLandslideMaps",
+   "columns": [
+    {
+     "name": "StateLSID",
+     "type": "number"
+    },
+    {
+     "name": "LSUnit",
+     "type": "string"
+    },
+    {
+     "name": "MoveType",
+     "type": "string"
+    },
+    {
+     "name": "Historical",
+     "type": "string"
+    },
+    {
+     "name": "GeolUnit",
+     "type": "string"
+    },
+    {
+     "name": "MapScale",
+     "type": "string"
+    },
+    {
+     "name": "MapName",
+     "type": "string"
+    },
+    {
+     "name": "PubDate",
+     "type": "string"
+    },
+    {
+     "name": "Author_s",
+     "type": "string"
+    },
+    {
+     "name": "MapBound",
+     "type": "string"
+    },
+    {
+     "name": "MultSource",
+     "type": "string"
+    },
+    {
+     "name": "AffUnit",
+     "type": "string"
+    },
+    {
+     "name": "MoveUnit",
+     "type": "string"
+    },
+    {
+     "name": "MoveCause",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UtahLandslideMaps__UtahBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UtahLandslideMaps",
+   "columns": [
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

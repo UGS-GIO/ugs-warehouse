@@ -79,6 +79,7 @@ var punct = map[byte]tokKind{'(': tLParen, ')': tRParen, ',': tComma}
 var (
 	number = regexp.MustCompile(`^[0-9.]+([eE][+-]?[0-9]+)?`)
 	name   = regexp.MustCompile(`^[_A-Za-z][_.A-Za-z0-9]*`)
+	quoted = regexp.MustCompile(`^'(?:[^']|'')*'`)
 )
 
 func lex(s string) ([]token, error) {
@@ -92,25 +93,12 @@ func lex(s string) ([]token, error) {
 			out = append(out, token{kind: punct[c]})
 			i++
 		case c == '\'':
-			var b strings.Builder
-			i++
-			for {
-				if i >= len(s) {
-					return nil, fmt.Errorf("unterminated string")
-				}
-				if s[i] == '\'' {
-					if i+1 < len(s) && s[i+1] == '\'' {
-						b.WriteByte('\'')
-						i += 2
-						continue
-					}
-					i++
-					break
-				}
-				b.WriteByte(s[i])
-				i++
+			m := quoted.FindString(s[i:])
+			if m == "" {
+				return nil, fmt.Errorf("unterminated string")
 			}
-			out = append(out, token{kind: tString, text: b.String()})
+			out = append(out, token{kind: tString, text: strings.ReplaceAll(m[1:len(m)-1], "''", "'")})
+			i += len(m)
 		case c == '"' || c == '`' || c == '[':
 			j := strings.IndexByte(s[i+1:], map[byte]byte{'"': '"', '`': '`', '[': ']'}[c])
 			if j < 0 {

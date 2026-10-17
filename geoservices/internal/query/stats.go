@@ -91,7 +91,13 @@ func (a *accumulator) result(kind string) any {
 		if a.nums == 0 {
 			return jsonx.Undefined
 		}
-		return map[string]float64{"SUM": a.sum, "MIN": a.min, "MAX": a.max}[kind]
+		switch kind {
+		case "SUM":
+			return a.sum
+		case "MIN":
+			return a.min
+		}
+		return a.max
 	case "AVG":
 		if a.count == 0 {
 			return jsonx.Undefined

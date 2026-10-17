@@ -242,8 +242,12 @@ func parseTopics(raw []byte) (*topics, error) {
 		if it.Data() == "" {
 			continue
 		}
-		_ = json.Unmarshal(d.Properties["title"], &it.Title)
-		_ = json.Unmarshal(d.Properties["description"], &it.Description)
+		if raw := d.Properties["title"]; raw != nil {
+			_ = json.Unmarshal(raw, &it.Title)
+		}
+		if raw := d.Properties["description"]; raw != nil {
+			_ = json.Unmarshal(raw, &it.Description)
+		}
 		renders, _ := ObjectFields(d.Properties["ugs:renders"])
 		for _, r := range renders {
 			var v struct {
@@ -256,8 +260,8 @@ func parseTopics(raw []byte) (*topics, error) {
 		if len(it.Renders) == 0 {
 			it.Renders = []Render{{Name: "default"}}
 		}
-		if i := slices.IndexFunc(t.order, func(o *Item) bool { return o.ID == it.ID }); i >= 0 {
-			t.order[i] = it
+		if prev, ok := t.byID[it.ID]; ok {
+			t.order[slices.Index(t.order, prev)] = it
 		} else {
 			t.order = append(t.order, it)
 		}

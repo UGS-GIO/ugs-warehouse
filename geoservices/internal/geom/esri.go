@@ -114,7 +114,11 @@ func (e Esri) AppendJSON(buf []byte) []byte {
 		buf = jsonx.AppendNumber(buf, e.Y)
 		return append(buf, '}')
 	case EsriMultipoint:
-		return append(appendPoints(append(buf, `{"points":`...), e.Parts[0]), '}')
+		var pts []orb.Point
+		if len(e.Parts) > 0 {
+			pts = e.Parts[0]
+		}
+		return append(appendPoints(append(buf, `{"points":`...), pts), '}')
 	case EsriPolyline:
 		buf = append(buf, `{"paths":`...)
 	default:

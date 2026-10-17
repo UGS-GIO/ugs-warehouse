@@ -4,7 +4,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -84,11 +83,11 @@ func (pr *Provider) Version(ctx context.Context, topicID, render string) (string
 	if err != nil {
 		return "", err
 	}
-	style, err := pr.Catalog.RendererVersion(ctx, item, render)
+	d, err := pr.Catalog.Drawing(ctx, item, render)
 	if err != nil {
 		return "", err
 	}
-	return item.Version + "|" + layer.ID() + "|" + style, nil
+	return item.Version + "|" + layer.ID() + "|" + d.Version, nil
 }
 
 // Open opens a data file, cached like the catalog.
@@ -132,13 +131,14 @@ func (pr *Provider) Load(ctx context.Context, topicID, render string, isQuery bo
 
 func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, render string, isQuery bool, params query.Raw) (*query.Collection, error) {
 	var layer *pq.Layer
-	var style map[string]json.RawMessage
+	var drawing *catalog.Drawing
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { layer, err = pr.Open(gctx, item.Data()); return })
-	g.Go(func() (err error) { style, err = pr.Catalog.Renderer(gctx, item, render); return })
+	g.Go(func() (err error) { drawing, err = pr.Catalog.Drawing(gctx, item, render); return })
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	style := drawing.Info
 
 	name := topicID
 	if item.Title != nil {
@@ -175,15 +175,10 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 			return nil, &query.Error{Code: 400, Message: err.Error(), Details: []string{}}
 		}
 	}
-	switch p.Kind {
-	case plan.Count:
+	if p.Kind != plan.Features {
 		n := layer.Rows
 		c.Count = &n
-		return c, nil
-	case plan.Extent:
-		n := layer.Rows
-		c.Count = &n
-		if layer.Extent != nil {
+		if p.Kind == plan.Extent && layer.Extent != nil {
 			c.Extent = projectExtent(layer.Extent, p.OutSR)
 		}
 		return c, nil
@@ -233,28 +228,20 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	// smallest: flagging it exceeded makes Map Viewer split it into four and ask again, repeatedly.
 	tile := params["resultType"] == "tile" && thin
 	if tile && int64(len(feats)) > limit {
-		sizes := make([]float64, len(feats))
-		order := make([]int, len(feats))
 		for i := range feats {
-			order[i] = i
 			if !feats[i].speck {
-				sizes[i] = spread(feats[i].f.Geom)
+				feats[i].size = spread(feats[i].f.Geom)
 			}
 		}
-		slices.SortStableFunc(order, func(a, b int) int {
+		slices.SortStableFunc(feats, func(a, b shaped) int {
 			switch {
-			case sizes[a] > sizes[b]:
+			case a.size > b.size:
 				return -1
-			case sizes[a] < sizes[b]:
+			case a.size < b.size:
 				return 1
 			}
 			return 0
 		})
-		sorted := make([]shaped, len(feats))
-		for i, o := range order {
-			sorted[i] = feats[o]
-		}
-		feats = sorted
 	}
 	// Mirrors JavaScript's `!tile && (over || (thin && read past))`, where thin is null without a page.
 	switch {
@@ -287,6 +274,7 @@ type cell struct {
 type shaped struct {
 	f     query.Feature
 	speck bool
+	size  float64 // spread, when ranking a tile's features
 }
 
 // features reads the plan's columns (and geometry) at rows and builds the features, thinning
@@ -345,7 +333,7 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 				cells[k] = true
 			}
 		}
-		out = append(out, shaped{query.Feature{Props: props, Geom: g}, shapes[i].Speck})
+		out = append(out, shaped{f: query.Feature{Props: props, Geom: g}, speck: shapes[i].Speck})
 	}
 	return out, nil
 }

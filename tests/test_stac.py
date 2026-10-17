@@ -1149,7 +1149,8 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
 
 @pytest.mark.parametrize("stac, expected", [("warehouse/stac", "warehouse/featureserv"),
                                              ("warehouse-sandbox/stac", "warehouse-sandbox/featureserv"),
-                                             ("sandbox-stac", "featureserv")])
+                                             ("sandbox-stac", "featureserv"),
+                                             ("warehouse/stac/", "warehouse/featureserv")])
 def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
     import os
     import subprocess
@@ -1160,6 +1161,7 @@ def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
     env["WAREHOUSE_STAC_PREFIX"] = stac
     env["PYTHONPATH"] = os.pathsep.join(sys.path)  # finds the package without an install
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == expected, out.stderr
 
 

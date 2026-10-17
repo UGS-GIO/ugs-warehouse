@@ -83,7 +83,7 @@ func lex(s string) ([]token, error) {
 		switch {
 		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
 			i++
-		case punct[c] != tEOF:
+		case c == '(' || c == ')' || c == ',':
 			out = append(out, token{kind: punct[c]})
 			i++
 		case c == '\'':

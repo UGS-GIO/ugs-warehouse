@@ -297,14 +297,8 @@ func (w *winnow) idMatch(ft *Feature) bool {
 	if w.idIndex < 0 {
 		return false
 	}
-	v := ft.Props[w.idIndex]
-	var f float64
-	switch x := v.(type) {
-	case int64:
-		f = float64(x)
-	case float64:
-		f = x
-	default:
+	f, ok := number(ft.Props[w.idIndex])
+	if !ok {
 		return false
 	}
 	for _, id := range w.ids {
@@ -368,10 +362,10 @@ func (w *winnow) esriFeatures(idx []int) ([]EsriFeature, bool) {
 	if w.distinct {
 		out = distinctFeatures(out)
 	}
-	return w.page(out)
+	return page(w, out)
 }
 
-func (w *winnow) page(out []EsriFeature) ([]EsriFeature, bool) {
+func page[T any](w *winnow, out []T) ([]T, bool) {
 	if w.limit == 0 {
 		return out, false
 	}
@@ -432,14 +426,7 @@ func (w *winnow) geojson(idx []int) []any {
 		}
 		out = kept
 	}
-	if w.limit != 0 {
-		from := min(len(out), w.offset)
-		to := min(len(out), w.offset+w.limit)
-		out = out[from:to]
-		if len(out) == w.limit {
-			out = out[:len(out)-1]
-		}
-	}
+	out, _ = page(w, out)
 	return out
 }
 

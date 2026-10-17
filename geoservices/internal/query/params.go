@@ -21,21 +21,14 @@ type Raw map[string]string
 
 // Normalize builds both views of a request.
 func Normalize(query, body url.Values) (Params, Raw) {
-	raw := Raw{}
+	p, raw := Params{}, Raw{}
 	for _, src := range []url.Values{body, query} {
 		for k, v := range src {
-			if v[0] != "" || raw[k] == "" {
+			if v[0] != "" {
+				raw[k], p[k] = v[0], coerce(v[0])
+			} else if raw[k] == "" {
 				raw[k] = v[0]
 			}
-		}
-	}
-	p := Params{}
-	for _, src := range []url.Values{body, query} {
-		for k, v := range src {
-			if v[0] == "" {
-				continue
-			}
-			p[k] = coerce(v[0])
 		}
 	}
 	return p, raw
@@ -100,39 +93,15 @@ func (p Params) Validate() error {
 			return bad("Invalid format", `"f" must be one of [json, pjson, pbf, geojson]`)
 		}
 	}
-	for _, k := range []string{"resultRecordCount", "resultOffset"} {
-		if v, ok := p[k]; ok {
-			if _, num := v.(float64); !num {
-				m := `"` + k + `" must be a number`
-				return bad(m, m)
-			}
-		}
-	}
-	for _, k := range []string{"returnGeometry", "returnCountOnly"} {
-		if v, ok := p[k]; ok {
-			if _, b := v.(bool); !b {
-				m := `"` + k + `" must be a boolean`
-				return bad(m, m)
-			}
-		}
-	}
-	for _, k := range []string{"outFields", "orderByFields"} {
-		if v, ok := p[k]; ok {
-			if _, s := v.(string); !s {
-				m := `"` + k + `" must be a string`
-				return bad(m, m)
-			}
+	for _, c := range [][2]string{{"resultRecordCount", "number"}, {"resultOffset", "number"},
+		{"returnGeometry", "boolean"}, {"returnCountOnly", "boolean"}, {"outFields", "string"}, {"orderByFields", "string"}} {
+		if v, ok := p[c[0]]; ok && typeOf(v) != c[1] {
+			m := `"` + c[0] + `" must be a ` + c[1]
+			return bad(m, m)
 		}
 	}
 	if v, ok := p["objectIds"]; ok {
-		switch x := v.(type) {
-		case string:
-		case float64:
-			if !isInt(x) {
-				m := `"objectIds" does not match any of the allowed types`
-				return bad(m, m)
-			}
-		default:
+		if f, num := v.(float64); typeOf(v) != "string" && !(num && isInt(f)) {
 			m := `"objectIds" does not match any of the allowed types`
 			return bad(m, m)
 		}
@@ -156,6 +125,18 @@ func (p Params) Validate() error {
 		}
 	}
 	return nil
+}
+
+func typeOf(v any) string {
+	switch v.(type) {
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	case string:
+		return "string"
+	}
+	return ""
 }
 
 func supported(id int) bool {

@@ -48,21 +48,6 @@ func Parse(where string, resolve Resolver) (Expr, error) {
 	return e, nil
 }
 
-// Fields lists the field names a where clause mentions (lower-cased).
-func Fields(where string) []string {
-	toks, err := lex(where)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, t := range toks {
-		if t.kind == tIdent {
-			out = append(out, strings.ToLower(t.text))
-		}
-	}
-	return out
-}
-
 // --- lexer
 
 type tokKind int

@@ -64,9 +64,6 @@ func (p Params) String(k string) (string, bool) { s, ok := p[k].(string); return
 // Number is the parameter when it is a number.
 func (p Params) Number(k string) (float64, bool) { f, ok := p[k].(float64); return f, ok }
 
-// Has reports a parameter that is present.
-func (p Params) Has(k string) bool { _, ok := p[k]; return ok }
-
 // Format is f, defaulting to json.
 func (p Params) Format() string {
 	if f, ok := p["f"].(string); ok {

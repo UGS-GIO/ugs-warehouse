@@ -51,16 +51,6 @@ func (o Obj) Get(k string) (any, bool) {
 	return nil, false
 }
 
-// Delete removes k.
-func (o *Obj) Delete(k string) {
-	for i := range *o {
-		if (*o)[i].K == k {
-			*o = append((*o)[:i], (*o)[i+1:]...)
-			return
-		}
-	}
-}
-
 // Marshal encodes v.
 func Marshal(v any) []byte { return Append(nil, v) }
 

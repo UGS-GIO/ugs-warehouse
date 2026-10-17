@@ -601,7 +601,8 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 # The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
-INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
+# The overview's tolerance is how the FeatureServer (geoservices/) picks it for small scales.
+INDEX_ASSET_KEYS = ("href", "type", "roles", "title", "ugs:simplify_tolerance")
 # The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
 # topic's data or tiling does. Read by the ingest's skip check and the thumbnail job's content hash,
 # so a rename must change both.

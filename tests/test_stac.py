@@ -284,6 +284,12 @@ def test_index_entry_assets_stay_summaries():
     assert "ugs:foreign_keys" not in asset and "table:columns" not in asset
 
 
+def test_index_entry_keeps_the_overview_tolerance():
+    overview = {"href": "x_overview.parquet", "ugs:simplify_tolerance": 0.0005, "file:size": 1}
+    asset = stac._index_entry({"id": "x", "assets": {"overview": overview}})["assets"]["overview"]
+    assert asset == {"href": "x_overview.parquet", "ugs:simplify_tolerance": 0.0005}
+
+
 def test_index_entry_keeps_web_map_links_alongside_self():
     item = {**_related_item(), "links": [
         {"rel": "self", "href": "./enmin_ucrc_wells.json"},          # item-relative, not reusable

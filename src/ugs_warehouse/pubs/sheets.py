@@ -458,7 +458,7 @@ def _utm_crs(frame, east: str, north: str) -> tuple[str | None, str]:
             datum = next((d for d in _DATUMS if d in only), None)
     if not (zone and datum):
         missing = " and ".join(n for n, v in (("zone", zone), ("datum", datum)) if not v)
-        return None, f"UTM columns {east}/{north} found but the sheet names no {missing}"
+        return None, f"UTM columns {east}/{north} found but the sheet does not give the {missing}"
     return f"EPSG:{_DATUMS[datum] + int(zone.group(1))}", ""
 
 

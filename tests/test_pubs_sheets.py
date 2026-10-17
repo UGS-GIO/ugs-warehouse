@@ -160,7 +160,7 @@ def test_utm_columns_are_used_only_when_the_sheet_names_a_zone_and_datum():
     assert round(gdf.geometry.iloc[0].y, 1) == 40.0 and -113 < gdf.geometry.iloc[0].x < -111
 
     assert sheets.points(bare, warnings) is None
-    assert "names no zone and datum" in warnings[0] and "table only" in warnings[0]
+    assert "does not give the zone and datum" in warnings[0] and "table only" in warnings[0]
 
 
 # ---- real header names, the open-once reader, the xls reader, CSV through Arrow, size cap ----
@@ -185,7 +185,7 @@ def test_real_easting_northing_names_are_recognised_and_still_need_a_zone_and_da
     warnings: list[str] = []
 
     assert sheets.points(bare, warnings) is None
-    assert east in warnings[0] and "names no zone and datum" in warnings[0]
+    assert east in warnings[0] and "does not give the zone and datum" in warnings[0]
 
     named = bare.assign(Zone=12, Datum="NAD83")
     gdf = sheets.points(named, [])

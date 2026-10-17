@@ -76,6 +76,11 @@ var keywords = map[string]bool{"AND": true, "OR": true, "NOT": true, "IN": true,
 
 var punct = map[byte]tokKind{'(': tLParen, ')': tRParen, ',': tComma}
 
+var (
+	number = regexp.MustCompile(`^[0-9.]+([eE][+-]?[0-9]+)?`)
+	name   = regexp.MustCompile(`^[_A-Za-z][_.A-Za-z0-9]*`)
+)
+
 func lex(s string) ([]token, error) {
 	var out []token
 	for i := 0; i < len(s); {
@@ -114,40 +119,21 @@ func lex(s string) ([]token, error) {
 			out = append(out, token{kind: tIdent, text: s[i+1 : i+1+j]})
 			i += j + 2
 		case c >= '0' && c <= '9' || c == '.' && i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9':
-			j := i
-			for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == '.') {
-				j++
-			}
-			if j < len(s) && (s[j] == 'e' || s[j] == 'E') {
-				k := j + 1
-				if k < len(s) && (s[k] == '+' || s[k] == '-') {
-					k++
-				}
-				if k < len(s) && s[k] >= '0' && s[k] <= '9' {
-					for k < len(s) && s[k] >= '0' && s[k] <= '9' {
-						k++
-					}
-					j = k
-				}
-			}
-			f, err := strconv.ParseFloat(s[i:j], 64)
+			n := number.FindString(s[i:])
+			f, err := strconv.ParseFloat(n, 64)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, token{kind: tNumber, num: f, text: s[i:j]})
-			i = j
+			out = append(out, token{kind: tNumber, num: f, text: n})
+			i += len(n)
 		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
-			j := i
-			for j < len(s) && (s[j] == '_' || s[j] == '.' || s[j] >= 'a' && s[j] <= 'z' || s[j] >= 'A' && s[j] <= 'Z' || s[j] >= '0' && s[j] <= '9') {
-				j++
-			}
-			word := s[i:j]
+			word := name.FindString(s[i:])
 			if keywords[strings.ToUpper(word)] {
 				out = append(out, token{kind: tKeyword, text: strings.ToUpper(word)})
 			} else {
 				out = append(out, token{kind: tIdent, text: word})
 			}
-			i = j
+			i += len(word)
 		default:
 			for _, op := range []string{"<>", "!=", "<=", ">=", "==", "=", "<", ">", "-", "+"} {
 				if strings.HasPrefix(s[i:], op) {

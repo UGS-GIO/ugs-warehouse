@@ -271,19 +271,18 @@ func geometry(b []byte, g *geom.Esri, t Transform) []byte {
 			}
 		}
 	}
-	if len(lengths) > 0 {
-		var packed []byte
-		for _, l := range lengths {
-			packed = protowire.AppendVarint(packed, uint64(l))
-		}
-		b = message(b, 2, packed)
+	b = packed(b, 2, lengths, func(l uint32) uint64 { return uint64(l) })
+	return packed(b, 3, coords, protowire.EncodeZigZag)
+}
+
+// packed writes xs as one packed varint field, or nothing when there are none.
+func packed[T any](b []byte, num protowire.Number, xs []T, enc func(T) uint64) []byte {
+	if len(xs) == 0 {
+		return b
 	}
-	if len(coords) > 0 {
-		var packed []byte
-		for _, c := range coords {
-			packed = protowire.AppendVarint(packed, protowire.EncodeZigZag(c))
-		}
-		b = message(b, 3, packed)
+	var body []byte
+	for _, x := range xs {
+		body = protowire.AppendVarint(body, enc(x))
 	}
-	return b
+	return message(b, num, body)
 }

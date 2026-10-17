@@ -107,13 +107,7 @@ func lex(s string) ([]token, error) {
 			}
 			out = append(out, token{kind: tString, text: b.String()})
 		case c == '"' || c == '`' || c == '[':
-			end := byte('"')
-			if c == '`' {
-				end = '`'
-			} else if c == '[' {
-				end = ']'
-			}
-			j := strings.IndexByte(s[i+1:], end)
+			j := strings.IndexByte(s[i+1:], map[byte]byte{'"': '"', '`': '`', '[': ']'}[c])
 			if j < 0 {
 				return nil, fmt.Errorf("unterminated identifier")
 			}
@@ -191,15 +185,15 @@ func (p *parser) keyword(k string) bool {
 var errSyntax = fmt.Errorf("syntax")
 
 func (p *parser) or() (Expr, error) {
-	return p.chain("OR", p.and, func(l, r Expr) Expr { return orExpr{l, r} })
+	return p.chain("OR", p.and)
 }
 
 func (p *parser) and() (Expr, error) {
-	return p.chain("AND", p.not, func(l, r Expr) Expr { return andExpr{l, r} })
+	return p.chain("AND", p.not)
 }
 
 // chain parses operands joined by the keyword kw, left to right.
-func (p *parser) chain(kw string, operand func() (Expr, error), join func(l, r Expr) Expr) (Expr, error) {
+func (p *parser) chain(kw string, operand func() (Expr, error)) (Expr, error) {
 	l, err := operand()
 	if err != nil {
 		return nil, err
@@ -209,7 +203,7 @@ func (p *parser) chain(kw string, operand func() (Expr, error), join func(l, r E
 		if err != nil {
 			return nil, err
 		}
-		l = join(l, r)
+		l = logicExpr{kw == "AND", l, r}
 	}
 	return l, nil
 }
@@ -279,7 +273,7 @@ func (p *parser) predicate() (Expr, error) {
 			}
 			esc = t.text
 		}
-		return &likeExpr{v: l, pattern: pat, escape: esc, neg: neg}, nil
+		return &likeExpr{l, pat, esc, neg, map[string]*regexp.Regexp{}}, nil
 	case p.keyword("BETWEEN"):
 		lo, err := p.value()
 		if err != nil {
@@ -405,8 +399,10 @@ func parseTime(s string) (float64, error) {
 
 type lit struct{ v any }
 type field int
-type andExpr struct{ l, r Expr }
-type orExpr struct{ l, r Expr }
+type logicExpr struct {
+	and  bool
+	l, r Expr
+}
 type notExpr struct{ e Expr }
 type cmpExpr struct {
 	op   string
@@ -438,11 +434,11 @@ type funcExpr struct {
 
 func (e lit) eval(Row) any       { return e.v }
 func (e field) eval(row Row) any { return row(int(e)) }
-func (e andExpr) eval(row Row) any {
-	return js.Truthy(e.l.eval(row)) && js.Truthy(e.r.eval(row))
-}
-func (e orExpr) eval(row Row) any {
-	return js.Truthy(e.l.eval(row)) || js.Truthy(e.r.eval(row))
+func (e logicExpr) eval(row Row) any {
+	if js.Truthy(e.l.eval(row)) != e.and {
+		return !e.and // AND stops at a falsy operand, OR at a truthy one
+	}
+	return js.Truthy(e.r.eval(row))
 }
 func (e notExpr) eval(row Row) any { return !js.Truthy(e.e.eval(row)) }
 
@@ -492,9 +488,6 @@ func (e *likeExpr) eval(row Row) any {
 	re, ok := e.cache[p]
 	if !ok {
 		re = likeRegexp(p, e.escape)
-		if e.cache == nil {
-			e.cache = map[string]*regexp.Regexp{}
-		}
 		e.cache[p] = re
 	}
 	return re.MatchString(js.String(v)) != e.neg

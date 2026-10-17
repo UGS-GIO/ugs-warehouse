@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.9.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.8.0...v1.9.0) (2026-10-17)
+
+
+### Features
+
+* **viewer:** replace the tiles service with ArcGIS FeatureServer links ([#584](https://github.com/UGS-GIO/ugs-warehouse/issues/584)) ([485c36b](https://github.com/UGS-GIO/ugs-warehouse/commit/485c36be1dff11bb36685124bbbb69019aa798db))
+
+
+### Bug Fixes
+
+* **featureserv:** keep a sandbox refresh from replacing prod's layer list ([#585](https://github.com/UGS-GIO/ugs-warehouse/issues/585)) ([b5cb725](https://github.com/UGS-GIO/ugs-warehouse/commit/b5cb725a3d7da9b59dce2aab1cf5c15a6f8b5c60))
+* **stac:** keep the overview tolerance in items.json so the FeatureServer reads overviews ([#588](https://github.com/UGS-GIO/ugs-warehouse/issues/588)) ([748bf65](https://github.com/UGS-GIO/ugs-warehouse/commit/748bf65688b6500976bb4c8864f38a4ff8438b0b))
+
 ## [1.8.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.7.0...v1.8.0) (2026-10-16)
 
 

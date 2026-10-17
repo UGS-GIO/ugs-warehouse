@@ -37,11 +37,7 @@ func ToEsri(g orb.Geometry) (Esri, bool) {
 	case orb.LineString:
 		return Esri{Kind: EsriPolyline, Parts: [][]orb.Point{g}}, true
 	case orb.MultiLineString:
-		parts := make([][]orb.Point, len(g))
-		for i, l := range g {
-			parts[i] = l
-		}
-		return Esri{Kind: EsriPolyline, Parts: parts}, true
+		return Esri{Kind: EsriPolyline, Parts: parts(g)}, true
 	case orb.Polygon:
 		return Esri{Kind: EsriPolygon, Parts: orient(g)}, true
 	case orb.MultiPolygon:

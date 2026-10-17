@@ -306,7 +306,7 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 			g = shapes[i].G
 		}
 		if thin && shapes[i].Speck {
-			if x, y, ok := firstPoint(g); ok {
+			if pt, ok := firstPoint(g); ok {
 				class.Reset()
 				first := true
 				for c, name := range p.Columns {
@@ -319,7 +319,7 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 					first = false
 					class.WriteString(js.Join(props[c]))
 				}
-				k := cell{math.Floor(x / p.Tolerance), math.Floor(y / p.Tolerance), class.String()}
+				k := cell{math.Floor(pt[0] / p.Tolerance), math.Floor(pt[1] / p.Tolerance), class.String()}
 				if cells[k] {
 					continue
 				}
@@ -431,18 +431,15 @@ func (pr *Provider) admit(ctx context.Context, n int64) (func(), error) {
 	}, nil
 }
 
-func firstPoint(g orb.Geometry) (float64, float64, bool) {
-	switch x := g.(type) {
-	case orb.Polygon:
-		if len(x) > 0 && len(x[0]) > 0 {
-			return x[0][0][0], x[0][0][1], true
-		}
-	case orb.MultiPolygon:
-		if len(x) > 0 && len(x[0]) > 0 && len(x[0][0]) > 0 {
-			return x[0][0][0][0], x[0][0][0][1], true
-		}
+// firstPoint is the first point of a polygon or of a multipolygon's first member.
+func firstPoint(g orb.Geometry) (orb.Point, bool) {
+	if mp, ok := g.(orb.MultiPolygon); ok && len(mp) > 0 {
+		g = mp[0]
 	}
-	return 0, 0, false
+	if p, ok := g.(orb.Polygon); ok && len(p) > 0 && len(p[0]) > 0 {
+		return p[0][0], true
+	}
+	return orb.Point{}, false
 }
 
 // spread is width plus height of a geometry's bounds, to rank features by how much they cover.

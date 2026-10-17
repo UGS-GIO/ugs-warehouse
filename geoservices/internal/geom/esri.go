@@ -106,88 +106,32 @@ func orient(p orb.Polygon) [][]orb.Point {
 
 // AppendJSON writes the geometry as Esri JSON (without a spatialReference, as winnow leaves it).
 func (e Esri) AppendJSON(buf []byte) []byte {
-	if e.Kind == EsriPoint {
+	switch e.Kind {
+	case EsriPoint:
 		buf = append(buf, `{"x":`...)
 		buf = jsonx.AppendNumber(buf, e.X)
 		buf = append(buf, `,"y":`...)
 		buf = jsonx.AppendNumber(buf, e.Y)
 		return append(buf, '}')
-	}
-	switch e.Kind {
 	case EsriMultipoint:
-		buf = append(buf, `{"points":`...)
-		buf = appendPoints(buf, e.Parts[0])
-		return append(buf, '}')
+		return append(appendPoints(append(buf, `{"points":`...), e.Parts[0]), '}')
 	case EsriPolyline:
 		buf = append(buf, `{"paths":`...)
 	default:
 		buf = append(buf, `{"rings":`...)
 	}
-	buf = append(buf, '[')
-	for i, part := range e.Parts {
-		if i > 0 {
-			buf = append(buf, ',')
-		}
-		buf = appendPoints(buf, part)
-	}
-	return append(buf, "]}"...)
+	return append(jsonx.AppendArray(buf, e.Parts, appendPoints[[]orb.Point]), '}')
 }
 
-func appendPoints(buf []byte, ps []orb.Point) []byte {
+func appendPoints[S ~[]orb.Point](buf []byte, ps S) []byte {
 	buf = append(buf, '[')
 	for i, p := range ps {
 		if i > 0 {
 			buf = append(buf, ',')
 		}
-		buf = append(buf, '[')
-		buf = jsonx.AppendNumber(buf, p[0])
-		buf = append(buf, ',')
-		buf = jsonx.AppendNumber(buf, p[1])
-		buf = append(buf, ']')
+		buf = appendPoint(buf, p)
 	}
 	return append(buf, ']')
-}
-
-// GeoJSON writes a geometry as a GeoJSON object.
-type GeoJSON struct{ G orb.Geometry }
-
-// AppendJSON implements jsonx.Appender.
-func (g GeoJSON) AppendJSON(buf []byte) []byte {
-	switch x := g.G.(type) {
-	case orb.Point:
-		buf = append(buf, `{"type":"Point","coordinates":`...)
-		buf = appendPoint(buf, x)
-	case orb.MultiPoint:
-		buf = append(buf, `{"type":"MultiPoint","coordinates":`...)
-		buf = appendPoints(buf, x)
-	case orb.LineString:
-		buf = append(buf, `{"type":"LineString","coordinates":`...)
-		buf = appendPoints(buf, x)
-	case orb.MultiLineString:
-		buf = append(buf, `{"type":"MultiLineString","coordinates":[`...)
-		for i, l := range x {
-			if i > 0 {
-				buf = append(buf, ',')
-			}
-			buf = appendPoints(buf, l)
-		}
-		buf = append(buf, ']')
-	case orb.Polygon:
-		buf = append(buf, `{"type":"Polygon","coordinates":`...)
-		buf = appendRings(buf, x)
-	case orb.MultiPolygon:
-		buf = append(buf, `{"type":"MultiPolygon","coordinates":[`...)
-		for i, p := range x {
-			if i > 0 {
-				buf = append(buf, ',')
-			}
-			buf = appendRings(buf, p)
-		}
-		buf = append(buf, ']')
-	default:
-		return append(buf, "null"...)
-	}
-	return append(buf, '}')
 }
 
 func appendPoint(buf []byte, p orb.Point) []byte {
@@ -199,12 +143,29 @@ func appendPoint(buf []byte, p orb.Point) []byte {
 }
 
 func appendRings(buf []byte, p orb.Polygon) []byte {
-	buf = append(buf, '[')
-	for i, r := range p {
-		if i > 0 {
-			buf = append(buf, ',')
-		}
-		buf = appendPoints(buf, r)
+	return jsonx.AppendArray(buf, p, appendPoints[orb.Ring])
+}
+
+// GeoJSON writes a geometry as a GeoJSON object.
+type GeoJSON struct{ G orb.Geometry }
+
+// AppendJSON implements jsonx.Appender.
+func (g GeoJSON) AppendJSON(buf []byte) []byte {
+	switch x := g.G.(type) {
+	case orb.Point:
+		buf = appendPoint(append(buf, `{"type":"Point","coordinates":`...), x)
+	case orb.MultiPoint:
+		buf = appendPoints(append(buf, `{"type":"MultiPoint","coordinates":`...), x)
+	case orb.LineString:
+		buf = appendPoints(append(buf, `{"type":"LineString","coordinates":`...), x)
+	case orb.MultiLineString:
+		buf = jsonx.AppendArray(append(buf, `{"type":"MultiLineString","coordinates":`...), x, appendPoints[orb.LineString])
+	case orb.Polygon:
+		buf = appendRings(append(buf, `{"type":"Polygon","coordinates":`...), x)
+	case orb.MultiPolygon:
+		buf = jsonx.AppendArray(append(buf, `{"type":"MultiPolygon","coordinates":`...), x, appendRings)
+	default:
+		return append(buf, "null"...)
 	}
-	return append(buf, ']')
+	return append(buf, '}')
 }

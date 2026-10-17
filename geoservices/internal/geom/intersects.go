@@ -1,6 +1,8 @@
 package geom
 
 import (
+	"math"
+
 	"github.com/paulmach/orb"
 )
 
@@ -36,27 +38,23 @@ func flatten(g orb.Geometry) []orb.Geometry {
 	case orb.Ring:
 		return []orb.Geometry{orb.Polygon{g}}
 	case orb.MultiPoint:
-		out := make([]orb.Geometry, len(g))
-		for i, p := range g {
-			out[i] = p
-		}
-		return out
+		return geometries(g)
 	case orb.MultiLineString:
-		out := make([]orb.Geometry, len(g))
-		for i, l := range g {
-			out[i] = l
-		}
-		return out
+		return geometries(g)
 	case orb.MultiPolygon:
-		out := make([]orb.Geometry, len(g))
-		for i, p := range g {
-			out[i] = p
-		}
-		return out
+		return geometries(g)
 	case orb.Bound:
 		return []orb.Geometry{g.ToPolygon()}
 	}
 	return nil
+}
+
+func geometries[S ~[]T, T orb.Geometry](s S) []orb.Geometry {
+	out := make([]orb.Geometry, len(s))
+	for i, g := range s {
+		out[i] = g
+	}
+	return out
 }
 
 func disjoint(a, b orb.Geometry) bool {
@@ -98,7 +96,7 @@ func onSegment(s, e, p orb.Point) bool {
 	if dxc*dyl-dyc*dxl != 0 {
 		return false
 	}
-	if abs(dxl) >= abs(dyl) {
+	if math.Abs(dxl) >= math.Abs(dyl) {
 		if dxl > 0 {
 			return s[0] <= p[0] && p[0] <= e[0]
 		}
@@ -108,13 +106,6 @@ func onSegment(s, e, p orb.Point) bool {
 		return s[1] <= p[1] && p[1] <= e[1]
 	}
 	return e[1] <= p[1] && p[1] <= s[1]
-}
-
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 func onLine(l orb.LineString, p orb.Point) bool {

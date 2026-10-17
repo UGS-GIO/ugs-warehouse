@@ -1157,6 +1157,7 @@ def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
     code = "from ugs_warehouse.core import config; print(config.FEATURES_PREFIX)"
     env = {k: v for k, v in os.environ.items() if k != "WAREHOUSE_FEATURES_PREFIX"}
     env["WAREHOUSE_STAC_PREFIX"] = stac
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)  # finds the package without an install
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert out.stdout.strip() == expected, out.stderr
 

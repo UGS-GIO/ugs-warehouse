@@ -12,6 +12,7 @@ import (
 type Feature struct {
 	Props []any
 	Geom  orb.Geometry
+	Known bool // the provider found from its bbox that it meets the geometry filter
 }
 
 // Collection is what the provider hands Koop.

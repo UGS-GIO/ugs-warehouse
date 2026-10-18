@@ -36,22 +36,19 @@ func TestStream(t *testing.T) {
 		return m
 	}
 	tests := []struct {
-		params           map[string]string
-		stream, envelope bool
+		params map[string]string
+		stream bool
 	}{
-		{box, true, true},
-		{with("returnIdsOnly", "true"), true, true},
-		{with("spatialRel", "esriSpatialRelWithin"), true, false},
-		{with("distance", "5"), true, false},
-		{with("geometry", `{"rings":[[[1,2],[3,2],[3,4],[1,2]]]}`), true, false},
-		{with("returnExtentOnly", "true"), false, false},
-		{with("f", "geojson"), false, false},
-		{map[string]string{"returnCountOnly": "true", "where": "acres > 1"}, false, false},
+		{box, true},
+		{with("returnIdsOnly", "true"), true},
+		{with("spatialRel", "esriSpatialRelWithin"), true},
+		{with("returnExtentOnly", "true"), false},
+		{with("f", "geojson"), false},
+		{map[string]string{"returnCountOnly": "true", "where": "acres > 1"}, false},
 	}
 	for _, tt := range tests {
-		p, _ := New(tt.params, layer, 2000)
-		if p.Stream != tt.stream || p.Envelope != tt.envelope {
-			t.Errorf("%v: stream %v envelope %v", tt.params, p.Stream, p.Envelope)
+		if p, _ := New(tt.params, layer, 2000); p.Stream != tt.stream {
+			t.Errorf("%v: stream %v", tt.params, p.Stream)
 		}
 	}
 	if p, _ := New(box, layer, 2000); len(p.Columns) != 1 {

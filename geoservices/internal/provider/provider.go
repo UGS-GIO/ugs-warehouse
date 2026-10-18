@@ -209,7 +209,7 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 		return nil, err
 	}
 	if p.Stream && source == layer {
-		return c, pr.stream(ctx, c, source, p, rows)
+		return c, pr.stream(ctx, c, source, p, rows, params)
 	}
 	limit := unlimited
 	switch {
@@ -261,30 +261,14 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 }
 
 // stream gives a count or ids every row the filter selects: the first chunk now, the rest through
-// c.Next, each holding at most MaxGeometryRows geometries. Under a plain box, a row whose bbox
-// lies inside it stands in its bbox corners for the geometry, which is then never read.
-func (pr *Provider) stream(ctx context.Context, c *query.Collection, source *pq.Layer, p *plan.Plan, rows []int64) error {
-	var inside []orb.Geometry
-	if p.Envelope && source.HasBBox && len(rows) > 0 {
-		bbox, err := source.Read(ctx, pq.BBox, rows)
-		if err != nil {
-			return err
-		}
-		inside = make([]orb.Geometry, len(rows))
-		const margin = 1e-9 // degrees: clear of the box edge, which the query reprojects on its own
-		for i := range rows {
-			var b [4]float64
-			ok := true
-			for k := range b {
-				b[k], ok = bbox.Get(k, i).(float64)
-				if !ok {
-					break
-				}
-			}
-			if ok && b[0] > p.Box[0]+margin && b[1] > p.Box[1]+margin && b[2] < p.Box[2]-margin && b[3] < p.Box[3]-margin {
-				inside[i] = orb.MultiPoint{{b[0], b[1]}, {b[2], b[3]}}
-			}
-		}
+// c.Next, each reading at most MaxGeometryRows geometries. A row its bbox settles is dropped or
+// kept without reading its geometry.
+func (pr *Provider) stream(ctx context.Context, c *query.Collection, source *pq.Layer, p *plan.Plan, rows []int64, params query.Raw) error {
+	var known []bool
+	if spatial, err := params.Spatial(); err != nil || spatial == nil || !source.HasBBox {
+		known = make([]bool, len(rows))
+	} else if rows, known, err = settle(ctx, source, spatial, rows); err != nil {
+		return err
 	}
 	next := func() ([]query.Feature, error) {
 		if len(rows) == 0 {
@@ -292,16 +276,12 @@ func (pr *Provider) stream(ctx context.Context, c *query.Collection, source *pq.
 		}
 		n, read := 0, int64(0)
 		for ; n < len(rows) && read < max(pr.MaxGeometryRows, 1); n++ {
-			if inside == nil || inside[n] == nil {
+			if !known[n] {
 				read++
 			}
 		}
-		var known []orb.Geometry
-		if inside != nil {
-			known, inside = inside[:n], inside[n:]
-		}
-		feats, err := pr.features(ctx, source, p, rows[:n], false, known)
-		rows = rows[n:]
+		feats, err := pr.features(ctx, source, p, rows[:n], false, known[:n])
+		rows, known = rows[n:], known[n:]
 		out := make([]query.Feature, len(feats))
 		for i := range feats {
 			out[i] = feats[i].f
@@ -311,6 +291,31 @@ func (pr *Provider) stream(ctx context.Context, c *query.Collection, source *pq.
 	feats, err := next()
 	c.Features, c.Next, c.Exceeded = feats, next, query.Null
 	return err
+}
+
+// settle drops the rows whose bbox misses the filter and marks those whose bbox meets it.
+func settle(ctx context.Context, source *pq.Layer, spatial *query.Spatial, rows []int64) ([]int64, []bool, error) {
+	bbox, err := source.Read(ctx, pq.BBox, rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	keep, known := rows[:0:0], []bool{}
+	for i, r := range rows {
+		var b [4]float64
+		ok := true
+		for k := range b {
+			if b[k], ok = bbox.Get(k, i).(float64); !ok {
+				break
+			}
+		}
+		if !ok {
+			continue // no geometry
+		}
+		if pass, sure := spatial.Decide(orb.Bound{Min: orb.Point{b[0], b[1]}, Max: orb.Point{b[2], b[3]}}); !sure || pass {
+			keep, known = append(keep, r), append(known, sure)
+		}
+	}
+	return keep, known, nil
 }
 
 // cell is a tolerance-sized cell and a symbol class (the feature's other attributes joined, as
@@ -327,9 +332,9 @@ type shaped struct {
 }
 
 // features reads the plan's columns (and geometry) at rows and builds the features, thinning
-// specks to one per tolerance-sized cell per symbol class when drawing. A row with a known
-// geometry uses it instead of reading its own.
-func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan, rows []int64, thin bool, known []orb.Geometry) ([]shaped, error) {
+// specks to one per tolerance-sized cell per symbol class when drawing. A known row is already
+// known to meet the geometry filter, and its geometry is not read.
+func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan, rows []int64, thin bool, known []bool) ([]shaped, error) {
 	values, err := source.Read(ctx, p.Columns, rows)
 	if err != nil {
 		return nil, err
@@ -383,14 +388,14 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 				cells[k] = true
 			}
 		}
-		out = append(out, shaped{f: query.Feature{Props: props, Geom: g}, speck: shapes[i].Speck})
+		out = append(out, shaped{f: query.Feature{Props: props, Geom: g, Known: known != nil && known[i]}, speck: shapes[i].Speck})
 	}
 	return out, nil
 }
 
 // shapes are the rows' geometries at the plan's tolerance: from the shape cache, reading and
 // simplifying WKB (in parallel) only for the rows it does not hold.
-func (pr *Provider) shapes(ctx context.Context, source *pq.Layer, p *plan.Plan, values *pq.Rows, rows []int64, known []orb.Geometry) ([]geom.Shape, []bool, error) {
+func (pr *Provider) shapes(ctx context.Context, source *pq.Layer, p *plan.Plan, values *pq.Rows, rows []int64, known []bool) ([]geom.Shape, []bool, error) {
 	shapes := make([]geom.Shape, len(rows))
 	has := make([]bool, len(rows))
 	if !p.Geometry {
@@ -400,8 +405,8 @@ func (pr *Provider) shapes(ctx context.Context, source *pq.Layer, p *plan.Plan, 
 	ids := make([]int64, len(rows))
 	var missing []int
 	for i := range rows {
-		if known != nil && known[i] != nil {
-			shapes[i], has[i] = geom.Shape{G: known[i]}, true
+		if known != nil && known[i] {
+			has[i] = true
 			continue
 		}
 		if idCol >= 0 {

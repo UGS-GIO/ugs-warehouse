@@ -160,12 +160,42 @@ func TestContains(t *testing.T) {
 		{"nil", box, nil, false},
 	}
 	for _, tt := range tests {
-		if got := Contains(tt.a, tt.b); got != tt.want {
+		if got := Prepare(tt.a).Contains(tt.b); got != tt.want {
 			t.Errorf("%s: got %v", tt.name, got)
 		}
+	}
+	if !Prepare(box).Within(orb.Polygon{{{-1, -1}, {5, -1}, {5, 5}, {-1, 5}, {-1, -1}}}) || Prepare(box).Within(holed) {
+		t.Error("within")
 	}
 	bowtie := orb.Polygon{{{0, 0}, {4, 4}, {4, 0}, {0, 4}, {0, 0}}}
 	if !isBox(box, Bounds(box)) || isBox(bowtie, Bounds(bowtie)) || isBox(holed, Bounds(holed)) {
 		t.Error("isBox")
+	}
+}
+
+func TestPlace(t *testing.T) {
+	notch := Prepare(orb.Polygon{{{0, 0}, {4, 0}, {4, 4}, {2, 1}, {0, 4}, {0, 0}}})
+	box := Prepare(orb.Polygon{{{0, 0}, {4, 0}, {4, 4}, {0, 4}, {0, 0}}})
+	b := func(x0, y0, x1, y1 float64) orb.Bound {
+		return orb.Bound{Min: orb.Point{x0, y0}, Max: orb.Point{x1, y1}}
+	}
+	tests := []struct {
+		p    *Prepared
+		b    orb.Bound
+		want Place
+	}{
+		{box, b(1, 1, 2, 2), Inside},
+		{box, b(0, 1, 2, 2), Across},
+		{box, b(5, 5, 6, 6), Outside},
+		{notch, b(0.5, 0.2, 1, 0.5), Inside},
+		{notch, b(1.8, 2.5, 2.2, 3.5), Outside},
+		{notch, b(1, 1, 3, 3), Across},
+		{notch, b(3.6, 3, 3.6, 3), Inside},
+		{notch, b(3, 3, 3, 3), Outside},
+	}
+	for i, tt := range tests {
+		if got := tt.p.Place(tt.b); got != tt.want {
+			t.Errorf("%d: got %v want %v", i, got, tt.want)
+		}
 	}
 }

@@ -151,8 +151,7 @@ type winnow struct {
 	where      where.Expr
 	ids        []any
 	idIndex    int
-	filterGeom orb.Geometry
-	spatialRel string
+	spatial    *Spatial
 	fields     []int // property indexes to output; nil means all
 	order      []orderKey
 	limit      int // resultRecordCount + 1, or 0
@@ -207,12 +206,11 @@ func newWinnow(c *Collection, p Params) (*winnow, error) {
 	}
 
 	if g, ok := p["geometry"]; ok {
-		fg, err := filterGeometry(g, p["inSR"])
-		if err != nil {
+		rel, _ := p.String("spatialRel")
+		var err error
+		if w.spatial, err = newSpatial(g, p["inSR"], rel); err != nil {
 			return nil, err
 		}
-		w.filterGeom = fg
-		w.spatialRel, _ = p.String("spatialRel")
 	}
 
 	if p.True("returnIdsOnly") {
@@ -290,25 +288,12 @@ func (w *winnow) filter() []int {
 		if w.ids != nil && !w.idMatch(ft) {
 			continue
 		}
-		if w.filterGeom != nil && !w.related(ft.Geom) {
+		if w.spatial != nil && !ft.Known && !w.spatial.Match(ft.Geom) {
 			continue
 		}
 		idx = append(idx, i)
 	}
 	return idx
-}
-
-// related is the spatialRel test of a feature's geometry against the query geometry.
-func (w *winnow) related(g orb.Geometry) bool {
-	switch w.spatialRel {
-	case "esriSpatialRelContains":
-		return geom.Contains(w.filterGeom, g)
-	case "esriSpatialRelWithin":
-		return geom.Contains(g, w.filterGeom)
-	case "esriSpatialRelEnvelopeIntersects":
-		return g != nil && geom.Bounds(w.filterGeom).Intersects(geom.Bounds(g))
-	}
-	return geom.Intersects(w.filterGeom, g)
 }
 
 // drain filters the provider's further chunks too, keeping what passes without its geometry, or

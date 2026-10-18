@@ -164,4 +164,8 @@ func TestContains(t *testing.T) {
 			t.Errorf("%s: got %v", tt.name, got)
 		}
 	}
+	bowtie := orb.Polygon{{{0, 0}, {4, 4}, {4, 0}, {0, 4}, {0, 0}}}
+	if !isBox(box, Bounds(box)) || isBox(bowtie, Bounds(bowtie)) || isBox(holed, Bounds(holed)) {
+		t.Error("isBox")
+	}
 }

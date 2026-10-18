@@ -16,8 +16,29 @@ func Contains(a, b orb.Geometry) bool {
 	if !ba.Contains(bb.Min) || !ba.Contains(bb.Max) {
 		return false
 	}
+	// b clear of a box's edges is inside it.
+	if isBox(a, ba) && bb.Min[0] > ba.Min[0] && bb.Min[1] > ba.Min[1] && bb.Max[0] < ba.Max[0] && bb.Max[1] < ba.Max[1] {
+		return true
+	}
 	ok, err := sf.Contains(toSF(a), toSF(b))
 	return err == nil && ok
+}
+
+// isBox reports a polygon that is its bounds b: one closed ring through b's four corners along
+// axis-parallel edges.
+func isBox(g orb.Geometry, b orb.Bound) bool {
+	p, ok := g.(orb.Polygon)
+	if !ok || len(p) != 1 || len(p[0]) != 5 || p[0][0] != p[0][4] || b.Min[0] == b.Max[0] || b.Min[1] == b.Max[1] {
+		return false
+	}
+	r := p[0]
+	for i := range 4 {
+		corner := (r[i][0] == b.Min[0] || r[i][0] == b.Max[0]) && (r[i][1] == b.Min[1] || r[i][1] == b.Max[1])
+		if !corner || (r[i][0] != r[i+1][0]) == (r[i][1] != r[i+1][1]) || r[i] == r[(i+2)%4] {
+			return false
+		}
+	}
+	return true
 }
 
 // toSF is g as a simplefeatures geometry.

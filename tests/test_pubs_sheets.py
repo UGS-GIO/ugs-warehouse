@@ -163,6 +163,17 @@ def test_utm_columns_are_used_only_when_the_sheet_names_a_zone_and_datum():
     assert "does not give the zone and datum" in warnings[0] and "table only" in warnings[0]
 
 
+@pytest.mark.parametrize("east, dtype, rows", [([432000, 433000, 434000], "int64", 3),
+                                               ([432000, 433000, None], "Int64", 2)])
+def test_whole_number_utm_columns_convert(east, dtype, rows):
+    frame = pd.DataFrame({"Easting_NAD83_Z12": east,
+                          "Northing_NAD83_Z12": [4430000, 4431000, 4432000]}).astype(dtype)
+
+    gdf = sheets.points(frame, [])
+
+    assert gdf is not None and len(gdf) == rows and -113 < gdf.geometry.iloc[0].x < -111
+
+
 # ---- real header names, the open-once reader, the xls reader, CSV through Arrow, size cap ----
 
 @pytest.mark.parametrize("lat, lon", [

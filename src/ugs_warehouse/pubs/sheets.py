@@ -66,7 +66,12 @@ def _tokens(name: object) -> set[str]:
 
 
 def _blank(v: object) -> bool:
-    return v is None or (isinstance(v, str) and not v.strip()) or bool(v != v)
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return True
+    try:
+        return bool(v != v)
+    except TypeError:  # pandas' NA has no truth value; it is missing by definition
+        return True
 
 
 def _number_text(s: str) -> bool:
@@ -506,15 +511,15 @@ def points(frame, warnings: list[str]):
                 warnings.append(f"column {lone[0]} looks like a coordinate but has no matching "
                                 "partner column; table only")
             return None
-    x = pd.to_numeric(frame[lon], errors="coerce")
-    y = pd.to_numeric(frame[lat], errors="coerce")
+    # Plain floats: whole-number UTM columns would otherwise refuse the converted degrees.
+    x = pd.to_numeric(frame[lon], errors="coerce").astype("float64")
+    y = pd.to_numeric(frame[lat], errors="coerce").astype("float64")
     if crs != "EPSG:4326":
         from pyproj import Transformer
 
         usable = x.notna() & y.notna()
         tx, ty = Transformer.from_crs(crs, "EPSG:4326", always_xy=True).transform(
             x[usable].to_numpy(), y[usable].to_numpy())
-        x, y = x.copy(), y.copy()
         x[usable], y[usable] = tx, ty
     where = f"{lat}/{lon}"
     if crs == "EPSG:4326":

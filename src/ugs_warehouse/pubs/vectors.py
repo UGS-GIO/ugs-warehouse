@@ -946,10 +946,29 @@ def _last_attempt(series_id: str) -> dict:
     path = f"{VECTORS_PREFIX}/{series_id}/_attempt.json"
     try:
         doc = json.loads(gcs.get_bytes(path).decode())
+    except FileNotFoundError:
+        return {}
     except Exception as e:
         print(f"  unreadable attempt record {path}, retrying: {_error(e)}", file=sys.stderr)
         return {}
     return doc if isinstance(doc, dict) else {}
+
+
+def _stable_errors(errors: list[dict], work: str) -> list[dict]:
+    """`errors` with the run's download folder replaced by `<download>`, so the same failure reads
+    the same in every run's attempt record."""
+    return [{k: v.replace(work, "<download>") if isinstance(v, str) else v for k, v in e.items()}
+            for e in errors]
+
+
+def _failure_of(record: dict) -> tuple | None:
+    """What a failed attempt failed on: its result, extractor version and errors. None for an
+    attempt that did not fail."""
+    if not str(record.get("result", "")).startswith("fail"):
+        return None
+    errors = sorted((str(e.get("label") or e.get("source")), str(e.get("error")))
+                    for e in record.get("errors") or [])
+    return record["result"], record.get("extract_version"), tuple(errors)
 
 
 def manifest_paths() -> list[str]:
@@ -1059,11 +1078,12 @@ def _fetch_all(work: str, files: list) -> tuple[list[tuple[str, str | None, str,
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
                 existing: set[str] | None = None, untiled: list[str] | None = None,
                 unpackaged: list[str] | None = None,
-                without_units: list[str] | None = None) -> str:
+                without_units: list[str] | None = None,
+                repeated: list[str] | None = None) -> str:
     """Extract and upload all vector layers and non-spatial companion tables for a given
     series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`, a
     GeoPackage that could not be built to `unpackaged`, and a unit product that could not be built
-    to `without_units`.
+    to `without_units`. A pub that fails exactly as its last attempt did is appended to `repeated`.
 
     Returns: 'ok', 'skip', 'unsupported' (only unreadable containers such as .mdb), or 'fail:*'.
     """
@@ -1101,6 +1121,13 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
               "and extract vector layers and tables")
         return "ok"
 
+    prior = _failure_of(_last_attempt(series_id)) if repeated is not None else None
+
+    def record_failure(record: dict) -> None:
+        _record_attempt(series_id, record)
+        if prior is not None and _failure_of({"extract_version": EXTRACT_VERSION, **record}) == prior:
+            repeated.append(series_id)
+
     # Recorded before the download, so a run killed mid-pub (out of memory, job timeout) still
     # counts this pub as tried and orders it after the pubs never tried.
     _record_attempt(series_id, {"result": "started"})
@@ -1131,7 +1158,11 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             print(f"{series_id}: {'UNSUPPORTED' if res == 'unsupported' else 'FAIL'} "
                   f"({n_spatial} vector layers + {n_tables} companion tables uploaded, "
                   f"{len(errors)} failed: {unreadable})", file=sys.stderr)
-            _record_attempt(series_id, {"result": res, "errors": errors})
+            record = {"result": res, "errors": _stable_errors(errors, work)}
+            if res == "unsupported":
+                _record_attempt(series_id, record)
+            else:
+                record_failure(record)
             if n_spatial + n_tables == 0:
                 return res
         elif n_spatial + n_tables == 0:
@@ -1161,8 +1192,8 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         return res
     except Exception as e:
         print(f"{series_id}: FAIL {e}", file=sys.stderr)
-        _record_attempt(series_id, {"result": f"fail:{type(e).__name__}",
-                                    "errors": [{"source": "gis zip", "error": _error(e)}]})
+        record_failure({"result": f"fail:{type(e).__name__}",
+                        "errors": _stable_errors([{"source": "gis zip", "error": _error(e)}], work)})
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -1787,6 +1818,10 @@ def main() -> int:
         sids = sids[:args.limit]
 
     failed: list[str] = []
+    # A batch run fails only on what is new: a pub failing exactly as it did last run is a known data
+    # problem, retried every run and listed, not failed again. A targeted run reports every failure.
+    known: list[str] = []
+    repeated: list[str] | None = [] if args.all else None
     untiled: list[str] = []
     unpackaged: list[str] = []
     without_units: list[str] = []
@@ -1803,11 +1838,12 @@ def main() -> int:
             break
         res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
                           untiled=untiled, unpackaged=unpackaged,
-                          without_units=without_units)
+                          without_units=without_units, repeated=repeated)
         if res != "skip":
             extracted.add(identity.Pub.parse(sid).series_id)
         if res.startswith("fail"):
-            failed.append(f"{sid} ({res})")
+            same = repeated is not None and identity.Pub.parse(sid).series_id in repeated
+            (known if same else failed).append(f"{sid} ({res})")
     if args.all:
         # A pub with errors is both healable and extracted again; the extraction's result stands,
         # as in a targeted run. Pubs the time budget skipped stay in `needs` and still heal.
@@ -1845,9 +1881,9 @@ def main() -> int:
             identified = identify.build_changed()
             print(f"Identify layers: built {identified.built or 'none'}, unchanged "
                   f"{identified.unchanged or 'none'}")
-    # Exit 1 only for work that failed in THIS run: a pub that failed to extract, a layer whose
-    # tiling failed at extraction, or a layer or pub whose self-heal failed. Work the time budget
-    # left pending is not a failure; the next run continues it.
+    # Exit 1 only for work that failed in THIS run: a pub that failed to extract (unless it failed
+    # exactly as last run), a layer whose tiling failed at extraction, or a layer or pub whose
+    # self-heal failed. Work the time budget left pending is not a failure; the next run continues it.
     if untiled:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed this run; the next "
               f"run retries them): {', '.join(untiled)}", file=sys.stderr)
@@ -1864,6 +1900,9 @@ def main() -> int:
     if identified.errors:
         print(f"{len(identified.errors)} identify failures this run (the next run retries them): "
               f"{'; '.join(identified.errors)}", file=sys.stderr)
+    if known:
+        print(f"{len(known)} publications failed the same way as their last run (data problems, "
+              f"retried every run, not counted as failures): {', '.join(known)}")
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)

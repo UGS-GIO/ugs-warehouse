@@ -612,6 +612,61 @@ def test_a_failed_download_is_recorded_as_an_attempt(monkeypatch, tmp_path):
     assert f"{vectors.VECTORS_PREFIX}/M-111/_manifest.json" not in store
 
 
+def test_a_pub_that_fails_exactly_as_last_run_is_repeated_and_a_changed_failure_is_not(monkeypatch):
+    from ugs_warehouse.pubs import harvest
+
+    store = _mem_gcs(monkeypatch)
+
+    def read(path):
+        if path not in store:
+            raise FileNotFoundError(path)
+        return store[path]
+
+    monkeypatch.setattr(vectors.gcs, "get_bytes", read)
+    monkeypatch.setattr(harvest, "data_files", lambda sid: [])
+    monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
+    message = {"text": "no such file {work}/a.shx"}
+
+    def _fail(url, dst):
+        # The run's own download folder lands in the message, as GDAL's errors do.
+        raise OSError(message["text"].format(work=os.path.dirname(dst)))
+
+    monkeypatch.setattr(harvest, "download", _fail)
+
+    def run():
+        repeated: list[str] = []
+        assert vectors.extract_one("M-112", force=True, repeated=repeated) == "fail:layers"
+        return repeated
+
+    assert run() == []                 # first failure: nothing to compare with
+    assert run() == ["M-112"]          # same failure, though the download folder differs
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-112/_attempt.json"])
+    assert "<download>" in doc["errors"][0]["error"]
+    message["text"] = "a different problem in {work}"
+    assert run() == []                 # a changed failure is new again
+
+
+def test_a_batch_run_lists_repeated_failures_and_fails_only_on_new_ones(monkeypatch, tmp_path, capsys):
+    _backfill_store(monkeypatch, tmp_path, {})
+    _batch_run(monkeypatch, ["M-50", "M-51"])
+
+    def extract(sid, repeated=None, **kw):
+        if sid == "M-50":
+            repeated.append(sid)
+        return "fail:layers"
+
+    monkeypatch.setattr(vectors, "extract_one", extract)
+    assert vectors.main() == 1
+    out, err = capsys.readouterr()
+    assert ("1 publications failed the same way as their last run (data problems, retried every "
+            "run, not counted as failures): M-50 (fail:layers)") in out
+    assert "1 of 2 publications failed: M-51 (fail:layers)" in err
+
+    monkeypatch.setattr(vectors, "extract_one",
+                        lambda sid, repeated=None, **kw: repeated.append(sid) or "fail:layers")
+    assert vectors.main() == 0
+
+
 def test_a_bundle_over_the_unzip_limit_is_reported_not_extracted(monkeypatch, tmp_path):
     import zipfile
 

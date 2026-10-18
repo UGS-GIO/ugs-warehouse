@@ -351,7 +351,8 @@ async function withParquet<T>(parquetUrl: string, fn: (conn: Conn, src: string) 
     return await fn(conn, borrowed);
   } finally {
     if (borrowed !== undefined) release(borrowed);
-    await conn.close();
+    // A failed close must not hide the error `fn` threw.
+    await conn.close().catch(() => {});
   }
 }
 

@@ -65,6 +65,15 @@ export function UnitCard({ result, pub, onClose }: { result: IdentifyResult; pub
       <div className="text-sm"><span className="font-bold">{u.code}</span>{u.name && <> {u.name}</>}</div>
       {u.age && <div className="mt-1 text-xs"><span className="text-muted-foreground">Age</span> {u.age}</div>}
       {u.description && <Description text={u.description} />}
+      {!u.description && !pub?.dmu && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Unit descriptions are not recorded in this map's GIS data. They are in the publication
+          {pub?.pdf
+            ? <>: <a href={pub.pdf.href} target="_blank" rel="noopener noreferrer"
+                className="font-medium text-primary hover:underline">{pub.pdf.label} (PDF) ↗</a></>
+            : "."}
+        </p>
+      )}
       {u.seriesId && (
         <div className="mt-2 border-t border-border pt-2 text-xs">
           From {pub?.page

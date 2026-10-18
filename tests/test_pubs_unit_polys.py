@@ -69,8 +69,8 @@ def test_columns_match_ignoring_case_and_underscores():
 
 @pytest.mark.parametrize(("columns", "expected"), [
     (["UnitSymbol", "UnitName", "Age", "Description"], ("Age", "Description")),
-    (["UNITSYMBOL", "UNITNAME", "AGE", "NOTES"], ("AGE", "NOTES")),
-    (["UnitSymbol", "Unit_Name", "Age_Strat", "Age", "NOTE"], ("Age_Strat", "NOTE")),
+    (["UNITSYMBOL", "UNITNAME", "AGE", "NOTES"], ("AGE", None)),
+    (["UnitSymbol", "Unit_Name", "Age_Strat", "Age", "NOTE"], ("Age_Strat", None)),
     (["UnitSymbol", "Descriptio", "Description"], (None, "Descriptio"))])
 def test_age_and_description_take_the_first_candidate_the_layer_has(columns, expected):
     sel, _ = unit_polys.select({"layers": [_layer("Quad_GeologicUnits", 5, columns)]})

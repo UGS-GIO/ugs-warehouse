@@ -213,13 +213,13 @@ the unit product and identify layers below.
 **Unit product and identify layers.** Publications carry their unit polygons in three attribute
 schemas: GeMS (`MapUnitPolys.MapUnit`, with name, age and description in `DescriptionOfMapUnits`),
 the 2010s template (`*GeologicUnits`: `UnitSymbol`, `UnitName`, `Age_Strat`, `Descriptio`) and the
-coverage era (`geounits`, `units`, `geology_poly(s)`: `UNITSYMBOL`, `UNITNAME`, `AGE`, `NOTES`).
+coverage era (`geounits`, `units`, `geology_poly(s)`: `UNITSYMBOL`, `UNITNAME`, `AGE`).
 `pubs/unit_polys.py` picks the unit layer from the manifest by layer name (anchored at the end, so a
 quad name in the label never excludes it) and the schema's unit-code column; landslide, owner, glacial,
 vegetation and wetland polygon layers never match. Columns match ignoring case and
 underscores, from candidate lists (code `UnitSymbol|UNITSYMBOL|Unit_Symbol|MapUnit`, name
 `UnitName|UNITNAME|Unit_Name`, age `Age_Strat|Age|AGE`, description
-`Descriptio|Description|NOTES|NOTE`). Ties go to GeMS, then the template, then the coverage era,
+`Descriptio|Description`; a `NOTES` column holds editors' remarks and is not read as one). Ties go to GeMS, then the template, then the coverage era,
 then the most rows, then the copy with fewer 10-character column names (a shapefile copy truncates
 them, a geodatabase copy does not), with a `unit_layer_ambiguous` warning when the candidates differ. The manifest records
 `unit_layer` {label, schema, code_column}. For GeMS the DMU is joined on the recorded relationship
@@ -263,9 +263,10 @@ the file by the public catalog's site.
 The viewer loads a plate or mosaic's `units` asset as an invisible fill layer (`fill-opacity: 0.001`)
 beside the raster, on the Map page and in the item preview. A click on the raster queries it and
 shows the feature with the highest `rank`, which is the one drawn on top where quads overlap. The
-card resolves `series_id` to the publication through the root index. A click on the raster's
-footprint with no unit under it reads "No unit data for this map (scan only)". A vector layer's
-feature wins over identify.
+card resolves `series_id` to the publication through the root index. A unit with no description
+and no Description of Map Units table says its descriptions are in the publication and links the
+PDF (the booklet or text asset when there is one). A click on the raster's footprint with no unit
+under it reads "No unit data for this map (scan only)". A vector layer's feature wins over identify.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
 classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships

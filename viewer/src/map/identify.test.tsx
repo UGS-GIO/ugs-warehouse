@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { toLayer } from "@/app";
 import { type Asset, rootIndexItems, type StacDoc } from "@/stac";
-import { identifyAt, identifyClick, type IdentifyTarget, pubContext, topUnit, unitsHrefOf } from "./identify";
+import { descriptionsPdfOf, identifyAt, identifyClick, type IdentifyTarget, pubContext, topUnit, unitsHrefOf } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
 import { orderedSublayerIds } from "./map-model";
 import { UnitCard } from "./unit-card";
@@ -113,6 +113,9 @@ const entries = rootIndexItems({ items: [
     links: [{ rel: "self", href: "./ugs-publications/M/M-2/M-2__DMU/M-2__DMU.json" }] },
   { id: "M-3__Poly", properties: { title: "Polys", "ugs:layer_kind": "layer", "ugs:in_publication": "M-3", "ugs:publication_title": "No table" },
     links: [{ rel: "self", href: "./ugs-publications/M/M-3/M-3__Poly/M-3__Poly.json" }] },
+  { id: "M-4", properties: { title: "Coverage-era map" }, links: [{ rel: "self", href: "./ugs-publications/M/M-4/collection.json" }],
+    assets: { publication: { href: "https://pubs.example/M-4.pdf", type: "application/pdf", title: "Publication" },
+              booklet_pdf: { href: "https://pubs.example/M-4-booklet.pdf", type: "application/pdf", title: "Booklet - PDF" } } },
 ] });
 
 describe("pubContext", () => {
@@ -129,7 +132,15 @@ describe("pubContext", () => {
   });
 
   it("falls back to the series id", () => {
-    expect(pubContext("ZZ-9", entries)).toEqual({ title: "ZZ-9", page: undefined, dmu: undefined });
+    expect(pubContext("ZZ-9", entries)).toEqual({ title: "ZZ-9", page: undefined, dmu: undefined, pdf: undefined });
+  });
+
+  it("links the booklet when the publication has one, else the publication PDF", () => {
+    expect(pubContext("M-4", entries).pdf).toEqual({ href: "https://pubs.example/M-4-booklet.pdf", label: "Booklet" });
+    expect(descriptionsPdfOf({ assets: { publication: { href: "https://pubs.example/p.pdf", type: "application/pdf", title: "Publication" },
+      plate_1_pdf: { href: "https://pubs.example/plate.pdf", type: "application/pdf", title: "Plate 1 - PDF" } } }))
+      .toEqual({ href: "https://pubs.example/p.pdf", label: "Publication" });
+    expect(descriptionsPdfOf({ assets: { zip: { href: "https://pubs.example/g.zip", type: "application/zip" } } })).toBeUndefined();
   });
 });
 
@@ -161,6 +172,20 @@ describe("UnitCard", () => {
     await renderCard(<UnitCard result={{ kind: "unit", unit }} pub={pubContext("ZZ-9", entries)} />);
     expect(screen.getByText("ZZ-9")).toBeTruthy();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("says where the descriptions are when the GIS data has none", async () => {
+    const bare = { seriesId: "M-4", code: "Qal", name: "Alluvium", rank: 1 };
+    await renderCard(<UnitCard result={{ kind: "unit", unit: bare }} pub={pubContext("M-4", entries)} />);
+    expect(screen.getByText(/not recorded in this map's GIS data/)).toBeTruthy();
+    const pdf = screen.getByRole("link", { name: "Booklet (PDF) ↗" });
+    expect(pdf.getAttribute("href")).toBe("https://pubs.example/M-4-booklet.pdf");
+    expect(pdf.getAttribute("target")).toBe("_blank");
+  });
+
+  it("leaves the note out when the unit has a description or a descriptions table", async () => {
+    await renderCard(<UnitCard result={{ kind: "unit", unit: { ...unit, description: undefined } }} pub={pubContext("M-1", entries)} />);
+    expect(screen.queryByText(/not recorded in this map's GIS data/)).toBeNull();
   });
 
   it("shows the scan-only notice with the covering publication", async () => {

@@ -6,7 +6,8 @@ Publications carry their unit polygons in one of three attribute schemas:
   `DescriptionOfMapUnits` table, joined on the manifest's relationship.
 - 2010s template: a `*GeologicUnits` layer with `UnitSymbol`, `UnitName`, `Age_Strat`, `Descriptio`.
 - Coverage era: a `geounits`, `units` or `geology_poly(s)` layer with `UNITSYMBOL`, `UNITNAME`,
-  `AGE`, `NOTES`.
+  `AGE`. Its `NOTES` column holds editors' remarks, not unit descriptions, so it is never read as
+  one; those maps' descriptions are only in the publication.
 
 `select` picks the unit layer from the manifest by layer name and unit-code column (the other
 polygon layers a bundle holds, such as landslides or owners, are never unit layers). `build`
@@ -26,7 +27,7 @@ from ..vector import sink_pmtiles, transform
 from . import geoparquet, relations
 
 # Bump to build `unit_polys` again for every pub the next vectors run visits.
-UNIT_POLYS_VERSION = 1
+UNIT_POLYS_VERSION = 2
 
 TILE_LAYER = "units"
 COLUMNS = ("series_id", "unit_code", "unit_name", "age", "description", "source_label")
@@ -62,7 +63,7 @@ class Schema:
 CODE = ("UnitSymbol", "UNITSYMBOL", "Unit_Symbol", "MapUnit")
 NAME = ("UnitName", "UNITNAME", "Unit_Name")
 AGE = ("Age_Strat", "Age", "AGE")
-DESCRIPTION = ("Descriptio", "Description", "NOTES", "NOTE")
+DESCRIPTION = ("Descriptio", "Description")
 
 # Ranked: GeMS wins a tie, then the template, then the coverage era.
 GEMS = Schema("gems", re.compile(r"mapunitpolys$"), ("MapUnit",), ("Name",), ("Age",), ("Description",))

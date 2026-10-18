@@ -99,9 +99,20 @@ type Entry = { href: string; data?: StacDoc };
 
 // An in-app catalog page: the `c` and `i` search params.
 export type PageRef = { c: string; i: string };
-export type PubContext = { title: string; page?: PageRef; dmu?: PageRef };
+export type PdfRef = { href: string; label: string };
+export type PubContext = { title: string; page?: PageRef; dmu?: PageRef; pdf?: PdfRef };
 
 const DMU_TITLE = /Description\s*Of\s*Map\s*Units/i;
+const BOOKLET_TITLE = /booklet|pamphlet|\btext\b/i;
+
+// The PDF that holds a publication's unit descriptions: its booklet or text when it has one, else
+// the publication PDF itself.
+export function descriptionsPdfOf(d: StacDoc | undefined): PdfRef | undefined {
+  const pdfs = Object.entries(d?.assets ?? {}).filter(([, a]) => a?.type === "application/pdf" && a.href);
+  const [, a] = pdfs.find(([, a]) => BOOKLET_TITLE.test(a.title ?? ""))
+    ?? pdfs.find(([k]) => k === "publication") ?? pdfs[0] ?? [];
+  return a ? { href: a.href, label: (a.title ?? "Publication").replace(/\s*-\s*PDF$/i, "") } : undefined;
+}
 
 // The catalog page of an entry, from its STAC self href.
 const pageRef = (stacHref: string): PageRef | undefined => {
@@ -110,12 +121,14 @@ const pageRef = (stacHref: string): PageRef | undefined => {
   return c && i ? { c, i } : undefined;
 };
 
-// A tile's `series_id` resolved against the root index: the publication's title and page, and its
-// Description of Map Units table Item when the index lists one. The id stands in for an unknown title.
+// A tile's `series_id` resolved against the root index: the publication's title, page and PDF, and
+// its Description of Map Units table Item when the index lists one. The id stands in for an unknown
+// title.
 export function pubContext(seriesId: string, entries: readonly Entry[]): PubContext {
   let title = seriesId;
   let page: PageRef | undefined;
   let dmu: PageRef | undefined;
+  let pdf: PdfRef | undefined;
   for (const e of entries) {
     const d = e.data;
     const props = d?.properties as Record<string, unknown> | undefined;
@@ -128,7 +141,8 @@ export function pubContext(seriesId: string, entries: readonly Entry[]): PubCont
     } else if (d?.id === seriesId && /collection\.json/.test(e.href)) {
       title = String(props?.title ?? seriesId);
       page = pageRef(e.href);
+      pdf = descriptionsPdfOf(d);
     }
   }
-  return { title, page, dmu };
+  return { title, page, dmu, pdf };
 }

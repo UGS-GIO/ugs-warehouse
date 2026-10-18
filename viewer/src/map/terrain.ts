@@ -17,10 +17,6 @@ export type TerrainMesh = {
   indices: { value: Uint32Array; size: 1 };
 };
 
-// Optional precomputed elevation grid (e.g. a hosted high-res override). Kept for future needs; the
-// default path is live 3DEP. Row-major north→south then west→east.
-export type Heightfield = { bbox: [number, number, number, number]; nx: number; ny: number; z: number[] };
-
 const merX = (lon: number) => (lon + 180) / 360; // 0..1 web-mercator (for COG texture registration)
 const merY = (lat: number) => {
   const s = Math.sin((lat * Math.PI) / 180);

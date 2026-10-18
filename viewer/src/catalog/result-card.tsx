@@ -7,11 +7,10 @@ import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
+import type { Density } from "@/discover/discovery-model";
 import { thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
-
-export type Density = "comfortable" | "compact";
 
 // A <Link> descriptor, not an <a>. The router builds the href (basepath applied), does SPA nav on a
 // plain click and leaves modifier/middle-click to the browser — all of which this used to hand-roll.

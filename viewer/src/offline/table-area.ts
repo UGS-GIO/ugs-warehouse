@@ -13,7 +13,7 @@ import { blocksOf } from "./cog-blocks";
 import { live, versionOf } from "./opfs-name";
 
 /** Bigger than a COG block: row groups are contiguous runs of MB, not scattered 64 KB tiles. */
-export const TABLE_BLOCK = 256 * 1024;
+const TABLE_BLOCK = 256 * 1024;
 
 export type TableGroup = { xmin: number; ymin: number; xmax: number; ymax: number; start: number; end: number };
 

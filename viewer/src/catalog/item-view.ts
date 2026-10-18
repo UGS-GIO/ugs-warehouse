@@ -7,8 +7,7 @@
 import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
-  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
-  type TableColumn, zarrAsset,
+  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -254,6 +253,3 @@ const ABOUT_DEFS: MetaDef[] = [
   { key: "ugs:topic_category", label: "Topic" },
 ];
 export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);
-
-// Re-export the column-schema type so item-detail's schema table can import one thing from here.
-export type { TableColumn };

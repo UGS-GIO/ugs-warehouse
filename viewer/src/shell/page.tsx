@@ -1,17 +1,3 @@
-// One page container for the whole app: data pages fill the window, prose clamps for line length.
-
-type Width = "full" | "prose";
-
-// Padding grows with the viewport instead of the content shrinking away from it.
-const PAD = "px-4 py-6 sm:px-6 lg:px-10";
-
-export function Page({ width = "full", className = "", children }: {
-  width?: Width; className?: string; children: React.ReactNode;
-}) {
-  const clamp = width === "prose" ? "mx-auto max-w-[75ch]" : "";
-  return <div className={`w-full ${PAD} ${clamp} ${className}`}>{children}</div>;
-}
-
 // auto-fill, not auto-fit: a short row keeps card width instead of stretching to fill.
 // min(320px,100%) not a bare 320px: a px floor cannot shrink, so the track outgrows any container
 // narrower than it and the whole subtree inherits that width.

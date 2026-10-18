@@ -12,8 +12,7 @@ import { BASEMAP_BASE, overviewUrl, quadsInBbox, quadUrl, redundantWithState, st
 import { isRecord } from "./guards";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
-import { useOffline } from "./store";
-import { useJobs } from "./use-offline";
+import { useJobs, useOffline } from "./store";
 
 // Past this many quads the view is a region, not a work area; the statewide save covers that.
 const MAX_QUADS = 40;

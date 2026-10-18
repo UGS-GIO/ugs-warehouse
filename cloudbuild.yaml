@@ -138,16 +138,16 @@ steps:
       - featureserv/
 
   # ArcGIS FeatureServer for Map Viewer, Experience Builder and StoryMaps: one Go binary over the
-  # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes (geoservices/README.md).
+  # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes. The code lives in
+  # UGS-GIO/geoparquet-featureserver; Dockerfile.geoservices pins the release.
   - id: build-geoservices
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:latest
-      - geoservices/
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices
+        docker build -t "$$IMG:${_TAG}" -t "$$IMG:latest" - < Dockerfile.geoservices
 
   # Ops console (Django + HTMX). Build context is the repo root (Dockerfile.admin COPYs admin/).
   - id: build-admin

@@ -139,7 +139,7 @@ func TestContains(t *testing.T) {
 		want bool
 	}{
 		{"point inside", box, orb.Point{1, 1}, true},
-		{"point on the boundary", box, orb.Point{0, 2}, true},
+		{"point on the boundary only", box, orb.Point{0, 2}, false},
 		{"point outside", box, orb.Point{5, 1}, false},
 		{"line inside", box, orb.LineString{{1, 1}, {3, 3}}, true},
 		{"line leaving", box, orb.LineString{{1, 1}, {5, 3}}, false},
@@ -150,6 +150,13 @@ func TestContains(t *testing.T) {
 		{"larger is not contained", orb.Polygon{{{1, 1}, {2, 1}, {2, 2}, {1, 1}}}, box, false},
 		{"each part inside", box, orb.MultiPolygon{{{{1, 1}, {2, 1}, {2, 2}, {1, 1}}}, {{{3, 3}, {3.5, 3}, {3.5, 3.5}, {3, 3}}}}, true},
 		{"point on a line", orb.LineString{{0, 0}, {2, 2}}, orb.Point{1, 1}, true},
+		{"line through a hole, vertex to vertex", holed, orb.LineString{{1, 1}, {2, 2}}, false},
+		{"line leaving a line between samples", orb.LineString{{0, 0}, {1, 0}, {1, 1}, {1.5, 1}, {1.5, 0}, {2.5, 0}, {2.5, 1}, {3, 1}, {3, 0}, {4, 0}},
+			orb.LineString{{0, 0}, {4, 0}}, false},
+		{"line along a line", orb.LineString{{0, 0}, {2, 0}, {4, 0}}, orb.LineString{{1, 0}, {3, 0}}, true},
+		{"holed polygon around the hole", holed, orb.Polygon{{{0.5, 0.5}, {3, 0.5}, {3, 3}, {0.5, 3}, {0.5, 0.5}},
+			{{0.9, 0.9}, {0.9, 2.1}, {2.1, 2.1}, {2.1, 0.9}, {0.9, 0.9}}}, true},
+		{"empty line", box, orb.LineString{}, false},
 		{"nil", box, nil, false},
 	}
 	for _, tt := range tests {

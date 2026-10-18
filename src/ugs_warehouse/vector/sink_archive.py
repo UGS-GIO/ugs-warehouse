@@ -37,6 +37,8 @@ TARGET_ROW_GROUP_BYTES = 32 * 1024**2
 ROW_GROUP_MIN = 512          # heavy geometry: a few hundred rows is already tens of MB
 ROW_GROUP_MAX = 122_880      # DuckDB's own default, the ceiling for very light rows
 PAGE_BYTES = 64 * 1024       # ~100 rows of polygon geometry: what a page-index reader fetches
+# 64 KiB of bbox doubles is 8192 rows, ~1 degree of a hilbert-sorted layer: too coarse to prune.
+PAGE_ROWS = 1024
 
 # A statewide map of a heavy layer cannot be drawn from the archive without reading all of it, so
 # heavy line and polygon layers also get a generalized copy. 0.0005 deg (~50 m) is finer than a
@@ -134,7 +136,8 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     (the FeatureServer and the viewer both read with hyparquet, which uses it). Only text and
     integer columns get a dictionary: on the geometry a dictionary page forces a reader back to the
     start of the column chunk, and on floats it makes the file bigger. write_batch_size lets pages
-    close near PAGE_BYTES; at the default 1024 every page is at least 1024 rows.
+    close near PAGE_BYTES; at the default 1024 every page is at least 1024 rows. PAGE_ROWS caps the
+    pages of narrow columns, the bbox columns among them, which PAGE_BYTES alone lets grow too long.
     """
     rows_per_group = _row_group_size(con, view)
     print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
@@ -155,7 +158,8 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     dictionary = [f.name for f in schema if f.name != "geom" and (
         pa.types.is_string(f.type) or pa.types.is_large_string(f.type) or pa.types.is_integer(f.type))]
     with pq.ParquetWriter(path, schema, compression="zstd", compression_level=9, write_page_index=True,
-                          data_page_size=PAGE_BYTES, write_batch_size=64, use_dictionary=dictionary) as out:
+                          data_page_size=PAGE_BYTES, max_rows_per_page=PAGE_ROWS, write_batch_size=64,
+                          use_dictionary=dictionary) as out:
         for batch in batches:   # one DuckDB batch per row group, so only one is ever in memory
             out.write_table(pa.Table.from_batches([_tagged(batch, uuids, jsons)], schema),
                             row_group_size=rows_per_group)

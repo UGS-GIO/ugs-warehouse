@@ -191,8 +191,10 @@ func FilterBox(params map[string]string) *[4]float64 {
 // relationship every feature inside it meets (Within asks the feature to hold the box instead).
 func envelope(params map[string]string) bool {
 	_, obj, _ := bboxOf(params["geometry"])
-	if _, ok := obj["xmin"]; obj != nil && !ok {
-		return false
+	if obj != nil {
+		if _, ok := obj["xmin"]; !ok {
+			return false
+		}
 	}
 	d := js.ParseNumber(params["distance"])
 	return (params["distance"] == "" || d == 0) && params["spatialRel"] != "esriSpatialRelWithin"

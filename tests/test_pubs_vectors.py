@@ -643,7 +643,7 @@ def _extract_twice(sid="M-112"):
     return runs
 
 
-def test_a_pub_that_fails_on_the_same_bad_data_is_repeated_and_a_changed_failure_is_not(monkeypatch):
+def test_a_pub_that_fails_on_the_same_bad_data_is_repeated_and_a_changed_failure_is_not(monkeypatch, capsys):
     message = {"text": "Unable to open {work}/a.shx"}
 
     def fail(work):
@@ -653,6 +653,7 @@ def test_a_pub_that_fails_on_the_same_bad_data_is_repeated_and_a_changed_failure
     store = _repeat_store(monkeypatch, fail)
 
     assert _extract_twice() == [[], ["M-112"]]   # the second matches, though the folder differs
+    assert "unreadable attempt record" not in capsys.readouterr().err   # never tried: no record, no warning
     doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-112/_attempt.json"])
     assert doc["errors"][0]["error"] == "DataSourceError: Unable to open <download>/01_file/a.shx"
     message["text"] = "Unable to open {work}/b.shx"

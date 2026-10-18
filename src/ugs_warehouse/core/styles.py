@@ -137,7 +137,7 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
             glyphs = str(entry.get("glyphs") or "").lstrip("/")
             if glyphs:
                 block["glyphs"] = f"{config.STYLES_CDN_BASE}/{glyphs}"
-            # The same render as an Esri renderer, for the FeatureServer (geoservices/README.md).
+            # The same render as an Esri renderer, for the FeatureServer (geoparquet-featureserver).
             esri = str(entry.get("esri") or "").lstrip("/")
             if esri:
                 block["esri_url"] = f"{config.STYLES_CDN_BASE}/{esri}"

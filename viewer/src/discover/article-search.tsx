@@ -8,7 +8,7 @@ import { qk } from "@/query-keys";
 import type { ArticleApi } from "./article-worker";
 import type { Hit } from "./search-index";
 
-export const CORPUS_URL = new URL(
+const CORPUS_URL = new URL(
   new URLSearchParams(location.search).get("searchCorpus")
     || "https://maps-assets.geology.utah.gov/pubs/search/corpus.json",
   location.href,

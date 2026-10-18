@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { useRef, useState } from "react";
-import { type Comment, type CommentTarget, createComment, deleteComment, listComments, listReviewers, replyToComment, setStatus, whoami } from "./comments";
+import { type Comment, type CommentTarget, createComment, listComments, listReviewers, replyToComment, useCommentActions, whoami } from "./comments";
 
 // The active "@token" immediately left of the caret (the fragment being typed), or null if none.
 // `at` is the index of the '@'; `query` is what follows it — what we filter the roster by.
@@ -84,8 +84,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
       invalidate();
     },
   });
-  const toggle = useMutation({ mutationFn: (c: Comment) => setStatus(c.id, c.status === "resolved" ? "open" : "resolved"), onSuccess: invalidate });
-  const remove = useMutation({ mutationFn: (id: number) => deleteComment(id), onSuccess: invalidate });
+  const { toggle, remove } = useCommentActions(invalidate);
   const reply = useMutation({ mutationFn: (v: { parentId: number; body: string }) => replyToComment(v.parentId, v.body), onSuccess: invalidate });
 
   // Thread the flat list: top-level comments (parent_id null) each with their replies, oldest-first.
@@ -176,6 +175,19 @@ function renderBody(body: string) {
 }
 
 // One comment (a thread root or a reply). Resolve is root-only (no onToggle for replies).
+/** Author, time and the resolved badge at the head of a comment. */
+export function CommentMeta({ c }: { c: Comment }) {
+  return (
+    <>
+    <span className="font-medium text-foreground">{c.author.split("@")[0]}</span>
+    <span className="text-xs text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
+    {c.status === "resolved" && (
+      <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-xs text-green-600 dark:text-green-400">resolved</span>
+    )}
+    </>
+  );
+}
+
 function CommentRow({ c, myEmail, onToggle, toggling, onDelete, deleting }: {
   c: Comment; myEmail?: string;
   onToggle?: () => void; toggling?: boolean; onDelete: () => void; deleting?: boolean;
@@ -183,11 +195,7 @@ function CommentRow({ c, myEmail, onToggle, toggling, onDelete, deleting }: {
   return (
     <>
       <div className="flex flex-wrap items-baseline gap-2">
-        <span className="font-medium text-foreground">{c.author.split("@")[0]}</span>
-        <span className="text-xs text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
-        {c.status === "resolved" && (
-          <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-xs text-green-600 dark:text-green-400">resolved</span>
-        )}
+        <CommentMeta c={c} />
       </div>
       <p className="mt-0.5 whitespace-pre-wrap text-foreground">{renderBody(c.body)}</p>
       <div className="mt-1 flex gap-3 text-xs">

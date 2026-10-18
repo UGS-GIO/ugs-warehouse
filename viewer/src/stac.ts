@@ -13,7 +13,7 @@ const LOC: { search: string; href: string } =
 // Default catalog is build-time overridable (VITE_CATALOG_URL) so the INTERNAL/review deploy bakes
 // the review catalog (review/stac) as its default while the public deploy keeps warehouse/stac —
 // same codebase, one env var (the two-deploy, topology-enforced design). Runtime ?catalog= still wins.
-export const DEFAULT_CATALOG =
+const DEFAULT_CATALOG =
   (import.meta as { env?: Record<string, string> }).env?.VITE_CATALOG_URL
   || "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 // ?catalog=<url> to point at sandbox / another deployment. Resolved to an absolute
@@ -172,7 +172,7 @@ export const featuresCollectionUrl = (id: string): string | undefined =>
 // ArcGIS FeatureServer (the geoservices service) for Map Viewer, Experience Builder and
 // StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a layer, one per render,
 // and a topic without renders is served as `default`.
-export const GEOSERVICES_BASE = (
+const GEOSERVICES_BASE = (
   new URLSearchParams(LOC.search).get("geoservices")
   || ((import.meta as { env?: Record<string, string> }).env?.VITE_GEOSERVICES_BASE)
   || ""
@@ -513,7 +513,7 @@ export function useIndexes(collections: { id: string; href: string }[]) {
   }));
 }
 
-export const isParquetAsset = (a: Asset): boolean =>
+const isParquetAsset = (a: Asset): boolean =>
   Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
 
 // The full-detail `data` asset first: a heavy layer also has a generalized `overview` parquet.
@@ -522,20 +522,16 @@ export const parquetAsset = (item: StacDoc): Asset | undefined => {
   return data && isParquetAsset(data) ? data : Object.values(item.assets ?? {}).find(isParquetAsset);
 };
 
-export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
-  Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"
-    || a.roles?.includes("ducklake") || a.href.includes("ducklake"))?.[1];
-
 // ---- datacube extension (zarr) ----
 // https://github.com/stac-extensions/datacube — what turns a bare store href into something
 // renderable: which dims are spatial vs. temporal, and which variables can be drawn.
-export type CubeDimension = { type?: string; axis?: string; extent?: unknown[]; values?: unknown[]; step?: unknown };
+type CubeDimension = { type?: string; axis?: string; extent?: unknown[]; values?: unknown[]; step?: unknown };
 export type CubeVariable = { dimensions?: string[]; type?: string; unit?: string; description?: string };
 
 const cubeProp = <T,>(item: StacDoc, key: string): Record<string, T> =>
   ((item.properties?.[key] ?? (item as Record<string, unknown>)[key]) as Record<string, T>) ?? {};
 
-export const cubeDimensions = (item: StacDoc): Record<string, CubeDimension> =>
+const cubeDimensions = (item: StacDoc): Record<string, CubeDimension> =>
   cubeProp<CubeDimension>(item, "cube:dimensions");
 
 // Only variables STAC calls `data` are drawable; auxiliary/coordinate entries are metadata.

@@ -31,7 +31,7 @@ export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "catalog" | "map" | "discover" | "guide" | "developers" | "preview" | "review" | "offline" | "settings";
+type View = "catalog" | "map" | "discover" | "guide" | "developers" | "preview" | "review" | "offline" | "settings";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
@@ -40,7 +40,7 @@ const VIEW_PATH = {
   review: "/review", offline: "/offline", settings: "/settings",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v in VIEW_PATH;
-export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
+type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.

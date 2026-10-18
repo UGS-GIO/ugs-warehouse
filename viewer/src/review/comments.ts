@@ -1,5 +1,7 @@
 // Review-comments client — talks to the IAP serving app's /api/comments (same-origin, the IAP session
 // cookie rides along). Review deploy only; the public deploy has no such API.
+import { useMutation } from "@tanstack/react-query";
+
 export type Comment = {
   id: number;
   item_ids: string[];
@@ -70,11 +72,18 @@ export const replyToComment = (parentId: number, body: string) =>
     body: JSON.stringify({ parent_id: parentId, body }),
   });
 
-export const setStatus = (id: number, status: string) =>
+const setStatus = (id: number, status: string) =>
   api<Comment>(`/api/comments/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
 
-export const deleteComment = (id: number) =>
+const deleteComment = (id: number) =>
   api<{ deleted: number }>(`/api/comments/${id}`, { method: "DELETE" });
+
+/** Resolve/reopen and delete, each followed by `onDone`. */
+export function useCommentActions(onDone: () => void) {
+  const toggle = useMutation({ mutationFn: (c: Comment) => setStatus(c.id, c.status === "resolved" ? "open" : "resolved"), onSuccess: onDone });
+  const remove = useMutation({ mutationFn: (id: number) => deleteComment(id), onSuccess: onDone });
+  return { toggle, remove };
+}
 
 export const whoami = () => api<{ email: string; user: string }>(`/whoami`);
 

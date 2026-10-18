@@ -11,7 +11,7 @@ import { openParquet } from "@/data/duckdb";
 
 // The public (current) GeoParquet always lives on the CDN under warehouse/geoparquet/<stem>/, whatever
 // deploy we're on. Overridable via ?currentcdn= for testing against a different host.
-export const CURRENT_CDN = new URL(
+const CURRENT_CDN = new URL(
   new URLSearchParams(location.search).get("currentcdn") || "https://maps-assets.geology.utah.gov",
   location.href,
 ).href.replace(/\/$/, "");

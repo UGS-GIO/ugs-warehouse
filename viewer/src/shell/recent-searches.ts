@@ -24,7 +24,7 @@ const isPick = (p: unknown): p is RecentPick => {
 
 const keyOf = (p: RecentPick) => (p.kind === "place" ? `place:${p.label}` : `item:${p.href}`);
 
-export function getRecent(): RecentPick[] {
+function getRecent(): RecentPick[] {
   let raw: string | null;
   try { raw = localStorage.getItem(KEY); } catch { return NONE; }
   if (raw !== cache.raw) {

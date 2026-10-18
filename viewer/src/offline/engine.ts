@@ -5,7 +5,7 @@
 // service worker answers from (sw.ts).
 import { ENGINE_WASM } from "@/data/duckdb";
 
-export const ENGINE_CACHE = "ugs-engine";
+const ENGINE_CACHE = "ugs-engine";
 /** The .wasm's size, for pricing a save before it is fetched (duckdb-wasm 1.x `eh` build). */
 export const ENGINE_BYTES = 36_000_000;
 

@@ -23,7 +23,7 @@ import type { ExportFormat } from "./export-formats";
 
 export type { ExportFormat };
 export {
-  beginExport, cancelExport, currentExports, endRun, startRun, subscribeExport, type ExportRun,
+  beginExport, cancelExport, currentExports, endRun, startRun, subscribeExport,
 } from "./export-runs";
 
 // The transform writes the geometry column as `geom` (GEOMETRY 4326); pub/external parquet may
@@ -233,8 +233,8 @@ const registered = new Map<string, string>();
 // Ref-count in-use handles so eviction never dropFiles one a live query is mid-read on. Callers
 // borrow via registerUrl and release() in finally.
 const inUse = new Map<string, number>();
-// In-flight registrations, so concurrent callers (columnTypes + queryParquet on mount) share ONE
-// registerFileURL instead of each registering (and opening, i.e. fetching) the same URL twice.
+// In-flight registrations, so concurrent callers share ONE registerFileURL instead of each
+// registering (and opening, i.e. fetching) the same URL twice.
 const pending = new Map<string, { promise: Promise<string>; waiters: number }>();
 const borrow = (src: string) => inUse.set(src, (inUse.get(src) ?? 0) + 1);
 const release = (src: string) => { const n = (inUse.get(src) ?? 0) - 1; if (n > 0) inUse.set(src, n); else inUse.delete(src); };
@@ -339,6 +339,23 @@ export function clipClause([w, s, e, n]: [number, number, number, number]): stri
   return `(bbox_xmin <= ${e} AND bbox_xmax >= ${w} AND bbox_ymin <= ${n} AND bbox_ymax >= ${s})`;
 }
 
+type Conn = Awaited<ReturnType<DB["connect"]>>;
+
+/** Run `fn` on a fresh connection with `parquetUrl` registered as `src`. The handle stays borrowed
+ *  until `fn` settles, so LRU eviction can't drop it mid-read. */
+async function withParquet<T>(parquetUrl: string, fn: (conn: Conn, src: string) => Promise<T>): Promise<T> {
+  const conn = await (await getDB()).connect();
+  let borrowed: string | undefined;
+  try {
+    borrowed = await registerUrl(parquetUrl);
+    return await fn(conn, borrowed);
+  } finally {
+    if (borrowed !== undefined) release(borrowed);
+    // A failed close must not hide the error `fn` threw.
+    await conn.close().catch(() => {});
+  }
+}
+
 /**
  * What a page query reads FROM: the file, or with a clip, a CTE holding only the clipped rows.
  *
@@ -364,11 +381,7 @@ const num = (v: unknown) => (v == null ? NaN : Number(v));
 export type GroupSpan = { xmin: number; ymin: number; xmax: number; ymax: number; start: number; end: number };
 
 export async function rowGroupSpans(parquetUrl: string): Promise<GroupSpan[]> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
+  return withParquet(parquetUrl, async (conn, src) => {
     // A column chunk starts at its dictionary page when it has one, else at its first data page.
     const start = "CASE WHEN dictionary_page_offset > 0 AND dictionary_page_offset < data_page_offset"
       + " THEN dictionary_page_offset ELSE data_page_offset END";
@@ -384,10 +397,7 @@ export async function rowGroupSpans(parquetUrl: string): Promise<GroupSpan[]> {
       // NaN, not Number(null) = 0, when the file has no bbox columns: 0 would read as an extent.
       xmin: num(r.xmin), xmax: num(r.xmax), ymin: num(r.ymin), ymax: num(r.ymax),
     }));
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
+  });
 }
 // Inner ORDER BY expression (no leading " ORDER BY "): the user's sort (if any) then feature_id
 // as a stable tiebreaker, so two rows with an equal sort key always page in the same order, and
@@ -424,24 +434,6 @@ export function filterClause(f: ColFilter): string {
   return t ? `CAST(${c} AS VARCHAR) ILIKE ${lit(`%${t}%`)}` : "";
 }
 
-/** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
- *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
- *  total for pagination, then LIMIT/OFFSET/ORDER BY/WHERE fetch one page. Geometry excluded. */
-/** Displayed column → filter kind, from the schema alone — no page needed. */
-export async function columnTypes(parquetUrl: string): Promise<Record<string, ColType>> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
-    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`);
-    return typesOf(desc.toArray());
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
-}
-
 function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): Record<string, ColType> {
   const allCols = descRows.map((r) => String(r.column_name));
   const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
@@ -455,12 +447,11 @@ function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): 
   return types;
 }
 
+/** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
+ *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
+ *  total for pagination, then LIMIT/OFFSET/ORDER BY/WHERE fetch one page. Geometry excluded. */
 export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<Page> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
+  return withParquet(parquetUrl, async (conn, src) => {
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const descRows = desc.toArray();
@@ -499,10 +490,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
       return b.every((n) => Number.isFinite(n)) ? (b as [number, number, number, number]) : null;
     });
     return { columns, types, rows, total, bboxes };
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
+  });
 }
 
 /** 0-based position of the row carrying `featureId` under the SAME sort+filter the explorer shows,
@@ -513,11 +501,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
 export async function ordinalByFeatureId(
   parquetUrl: string, featureId: number, opts: Omit<PageOpts, "limit" | "offset">,
 ): Promise<number | null> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
+  return withParquet(parquetUrl, async (conn, src) => {
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
@@ -542,10 +526,7 @@ export async function ordinalByFeatureId(
     );
     const pos = res.toArray()[0]?.pos;
     return pos == null ? null : Number(pos);
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
+  });
 }
 
 /** Read every row of a (small) 3D GeoParquet as {props, geometry} with **Z retained** — for the 3D
@@ -555,11 +536,7 @@ export async function readFeatures3D(
   parquetUrl: string,
   signal?: AbortSignal,
 ): Promise<Array<{ props: Record<string, unknown>; geometry: GeoJSON.Geometry | null }>> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
+  return withParquet(parquetUrl, async (conn, src) => {
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
@@ -577,10 +554,7 @@ export async function readFeatures3D(
       const blob = geomCol ? (o[geomCol] as Uint8Array | null | undefined) : undefined;
       return { props, geometry: blob ? wkbToGeoJSON(blob, true) : null };
     });
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
+  });
 }
 
 // DuckDB and GDAL calls are not interruptible, so cancelling suppresses the delivery instead.
@@ -745,13 +719,9 @@ export async function exportWarnings(
   clip?: [number, number, number, number],
 ): Promise<ShapefileWarnings> {
   const shp = fmt === "shp";
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;
-  try {
-    // Shared handle: a private registration would re-fetch the footer and chunks this URL has
-    // already read for the explorer or a previous pre-flight.
-    const src = borrowed = await registerUrl(parquetUrl);
+  // Shared handle: a private registration would re-fetch the footer and chunks this URL has
+  // already read for the explorer or a previous pre-flight.
+  return withParquet(parquetUrl, async (conn, src) => {
     const from = `read_parquet('${src}')`;
     const desc = (await conn.query(`DESCRIBE SELECT * FROM ${from};`)).toArray();
     const colTypes = new Map(desc.map((r) => [String(r.column_name), String(r.column_type)]));
@@ -877,8 +847,5 @@ export async function exportWarnings(
       estPeakBytes, overBrowserLimit, widthsEstimated,
       estReadBytes, rowGroups: groups.length, minClipBytes,
     };
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
+  });
 }

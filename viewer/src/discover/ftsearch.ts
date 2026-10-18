@@ -8,7 +8,7 @@ import { attach, type Conn } from "@/data/duckdb";
 
 export type PubHit = { id: string; title: string; series: string; pdf?: string; score: number };
 
-export const FTS_DB_URL = new URL(
+const FTS_DB_URL = new URL(
   new URLSearchParams(location.search).get("ftsdb")
     || "https://maps-assets.geology.utah.gov/pubs/search/pubs-fts.duckdb",
   location.href,

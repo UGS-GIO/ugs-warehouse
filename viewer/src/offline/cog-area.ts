@@ -19,7 +19,7 @@ import { blocksOf } from "./cog-blocks";
 export { assemble } from "./cog-blocks";
 
 /** Must equal the block size the COG reader requests in (geomatico's CogReader, 65536). */
-export const COG_BLOCK = 65536;
+const COG_BLOCK = 65536;
 
 import type { CogPlan } from "./block-store";
 

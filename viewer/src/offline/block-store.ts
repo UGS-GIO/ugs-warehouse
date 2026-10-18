@@ -85,13 +85,6 @@ async function readMeta(dir: FileSystemDirectoryHandle): Promise<BlockMeta | nul
   return parseBlockMeta(await readJson(dir, "meta.json"));
 }
 
-/** The areas saved of a file stored by blocks, or null when none is. */
-export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
-  const parent = await cogDir(url, false);
-  const done = parent && await finished(parent);
-  return parseBlockMeta(done?.meta)?.bboxes ?? null;
-}
-
 /** Forget a saved COG area. */
 export async function removeCogArea(url: string): Promise<void> {
   const root = await navigator.storage.getDirectory().catch(() => null);

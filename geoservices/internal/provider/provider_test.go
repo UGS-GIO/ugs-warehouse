@@ -84,7 +84,13 @@ func TestCountAndIDsUnderAFilterCoverTheLayer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n := len(c.Features); n != 300 || res.Count != nil && *res.Count != 300 {
+			var n int64
+			if res.Count != nil {
+				n = *res.Count
+			} else if res.IDs != nil {
+				n = int64(len(res.IDs.IDs))
+			}
+			if n != 300 {
 				t.Errorf("%s %s: %d rows", q, only, n)
 			}
 		}

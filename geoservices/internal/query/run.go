@@ -87,8 +87,14 @@ func Run(c *Collection, p Params) (*Response, error) {
 	}
 	idx := w.filter()
 	if c.Next != nil {
-		if idx, err = w.drain(idx); err != nil {
+		// An unpaged count needs no rows kept, only tallied.
+		tally := p.True("returnCountOnly") && w.limit == 0
+		var n int64
+		if idx, n, err = w.drain(idx, tally); err != nil {
 			return nil, err
+		}
+		if tally {
+			return &Response{JSON: jsonx.Obj{{K: "count", V: n}}, Count: &n}, nil
 		}
 	}
 
@@ -305,16 +311,21 @@ func (w *winnow) related(g orb.Geometry) bool {
 	return geom.Intersects(w.filterGeom, g)
 }
 
-// drain filters the provider's further chunks too, keeping what passes without its geometry.
-func (w *winnow) drain(idx []int) ([]int, error) {
+// drain filters the provider's further chunks too, keeping what passes without its geometry, or
+// with tally set only counting it.
+func (w *winnow) drain(idx []int, tally bool) ([]int, int64, error) {
 	var kept []Feature
+	n := int64(0)
 	for {
+		n += int64(len(idx))
 		for _, i := range idx {
-			kept = append(kept, Feature{Props: w.c.Features[i].Props})
+			if !tally {
+				kept = append(kept, Feature{Props: w.c.Features[i].Props})
+			}
 		}
 		chunk, err := w.c.Next()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if chunk == nil {
 			w.c.Features = kept
@@ -322,7 +333,7 @@ func (w *winnow) drain(idx []int) ([]int, error) {
 			for i := range idx {
 				idx[i] = i
 			}
-			return idx, nil
+			return idx, n, nil
 		}
 		w.c.Features = chunk
 		idx = w.filter()

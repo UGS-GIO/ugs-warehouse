@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, featureServerUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, rendersOf, type StacDoc } from "@/stac";
+import { assetKind, featureServerUrl, isOverview, parquetAsset, featuresCollectionUrl, FEATURES_BASE, rendersOf, type StacDoc } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
 
@@ -32,11 +32,11 @@ function CopyBtn({ text }: { text: string }) {
 /**
  * Every file the item publishes, each under its own STAC title: the GeoParquet, the PMTiles, the
  * style, the metadata, a COG. The thumbnail is left out (it is the card picture), and so are
- * related tables, which the Related section offers. A Zarr store is a prefix, so it is copied, not
- * opened.
+ * related tables, which the Related section offers, and the overviews only the FeatureServer reads.
+ * A Zarr store is a prefix, so it is copied, not opened.
  */
 export const listedAssets = (item: StacDoc) => Object.entries(item.assets ?? {})
-  .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.roles?.includes("related"));
+  .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.roles?.includes("related") && !isOverview(a));
 
 export function AssetsPanel({ item }: { item: StacDoc }) {
   const assets = listedAssets(item);

@@ -8,7 +8,7 @@ import { Link } from "@tanstack/react-router";
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
 import type { Density } from "@/discover/discovery-model";
-import { thumbnailAsset } from "@/stac";
+import { isOverview, thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
 
@@ -45,7 +45,7 @@ const metaLine = (it: ItemRef) => [collectionLabel(it.collId), typeOf(it), dateO
 // Thumbnails/images are already the card image, so they're dropped.
 const formatBadges = (it: ItemRef) =>
   Object.entries(it.data?.assets ?? {})
-    .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.type?.startsWith("image/"))
+    .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.type?.startsWith("image/") && !isOverview(a))
     .slice(0, 4)
     .map(([k, a]) => <span key={k} className={C.badge}>{a.title ?? k}</span>);
 

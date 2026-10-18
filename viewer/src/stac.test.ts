@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, catalogItemHref, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins } from "./stac";
+import { assetUsages, catalogItemHref, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, parquetAsset, rasterTilesAsset, relatedJoins } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -211,5 +211,14 @@ describe("rootIndexItems", () => {
     expect(refs).toHaveLength(1);
     expect(refs[0].href).toBe(new URL("./ugs-publications/M/M-1/M-1.json", ROOT_INDEX_URL).href);
     expect(refs[0].collId).toBe("ugs-publications/M");
+  });
+});
+
+describe("parquetAsset", () => {
+  const overview = { href: "x_overview_1.parquet", type: "application/vnd.apache.parquet", roles: ["ugs:overview"] };
+  it("reads the full data, never an overview", () => {
+    const data = { href: "x.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
+    expect(parquetAsset({ assets: { overview_1: overview, data } } as unknown as StacDoc)).toBe(data);
+    expect(parquetAsset({ assets: { overview_1: overview } } as unknown as StacDoc)).toBeUndefined();
   });
 });

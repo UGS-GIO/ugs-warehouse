@@ -169,7 +169,7 @@ export const FEATURES_BASE = (
 export const featuresCollectionUrl = (id: string): string | undefined =>
   FEATURES_BASE ? `${FEATURES_BASE}/collections/${id}` : undefined;
 
-// ArcGIS FeatureServer (the `geoservices/` service) for Map Viewer, Experience Builder and
+// ArcGIS FeatureServer (the geoservices service) for Map Viewer, Experience Builder and
 // StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a layer, one per render,
 // and a topic without renders is served as `default`.
 export const GEOSERVICES_BASE = (

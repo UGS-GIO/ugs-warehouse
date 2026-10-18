@@ -64,7 +64,7 @@ variable "ci_trigger_service_account" {
 variable "deploy_included_files" {
   type = list(string)
   default = [
-    "src/**", "service/**", "api/**", "admin/**", "featureserv/**", "geoservices/**",
+    "src/**", "service/**", "api/**", "admin/**", "featureserv/**",
     "scripts/**", "Dockerfile*", "pyproject.toml", "cloudbuild.yaml",
   ]
   description = "included_files for ugs-warehouse-deploy."

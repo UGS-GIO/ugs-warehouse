@@ -127,3 +127,9 @@ variable "firebase_custom_domain" {
   description = "Custom domain for the public discovery viewer on Firebase Hosting."
   default     = "data.geology.utah.gov"
 }
+
+variable "runtime_service_account" {
+  type        = string
+  description = "Runtime SA the public warehouse services run as (cloudbuild.yaml _RUNTIME_SA)."
+  default     = "warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
+}

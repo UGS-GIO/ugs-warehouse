@@ -354,43 +354,62 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 	}
 	out := make([]shaped, 0, len(rows))
 	cells := map[cell]bool{}
-	var class strings.Builder
+	var key []byte
 	for i := range rows {
-		props := make([]any, len(p.Columns))
-		for c := range p.Columns {
-			props[c] = values.Get(c, i)
-		}
-		var g orb.Geometry
 		if (p.Geometry || p.Present) && !has[i] {
 			continue
 		}
+		var g orb.Geometry
 		if p.Geometry {
 			g = shapes[i].G
 		}
 		if thin && shapes[i].Speck {
 			if pt, ok := firstPoint(g); ok {
-				class.Reset()
-				first := true
-				for c, name := range p.Columns {
-					if name == "feature_id" {
-						continue
-					}
-					if !first {
-						class.WriteByte('|')
-					}
-					first = false
-					class.WriteString(js.Join(props[c]))
-				}
-				k := cell{math.Floor(pt[0] / p.Tolerance), math.Floor(pt[1] / p.Tolerance), class.String()}
+				var class string
+				class, key = speckClass(values, p.Columns, i, key)
+				k := cell{math.Floor(pt[0] / p.Tolerance), math.Floor(pt[1] / p.Tolerance), class}
 				if cells[k] {
 					continue
 				}
 				cells[k] = true
 			}
 		}
+		props := make([]any, len(p.Columns))
+		for c := range p.Columns {
+			props[c] = values.Get(c, i)
+		}
 		out = append(out, shaped{f: query.Feature{Props: props, Geom: g, Known: known != nil && known[i]}, speck: shapes[i].Speck})
 	}
 	return out, nil
+}
+
+// speckClass is row i's symbol class: its attributes but feature_id, which the JavaScript provider
+// joined with "|". They compare by AppendKey unless some text holds a "|", then as joined.
+func speckClass(values *pq.Rows, cols []string, i int, buf []byte) (string, []byte) {
+	buf = append(buf[:0], 0)
+	for c, name := range cols {
+		if name == "feature_id" {
+			continue
+		}
+		var ok bool
+		if buf, ok = values.AppendKey(buf, c, i, '|'); !ok {
+			var joined strings.Builder
+			joined.WriteByte(1)
+			first := true
+			for c, name := range cols {
+				if name == "feature_id" {
+					continue
+				}
+				if !first {
+					joined.WriteByte('|')
+				}
+				first = false
+				joined.WriteString(js.Join(values.Get(c, i)))
+			}
+			return joined.String(), buf
+		}
+	}
+	return string(buf), buf
 }
 
 // shapes are the rows' geometries at the plan's tolerance: from the shape cache, reading and

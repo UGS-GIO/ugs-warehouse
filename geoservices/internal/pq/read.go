@@ -82,6 +82,12 @@ func (r *Rows) Get(c, i int) any {
 	return cell.V.Get(cell.I)
 }
 
+// AppendKey is Values.AppendKey for column c at row i.
+func (r *Rows) AppendKey(buf []byte, c, i int, sep byte) ([]byte, bool) {
+	cell := r.Cells[c][i]
+	return cell.V.AppendKey(buf, cell.I, sep)
+}
+
 // Bytes is column c's bytes at row i.
 func (r *Rows) Bytes(c, i int) []byte {
 	cell := r.Cells[c][i]

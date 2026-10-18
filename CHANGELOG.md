@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.10.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.9.0...v1.10.0) (2026-10-18)
+
+
+### Features
+
+* **infra:** manage the FeatureServer's Cloud Run settings in OpenTofu ([#596](https://github.com/UGS-GIO/ugs-warehouse/issues/596)) ([00976b5](https://github.com/UGS-GIO/ugs-warehouse/commit/00976b533ed6a8763a7f877b2f7ca9b13f78a6d6))
+
+
+### Bug Fixes
+
+* **geoservices:** exact spatial counts, distinct over every row, honoured spatialRel, faster spatial reads ([#594](https://github.com/UGS-GIO/ugs-warehouse/issues/594)) ([db0ea13](https://github.com/UGS-GIO/ugs-warehouse/commit/db0ea13727a4e04eca889843e75bcb93700af525))
+* **geoservices:** pass a style's maxScale through to the layer ([#592](https://github.com/UGS-GIO/ugs-warehouse/issues/592)) ([20b0ec6](https://github.com/UGS-GIO/ugs-warehouse/commit/20b0ec6f5fcff46ad81a33c675cb95ce0b35b3db))
+
 ## [1.9.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.8.0...v1.9.0) (2026-10-17)
 
 

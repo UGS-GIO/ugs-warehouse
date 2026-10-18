@@ -42,6 +42,7 @@ resource "google_cloud_run_v2_service" "geoservices" {
           cpu    = "2"
           memory = "4Gi"
         }
+        startup_cpu_boost = true
         # Keep CPU between requests off: scale-to-zero billing.
         cpu_idle = true
       }
@@ -55,6 +56,7 @@ resource "google_cloud_run_v2_service" "geoservices" {
       traffic,
       client,
       client_version,
+      scaling,
     ]
   }
 }

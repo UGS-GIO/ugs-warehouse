@@ -185,8 +185,8 @@ Viewer, Experience Builder and StoryMaps.
 You can copy this URL from **Links** > **ArcGIS feature layer** on the layer page in the viewer.
 
 Some layers have more than one symbology, for example wells by purpose or by box type. Each
-symbology has its own URL. Select one in the list next to **ArcGIS feature layer**, then copy the
-URL. Use `default` for the standard symbology.
+symbology has its own URL. Select one in the dropdown next to **ArcGIS feature layer**, then copy
+the URL. Use `default` for the standard symbology.
 
 Large layers draw a simplified shape when you zoom out to the full state, and the full detail when
 you zoom in. The first request after the service is idle can take a few seconds.

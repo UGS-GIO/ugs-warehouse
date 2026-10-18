@@ -401,20 +401,13 @@ func speckClass(values *pq.Rows, cols []string, i int, buf []byte) (string, []by
 		}
 		var ok bool
 		if buf, ok = values.AppendKey(buf, c, i, '|'); !ok {
-			var joined strings.Builder
-			joined.WriteByte(1)
-			first := true
+			var parts []string
 			for c, name := range cols {
-				if name == "feature_id" {
-					continue
+				if name != "feature_id" {
+					parts = append(parts, js.Join(values.Get(c, i)))
 				}
-				if !first {
-					joined.WriteByte('|')
-				}
-				first = false
-				joined.WriteString(js.Join(values.Get(c, i)))
 			}
-			return joined.String(), buf
+			return "\x01" + strings.Join(parts, "|"), buf
 		}
 	}
 	return string(buf), buf

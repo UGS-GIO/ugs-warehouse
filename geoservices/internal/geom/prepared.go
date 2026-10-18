@@ -45,7 +45,7 @@ func (p *Prepared) Place(b orb.Bound) Place {
 		return Outside
 	}
 	if p.box {
-		if b.Min[0] > p.Bound.Min[0] && b.Min[1] > p.Bound.Min[1] && b.Max[0] < p.Bound.Max[0] && b.Max[1] < p.Bound.Max[1] {
+		if p.clear(b) {
 			return Inside
 		}
 		return Across
@@ -62,6 +62,11 @@ func (p *Prepared) Place(b orb.Bound) Place {
 		}
 	}
 	return p.exact(b)
+}
+
+// clear reports b inside the bounds, off their edges.
+func (p *Prepared) clear(b orb.Bound) bool {
+	return b.Min[0] > p.Bound.Min[0] && b.Min[1] > p.Bound.Min[1] && b.Max[0] < p.Bound.Max[0] && b.Max[1] < p.Bound.Max[1]
 }
 
 // exact places b with simplefeatures.
@@ -106,7 +111,7 @@ func (p *Prepared) gridPlace(b orb.Bound) Place {
 			}
 		}
 	}
-	if first == Inside && !(b.Min[0] > p.Bound.Min[0] && b.Min[1] > p.Bound.Min[1] && b.Max[0] < p.Bound.Max[0] && b.Max[1] < p.Bound.Max[1]) {
+	if first == Inside && !p.clear(b) {
 		return Across
 	}
 	return first

@@ -138,16 +138,16 @@ steps:
       - featureserv/
 
   # ArcGIS FeatureServer for Map Viewer, Experience Builder and StoryMaps: one Go binary over the
-  # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes (geoservices/README.md).
+  # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes. The code lives in
+  # UGS-GIO/geoparquet-featureserver; Dockerfile.geoservices pins the release.
   - id: build-geoservices
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:latest
-      - geoservices/
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices
+        docker build -t "$$IMG:${_TAG}" -t "$$IMG:latest" - < Dockerfile.geoservices
 
   # Ops console (Django + HTMX). Build context is the repo root (Dockerfile.admin COPYs admin/).
   - id: build-admin
@@ -848,10 +848,9 @@ steps:
       # Bounds the cost of an unbounded fan-out on a public endpoint; past it Cloud Run returns 429.
       - --max-instances=50
 
-  # ArcGIS FeatureServer — scale-to-zero, no secrets (reads the public CDN). Cache budgets size
-  # themselves from the memory limit, so memory buys warm tiles. Past its limits it sheds with 503
-  # rather than queueing, so concurrency can be high. Route by the `prod` tag, which moves to this
-  # deploy's revision, so it goes live even when traffic was pinned to an older revision.
+  # ArcGIS FeatureServer. infra/geoservices.tf owns its settings; this step only rolls out the image.
+  # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
+  # was pinned to an older revision.
   - id: deploy-geoservices
     waitFor: [push-geoservices]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -863,14 +862,6 @@ steps:
         gcloud run deploy ${_GEOSERVICES_SERVICE} \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:${_TAG} \
           --region=${_REGION} \
-          --service-account=${_RUNTIME_SA} \
-          --allow-unauthenticated \
-          --port=8080 \
-          --cpu=2 \
-          --memory=4Gi \
-          --concurrency=200 \
-          --max-instances=10 \
-          --timeout=60 \
           --tag=prod
         gcloud run services update-traffic ${_GEOSERVICES_SERVICE} --region=${_REGION} --to-tags=prod=100
 

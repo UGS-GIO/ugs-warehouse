@@ -388,7 +388,11 @@ every pub they are given; a forced run re-extracts everything, so nothing is lef
 
 The run exits 1 only for work that failed in that run: a pub that failed to extract, a layer whose
 tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
-time budget left pending is not a failure.
+time budget left pending is not a failure. In a batch run, a pub whose layers fail on bad source
+data (no projection, an unreadable or corrupt file, a broken zip, invalid geometry, a dead link:
+`vectors.DATA_ERRORS`) with exactly the errors of its last attempt is listed as a known data
+problem instead and retried every run; its first such failure, or any change to it, still fails
+the run. A code error, server error or timeout always fails it.
 
 The pubs ingest (4Gi) heals relationships and units files before it writes the items (stopping new
 series after 600 s), so any refresh catches those up and publishes them in the same run. It does

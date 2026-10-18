@@ -716,7 +716,8 @@ steps:
       # Measured at 8Gi: M-228DM (2.3M polygons, GeoPackage included) peaked at 61%, and DS-1's two
       # ~1M-point layers at 81% while tiling, once killed outright. 12Gi puts DS-1 near 55%, /tmp
       # included. The timeout leaves room to finish a pub started at the 2700 s extraction budget.
-      # No retries: exit 1 means a pub's data failed, which a rerun repeats; the next run retries it.
+      # No retries: exit 1 means something new failed, which a rerun only repeats or hides; the
+      # next scheduled run retries it.
       - --task-timeout=7200
       - --max-retries=0
       - --cpu=4

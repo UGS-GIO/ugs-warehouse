@@ -32,8 +32,10 @@ layers that have no PMTiles, records relationships where the manifest has none o
 (`identify.py`) for the tiers whose members' unit polygons changed. In an `--all` run, extraction
 and self-heal share one time budget (`VECTORS_TIME_BUDGET_S`); what it leaves waits for the next run.
 
-A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
-layer never looks like a pub that simply has none.
+A pub with any unreadable layer returns `fail:layers`, so a missing layer never looks like a pub
+that simply has none. The batch run exits non-zero for it, unless every error is bad source data
+(`DATA_ERRORS`) and identical to the pub's last attempt: that pub is listed as a known data problem
+and retried every run.
 
     python -m ugs_warehouse.pubs.vectors M-299DM
     python -m ugs_warehouse.pubs.vectors --all
@@ -961,14 +963,23 @@ def _stable_errors(errors: list[dict], work: str) -> list[dict]:
             for e in errors]
 
 
-def _failure_of(record: dict) -> tuple | None:
-    """What a failed attempt failed on: its result, extractor version and errors. None for an
-    attempt that did not fail."""
-    if not str(record.get("result", "")).startswith("fail"):
+# Errors that mean the source itself is bad: no projection, a file GDAL cannot open or read, a
+# broken zip, invalid geometry, a link that is gone, or a container this image cannot read.
+DATA_ERRORS = ("ValueError: no CRS", "DataSourceError:", "DataLayerError:", "FeatureError:",
+               "FieldError:", "GeometryError:", "CRSError:", "BadZipFile:", "GEOSException:",
+               "HTTPError: 404", "HTTPError: 410", "unsupported format")
+
+
+def _data_failure_of(record: dict) -> tuple | None:
+    """What a failed attempt failed on (result, extractor version, errors) when every error is a
+    data problem (`DATA_ERRORS`). None otherwise: a code error, a server error or a timeout is never
+    a known data problem, however often it repeats."""
+    errors = record.get("errors") or []
+    if record.get("result") != "fail:layers" or not errors or not all(
+            str(e.get("error", "")).startswith(DATA_ERRORS) for e in errors):
         return None
-    errors = sorted((str(e.get("label") or e.get("source")), str(e.get("error")))
-                    for e in record.get("errors") or [])
-    return record["result"], record.get("extract_version"), tuple(errors)
+    pairs = sorted((str(e.get("label") or e.get("source")), str(e.get("error"))) for e in errors)
+    return record["result"], record.get("extract_version"), tuple(pairs)
 
 
 def manifest_paths() -> list[str]:
@@ -1083,7 +1094,8 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
     """Extract and upload all vector layers and non-spatial companion tables for a given
     series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`, a
     GeoPackage that could not be built to `unpackaged`, and a unit product that could not be built
-    to `without_units`. A pub that fails exactly as its last attempt did is appended to `repeated`.
+    to `without_units`. A pub whose layers fail on bad data exactly as in its last attempt is
+    appended to `repeated`.
 
     Returns: 'ok', 'skip', 'unsupported' (only unreadable containers such as .mdb), or 'fail:*'.
     """
@@ -1121,11 +1133,11 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
               "and extract vector layers and tables")
         return "ok"
 
-    prior = _failure_of(_last_attempt(series_id)) if repeated is not None else None
+    prior = _data_failure_of(_last_attempt(series_id)) if repeated is not None else None
 
     def record_failure(record: dict) -> None:
         _record_attempt(series_id, record)
-        if prior is not None and _failure_of({"extract_version": EXTRACT_VERSION, **record}) == prior:
+        if prior is not None and _data_failure_of({"extract_version": EXTRACT_VERSION, **record}) == prior:
             repeated.append(series_id)
 
     # Recorded before the download, so a run killed mid-pub (out of memory, job timeout) still
@@ -1818,8 +1830,9 @@ def main() -> int:
         sids = sids[:args.limit]
 
     failed: list[str] = []
-    # A batch run fails only on what is new: a pub failing exactly as it did last run is a known data
-    # problem, retried every run and listed, not failed again. A targeted run reports every failure.
+    # A batch run fails only on what is new: a pub whose layers fail on bad data exactly as last run
+    # is a known data problem, retried every run and listed, not failed again. A targeted run
+    # reports every failure.
     known: list[str] = []
     repeated: list[str] | None = [] if args.all else None
     untiled: list[str] = []
@@ -1881,8 +1894,8 @@ def main() -> int:
             identified = identify.build_changed()
             print(f"Identify layers: built {identified.built or 'none'}, unchanged "
                   f"{identified.unchanged or 'none'}")
-    # Exit 1 only for work that failed in THIS run: a pub that failed to extract (unless it failed
-    # exactly as last run), a layer whose tiling failed at extraction, or a layer or pub whose
+    # Exit 1 only for work that failed in THIS run: a pub that failed to extract (unless on the same
+    # bad data as last run), a layer whose tiling failed at extraction, or a layer or pub whose
     # self-heal failed. Work the time budget left pending is not a failure; the next run continues it.
     if untiled:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed this run; the next "

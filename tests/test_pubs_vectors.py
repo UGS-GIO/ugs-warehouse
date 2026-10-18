@@ -612,7 +612,12 @@ def test_a_failed_download_is_recorded_as_an_attempt(monkeypatch, tmp_path):
     assert f"{vectors.VECTORS_PREFIX}/M-111/_manifest.json" not in store
 
 
-def test_a_pub_that_fails_exactly_as_last_run_is_repeated_and_a_changed_failure_is_not(monkeypatch):
+class DataSourceError(Exception):
+    """Stands in for pyogrio's error of the same name: GDAL could not open a source file."""
+
+
+def _repeat_store(monkeypatch, fail):
+    """Fake GCS that reads back what it wrote, and one GIS attachment whose download raises `fail`."""
     from ugs_warehouse.pubs import harvest
 
     store = _mem_gcs(monkeypatch)
@@ -625,25 +630,75 @@ def test_a_pub_that_fails_exactly_as_last_run_is_repeated_and_a_changed_failure_
     monkeypatch.setattr(vectors.gcs, "get_bytes", read)
     monkeypatch.setattr(harvest, "data_files", lambda sid: [])
     monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
-    message = {"text": "no such file {work}/a.shx"}
+    monkeypatch.setattr(harvest, "download", lambda url, dst: fail(os.path.dirname(dst)))
+    return store
 
-    def _fail(url, dst):
-        # The run's own download folder lands in the message, as GDAL's errors do.
-        raise OSError(message["text"].format(work=os.path.dirname(dst)))
 
-    monkeypatch.setattr(harvest, "download", _fail)
-
-    def run():
+def _extract_twice(sid="M-112"):
+    runs = []
+    for _ in range(2):
         repeated: list[str] = []
-        assert vectors.extract_one("M-112", force=True, repeated=repeated) == "fail:layers"
-        return repeated
+        vectors.extract_one(sid, force=True, repeated=repeated)
+        runs.append(repeated)
+    return runs
 
-    assert run() == []                 # first failure: nothing to compare with
-    assert run() == ["M-112"]          # same failure, though the download folder differs
+
+def test_a_pub_that_fails_on_the_same_bad_data_is_repeated_and_a_changed_failure_is_not(monkeypatch):
+    message = {"text": "Unable to open {work}/a.shx"}
+
+    def fail(work):
+        # The run's own download folder lands in the message, as GDAL's errors do.
+        raise DataSourceError(message["text"].format(work=work))
+
+    store = _repeat_store(monkeypatch, fail)
+
+    assert _extract_twice() == [[], ["M-112"]]   # the second matches, though the folder differs
     doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-112/_attempt.json"])
-    assert "<download>" in doc["errors"][0]["error"]
-    message["text"] = "a different problem in {work}"
-    assert run() == []                 # a changed failure is new again
+    assert doc["errors"][0]["error"] == "DataSourceError: Unable to open <download>/01_file/a.shx"
+    message["text"] = "Unable to open {work}/b.shx"
+    repeated: list[str] = []
+    vectors.extract_one("M-112", force=True, repeated=repeated)
+    assert repeated == []                         # a changed failure is new again
+
+
+@pytest.mark.parametrize("error", [TypeError("Invalid value for dtype int64"),
+                                   OSError("503 Server Error: Service Unavailable"),
+                                   TimeoutError("read timed out")])
+def test_a_code_error_or_an_outage_is_never_a_known_data_problem(monkeypatch, error):
+    def fail(work):
+        raise error
+
+    _repeat_store(monkeypatch, fail)
+
+    assert _extract_twice() == [[], []]
+
+
+def test_a_new_extractor_version_makes_the_same_failure_new_again(monkeypatch):
+    def fail(work):
+        raise DataSourceError("Unable to open a.shx")
+
+    _repeat_store(monkeypatch, fail)
+    vectors.extract_one("M-113", force=True, repeated=[])
+    monkeypatch.setattr(vectors, "EXTRACT_VERSION", vectors.EXTRACT_VERSION + 1)
+    repeated: list[str] = []
+    vectors.extract_one("M-113", force=True, repeated=repeated)
+
+    assert repeated == []
+
+
+def test_a_pub_that_raises_outside_its_layers_is_never_a_known_data_problem(monkeypatch):
+    def fail(work):
+        raise DataSourceError("Unable to open a.shx")
+
+    _repeat_store(monkeypatch, fail)
+
+    def boom(*a, **kw):
+        raise DataSourceError("manifest upload failed")
+
+    monkeypatch.setattr(vectors, "_fetch_all", lambda work, files: (["x"], [], {}))
+    monkeypatch.setattr(vectors, "_extract_and_upload", boom)
+
+    assert _extract_twice("M-114") == [[], []]
 
 
 def test_a_batch_run_lists_repeated_failures_and_fails_only_on_new_ones(monkeypatch, tmp_path, capsys):
@@ -662,9 +717,28 @@ def test_a_batch_run_lists_repeated_failures_and_fails_only_on_new_ones(monkeypa
             "run, not counted as failures): M-50 (fail:layers)") in out
     assert "1 of 2 publications failed: M-51 (fail:layers)" in err
 
+    assert "M-50" not in err
+
     monkeypatch.setattr(vectors, "extract_one",
                         lambda sid, repeated=None, **kw: repeated.append(sid) or "fail:layers")
     assert vectors.main() == 0
+
+
+def test_a_targeted_run_fails_on_every_failure(monkeypatch, tmp_path):
+    import sys
+
+    _backfill_store(monkeypatch, tmp_path, {})
+    seen = []
+
+    def extract(sid, repeated=None, **kw):
+        seen.append(repeated)
+        return "fail:layers"
+
+    monkeypatch.setattr(vectors, "extract_one", extract)
+    monkeypatch.setattr(sys, "argv", ["vectors", "M-60"])
+
+    assert vectors.main() == 1
+    assert seen == [None]   # no repeat tracking, so nothing can be passed off as known
 
 
 def test_a_bundle_over_the_unzip_limit_is_reported_not_extracted(monkeypatch, tmp_path):

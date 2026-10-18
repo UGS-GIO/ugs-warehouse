@@ -273,7 +273,9 @@ func New(params map[string]string, layer Layer, maxRecords int64) (*Plan, error)
 	}
 	order, hasOrder := params["orderByFields"]
 	ordered := !hasOrder || order == "" || featureIDOrder.MatchString(order)
-	if simple && ordered && !countOnly && !isTrue(params["returnIdsOnly"]) && params["outStatistics"] == "" {
+	// Distinct values are a page of the values across every row, not of a page of rows.
+	distinct := isTrue(params["returnDistinctValues"])
+	if simple && ordered && !countOnly && !distinct && !isTrue(params["returnIdsOnly"]) && params["outStatistics"] == "" {
 		off := js.ParseNumber(params["resultOffset"])
 		if math.IsNaN(off) || off < 0 {
 			off = 0

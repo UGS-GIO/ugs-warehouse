@@ -67,6 +67,16 @@ func TestCountAndPage(t *testing.T) {
 	}
 }
 
+func TestDistinctCoversTheLayer(t *testing.T) {
+	pr := fixture(t)
+	pr.MaxRecords = 10
+	c := load(t, pr, "qfaults", query.Raw{"where": "1=1", "outFields": "faultname", "returnDistinctValues": "true",
+		"returnGeometry": "false", "resultRecordCount": "3"})
+	if len(c.Features) != 300 || c.FiltersApplied["limit"] {
+		t.Errorf("distinct read %d rows, want all 300 unpaged", len(c.Features))
+	}
+}
+
 func TestStatisticsCoverTheLayer(t *testing.T) {
 	pr := fixture(t)
 	pr.MaxGeometryRows = 10

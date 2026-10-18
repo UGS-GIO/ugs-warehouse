@@ -38,6 +38,7 @@ func TestPaging(t *testing.T) {
 		{map[string]string{"orderByFields": "acres DESC"}, nil},
 		{map[string]string{"where": "acres > 1"}, nil},
 		{map[string]string{"outStatistics": "[]"}, nil},
+		{map[string]string{"returnDistinctValues": "true", "resultRecordCount": "5"}, nil},
 	}
 	for _, tt := range tests {
 		p, _ := New(tt.params, layer, 2000)

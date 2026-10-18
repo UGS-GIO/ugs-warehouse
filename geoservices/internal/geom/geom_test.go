@@ -3,6 +3,7 @@ package geom
 import (
 	"encoding/binary"
 	"math"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/paulmach/orb"
@@ -197,5 +198,20 @@ func TestPlace(t *testing.T) {
 		if got := tt.p.Place(tt.b); got != tt.want {
 			t.Errorf("%d: got %v want %v", i, got, tt.want)
 		}
+	}
+}
+
+func TestPlaceGrid(t *testing.T) {
+	notch := Prepare(orb.Polygon{{{0, 0}, {4, 0}, {4, 4}, {2, 1}, {0, 4}, {0, 0}}})
+	r := rand.New(rand.NewPCG(1, 2))
+	for range 3 * gridAfter {
+		x, y, s := r.Float64()*5-0.5, r.Float64()*5-0.5, r.Float64()*0.2
+		b := orb.Bound{Min: orb.Point{x, y}, Max: orb.Point{x + s, y + s}}
+		if got, want := notch.Place(b), notch.exact(b); got != want && got != Across {
+			t.Fatalf("%v: grid %v, exact %v", b, got, want)
+		}
+	}
+	if notch.grid == nil {
+		t.Error("no grid")
 	}
 }

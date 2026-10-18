@@ -12,7 +12,13 @@ type Prepared struct {
 	Bound orb.Bound
 	box   bool
 	sf    *sf.PreparedGeometry
+	calls int     // exact placements so far
+	grid  []Place // gridN² cells over Bound, each placed exactly, once calls pass gridAfter
 }
+
+// Past gridAfter exact placements, a gridN² grid of placed cells answers most of the rest: a bbox
+// whose cells all lie inside (or all outside) does too. It costs gridN² placements, once.
+const gridN, gridAfter = 64, 4096
 
 // Prepare readies g; the exact tests answer false if simplefeatures cannot take it.
 func Prepare(g orb.Geometry) *Prepared {
@@ -47,6 +53,19 @@ func (p *Prepared) Place(b orb.Bound) Place {
 	if p.sf == nil {
 		return Across
 	}
+	if p.calls++; p.calls == gridAfter {
+		p.fillGrid()
+	}
+	if p.grid != nil {
+		if at := p.gridPlace(b); at != Across {
+			return at
+		}
+	}
+	return p.exact(b)
+}
+
+// exact places b with simplefeatures.
+func (p *Prepared) exact(b orb.Bound) Place {
 	bb := toSF(boundShape(b))
 	if in, err := p.sf.ContainsProperly(bb); err == nil && in {
 		return Inside
@@ -55,6 +74,42 @@ func (p *Prepared) Place(b orb.Bound) Place {
 		return Outside
 	}
 	return Across
+}
+
+func (p *Prepared) fillGrid() {
+	w, h := (p.Bound.Max[0]-p.Bound.Min[0])/gridN, (p.Bound.Max[1]-p.Bound.Min[1])/gridN
+	if !(w > 0 && h > 0) {
+		return
+	}
+	p.grid = make([]Place, gridN*gridN)
+	for j := range gridN {
+		for i := range gridN {
+			x, y := p.Bound.Min[0]+float64(i)*w, p.Bound.Min[1]+float64(j)*h
+			p.grid[j*gridN+i] = p.exact(orb.Bound{Min: orb.Point{x, y}, Max: orb.Point{x + w, y + h}})
+		}
+	}
+}
+
+// gridPlace is b's place when every cell it touches agrees, one cell of slack around it so
+// rounding at a cell edge cannot leave a cell out.
+func (p *Prepared) gridPlace(b orb.Bound) Place {
+	cellOf := func(v, lo, hi float64) int {
+		return min(max(int((v-lo)/(hi-lo)*gridN), 0), gridN-1)
+	}
+	i0, i1 := cellOf(b.Min[0], p.Bound.Min[0], p.Bound.Max[0]), cellOf(b.Max[0], p.Bound.Min[0], p.Bound.Max[0])
+	j0, j1 := cellOf(b.Min[1], p.Bound.Min[1], p.Bound.Max[1]), cellOf(b.Max[1], p.Bound.Min[1], p.Bound.Max[1])
+	first := p.grid[max(j0-1, 0)*gridN+max(i0-1, 0)]
+	for j := max(j0-1, 0); j <= min(j1+1, gridN-1); j++ {
+		for i := max(i0-1, 0); i <= min(i1+1, gridN-1); i++ {
+			if p.grid[j*gridN+i] != first {
+				return Across
+			}
+		}
+	}
+	if first == Inside && !(b.Min[0] > p.Bound.Min[0] && b.Min[1] > p.Bound.Min[1] && b.Max[0] < p.Bound.Max[0] && b.Max[1] < p.Bound.Max[1]) {
+		return Across
+	}
+	return first
 }
 
 // Contains is the DE-9IM contains of the geometry over g.

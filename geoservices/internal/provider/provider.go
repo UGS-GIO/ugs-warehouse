@@ -208,6 +208,9 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	if err != nil {
 		return nil, err
 	}
+	if p.Stream && source == layer {
+		return c, pr.stream(ctx, c, source, p, rows)
+	}
 	limit := unlimited
 	switch {
 	case p.Page != nil:
@@ -221,7 +224,7 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	} else if int64(len(rows)) > limit {
 		readRows = rows[:limit+1]
 	}
-	feats, err := pr.features(ctx, source, p, readRows, thin)
+	feats, err := pr.features(ctx, source, p, readRows, thin, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +260,59 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	return c, nil
 }
 
+// stream gives a count or ids every row the filter selects: the first chunk now, the rest through
+// c.Next, each holding at most MaxGeometryRows geometries. Under a plain box, a row whose bbox
+// lies inside it stands in its bbox corners for the geometry, which is then never read.
+func (pr *Provider) stream(ctx context.Context, c *query.Collection, source *pq.Layer, p *plan.Plan, rows []int64) error {
+	var inside []orb.Geometry
+	if p.Envelope && source.HasBBox && len(rows) > 0 {
+		bbox, err := source.Read(ctx, pq.BBox, rows)
+		if err != nil {
+			return err
+		}
+		inside = make([]orb.Geometry, len(rows))
+		const margin = 1e-9 // degrees: clear of the box edge, which the query reprojects on its own
+		for i := range rows {
+			var b [4]float64
+			ok := true
+			for k := range b {
+				b[k], ok = bbox.Get(k, i).(float64)
+				if !ok {
+					break
+				}
+			}
+			if ok && b[0] > p.Box[0]+margin && b[1] > p.Box[1]+margin && b[2] < p.Box[2]-margin && b[3] < p.Box[3]-margin {
+				inside[i] = orb.MultiPoint{{b[0], b[1]}, {b[2], b[3]}}
+			}
+		}
+	}
+	next := func() ([]query.Feature, error) {
+		if len(rows) == 0 {
+			return nil, nil
+		}
+		n, read := 0, int64(0)
+		for ; n < len(rows) && read < max(pr.MaxGeometryRows, 1); n++ {
+			if inside == nil || inside[n] == nil {
+				read++
+			}
+		}
+		var known []orb.Geometry
+		if inside != nil {
+			known, inside = inside[:n], inside[n:]
+		}
+		feats, err := pr.features(ctx, source, p, rows[:n], false, known)
+		rows = rows[n:]
+		out := make([]query.Feature, len(feats))
+		for i := range feats {
+			out[i] = feats[i].f
+		}
+		return out, err
+	}
+	feats, err := next()
+	c.Features, c.Next, c.Exceeded = feats, next, query.Null
+	return err
+}
+
 // cell is a tolerance-sized cell and a symbol class (the feature's other attributes joined, as
 // the JavaScript provider keys it): one speck is kept per cell.
 type cell struct {
@@ -271,13 +327,14 @@ type shaped struct {
 }
 
 // features reads the plan's columns (and geometry) at rows and builds the features, thinning
-// specks to one per tolerance-sized cell per symbol class when drawing.
-func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan, rows []int64, thin bool) ([]shaped, error) {
+// specks to one per tolerance-sized cell per symbol class when drawing. A row with a known
+// geometry uses it instead of reading its own.
+func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan, rows []int64, thin bool, known []orb.Geometry) ([]shaped, error) {
 	values, err := source.Read(ctx, p.Columns, rows)
 	if err != nil {
 		return nil, err
 	}
-	shapes, has, err := pr.shapes(ctx, source, p, values, rows)
+	shapes, has, err := pr.shapes(ctx, source, p, values, rows, known)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +390,7 @@ func (pr *Provider) features(ctx context.Context, source *pq.Layer, p *plan.Plan
 
 // shapes are the rows' geometries at the plan's tolerance: from the shape cache, reading and
 // simplifying WKB (in parallel) only for the rows it does not hold.
-func (pr *Provider) shapes(ctx context.Context, source *pq.Layer, p *plan.Plan, values *pq.Rows, rows []int64) ([]geom.Shape, []bool, error) {
+func (pr *Provider) shapes(ctx context.Context, source *pq.Layer, p *plan.Plan, values *pq.Rows, rows []int64, known []orb.Geometry) ([]geom.Shape, []bool, error) {
 	shapes := make([]geom.Shape, len(rows))
 	has := make([]bool, len(rows))
 	if !p.Geometry {
@@ -343,6 +400,10 @@ func (pr *Provider) shapes(ctx context.Context, source *pq.Layer, p *plan.Plan, 
 	ids := make([]int64, len(rows))
 	var missing []int
 	for i := range rows {
+		if known != nil && known[i] != nil {
+			shapes[i], has[i] = geom.Shape{G: known[i]}, true
+			continue
+		}
 		if idCol >= 0 {
 			ids[i], _ = values.Get(idCol, i).(int64)
 		}

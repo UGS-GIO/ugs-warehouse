@@ -23,6 +23,8 @@ type Collection struct {
 	FiltersApplied map[string]bool // offset, limit, resultRecordCount, orderByFields
 	Count          *int64          // precalculated: the file's row count
 	Extent         jsonx.Obj       // precalculated: the file's extent
+	// Next, when set, returns the features after these a chunk at a time, nil after the last.
+	Next func() ([]Feature, error)
 }
 
 func (c *Collection) propIndex(name string) int {

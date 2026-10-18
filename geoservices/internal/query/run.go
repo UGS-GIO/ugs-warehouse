@@ -86,6 +86,11 @@ func Run(c *Collection, p Params) (*Response, error) {
 		return nil, err
 	}
 	idx := w.filter()
+	if c.Next != nil {
+		if idx, err = w.drain(idx); err != nil {
+			return nil, err
+		}
+	}
 
 	if stats := w.aggregates; stats != nil {
 		return w.statistics(idx)
@@ -298,6 +303,30 @@ func (w *winnow) related(g orb.Geometry) bool {
 		return g != nil && geom.Bounds(w.filterGeom).Intersects(geom.Bounds(g))
 	}
 	return geom.Intersects(w.filterGeom, g)
+}
+
+// drain filters the provider's further chunks too, keeping what passes without its geometry.
+func (w *winnow) drain(idx []int) ([]int, error) {
+	var kept []Feature
+	for {
+		for _, i := range idx {
+			kept = append(kept, Feature{Props: w.c.Features[i].Props})
+		}
+		chunk, err := w.c.Next()
+		if err != nil {
+			return nil, err
+		}
+		if chunk == nil {
+			w.c.Features = kept
+			idx = make([]int, len(kept))
+			for i := range idx {
+				idx[i] = i
+			}
+			return idx, nil
+		}
+		w.c.Features = chunk
+		idx = w.filter()
+	}
 }
 
 func (w *winnow) idMatch(ft *Feature) bool {

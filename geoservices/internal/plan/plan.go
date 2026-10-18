@@ -45,6 +45,12 @@ type Plan struct {
 	Tolerance      float64 // degrees; 0 means none
 	Page           *pq.Page
 	FiltersApplied map[string]bool
+
+	// Stream: a count or ids under a spatial filter, which cover every row however many geometries
+	// that reads, so the provider hands them over a chunk at a time and the query keeps no geometry.
+	Stream bool
+	// Envelope: the spatial filter is Box itself, and a row whose bbox lies inside it passes.
+	Envelope bool
 }
 
 // Error is a request the plan rejects.
@@ -181,6 +187,17 @@ func FilterBox(params map[string]string) *[4]float64 {
 	return &[4]float64{box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad}
 }
 
+// envelope reports a filter that is a plain box: an envelope, not grown by distance, under a
+// relationship every feature inside it meets (Within asks the feature to hold the box instead).
+func envelope(params map[string]string) bool {
+	_, obj, _ := bboxOf(params["geometry"])
+	if _, ok := obj["xmin"]; obj != nil && !ok {
+		return false
+	}
+	d := js.ParseNumber(params["distance"])
+	return (params["distance"] == "" || d == 0) && params["spatialRel"] != "esriSpatialRelWithin"
+}
+
 var trivial = regexp.MustCompile(`(?i)^\s*(1\s*=\s*1)?\s*$`)
 var featureIDOrder = regexp.MustCompile(`(?i)^\s*feature_id(\s+asc)?\s*$`)
 var nonWord = regexp.MustCompile(`[^\w]`)
@@ -216,10 +233,18 @@ func New(params map[string]string, layer Layer, maxRecords int64) (*Plan, error)
 		return p, nil
 	}
 
+	idsOnly, stats := isTrue(params["returnIdsOnly"]), params["outStatistics"] != ""
+	p.Stream = p.Box != nil && (countOnly || idsOnly) && !extentOnly && !stats &&
+		!isTrue(params["returnDistinctValues"]) && params["f"] != "geojson"
+	p.Envelope = p.Stream && envelope(params)
+
 	// Columns: the requested outFields plus anything where, ordering or statistics read.
 	outFields, ok := params["outFields"]
 	if !ok {
 		outFields = "*"
+	}
+	if p.Stream {
+		outFields = "" // a count or ids needs only feature_id
 	}
 	var out []string
 	for _, f := range strings.Split(outFields, ",") {
@@ -246,8 +271,7 @@ func New(params map[string]string, layer Layer, maxRecords int64) (*Plan, error)
 	// Anything under a spatial filter still needs geometry, for the exact test; the response
 	// leaves it out when returnGeometry is false. Statistics return none, so without a filter they
 	// read none and cover the whole layer, not the rows a geometry read is capped at.
-	stats := params["outStatistics"] != ""
-	if isTrue(params["returnIdsOnly"]) || countOnly || stats || params["returnGeometry"] == "false" {
+	if idsOnly || countOnly || stats || params["returnGeometry"] == "false" {
 		p.Geometry = p.Box != nil
 	} else {
 		p.Geometry = true
@@ -275,7 +299,7 @@ func New(params map[string]string, layer Layer, maxRecords int64) (*Plan, error)
 	ordered := !hasOrder || order == "" || featureIDOrder.MatchString(order)
 	// Distinct values are a page of the values across every row, not of a page of rows.
 	distinct := isTrue(params["returnDistinctValues"])
-	if simple && ordered && !countOnly && !distinct && !isTrue(params["returnIdsOnly"]) && params["outStatistics"] == "" {
+	if simple && ordered && !countOnly && !distinct && !idsOnly && !stats {
 		off := js.ParseNumber(params["resultOffset"])
 		if math.IsNaN(off) || off < 0 {
 			off = 0

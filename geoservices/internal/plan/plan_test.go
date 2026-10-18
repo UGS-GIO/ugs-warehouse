@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"maps"
 	"math"
 	"testing"
 
@@ -24,6 +25,37 @@ func TestKinds(t *testing.T) {
 		if err != nil || p.Kind != tt.kind {
 			t.Errorf("%v: kind %v err %v", tt.params, p.Kind, err)
 		}
+	}
+}
+
+func TestStream(t *testing.T) {
+	box := map[string]string{"geometry": "1,2,3,4", "returnCountOnly": "true"}
+	with := func(k, v string) map[string]string {
+		m := maps.Clone(box)
+		m[k] = v
+		return m
+	}
+	tests := []struct {
+		params           map[string]string
+		stream, envelope bool
+	}{
+		{box, true, true},
+		{with("returnIdsOnly", "true"), true, true},
+		{with("spatialRel", "esriSpatialRelWithin"), true, false},
+		{with("distance", "5"), true, false},
+		{with("geometry", `{"rings":[[[1,2],[3,2],[3,4],[1,2]]]}`), true, false},
+		{with("returnExtentOnly", "true"), false, false},
+		{with("f", "geojson"), false, false},
+		{map[string]string{"returnCountOnly": "true", "where": "acres > 1"}, false, false},
+	}
+	for _, tt := range tests {
+		p, _ := New(tt.params, layer, 2000)
+		if p.Stream != tt.stream || p.Envelope != tt.envelope {
+			t.Errorf("%v: stream %v envelope %v", tt.params, p.Stream, p.Envelope)
+		}
+	}
+	if p, _ := New(box, layer, 2000); len(p.Columns) != 1 {
+		t.Errorf("a count reads %v", p.Columns)
 	}
 }
 

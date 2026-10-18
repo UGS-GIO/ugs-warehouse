@@ -127,9 +127,10 @@ def archive_path(stem: str) -> str:
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}.parquet"
 
 
-def overview_path(stem: str) -> str:
-    """The topic's generalized GeoParquet, for small-scale display (vector/sink_archive.py)."""
-    return f"{ARCHIVE_PREFIX}/{stem}/{stem}_overview.parquet"
+def overview_path(stem: str, level: int) -> str:
+    """The topic's GeoParquet generalized for one drawing scale, level 1 the finest
+    (vector/sink_archive.py)."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}_overview_{level}.parquet"
 
 
 def topic_thumbnail_path(stem: str) -> str:

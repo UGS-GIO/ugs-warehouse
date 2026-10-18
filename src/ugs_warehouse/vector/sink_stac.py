@@ -188,13 +188,16 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
-    # Generalized copy of a heavy layer, for small-scale display (vector/sink_archive.py). Presence-
-    # driven like the thumbnail: the archive sink writes or removes it with the archive.
-    overview_path = config.overview_path(topic.stem)
-    if gcs.exists(overview_path):
-        assets["overview"] = {"href": config.public_url(overview_path), "type": PARQUET_MIME,
-                              "roles": ["data"], "title": "GeoParquet generalized for small-scale display",
-                              "ugs:simplify_tolerance": sink_archive.OVERVIEW_TOLERANCE}
+    # Generalized copies of a heavy layer, one per drawing scale (vector/sink_archive.py). Presence-
+    # driven like the thumbnail: the archive sink writes or removes them with the archive. Their own
+    # role keeps them out of downloads; the FeatureServer finds them by key prefix and tolerance.
+    for n, tolerance in enumerate(sink_archive.OVERVIEW_TOLERANCES, 1):
+        path = config.overview_path(topic.stem, n)
+        if gcs.exists(path):
+            assets[f"overview_{n}"] = {
+                "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:overview"],
+                "title": f"GeoParquet generalized to {tolerance} deg for small-scale display",
+                "ugs:simplify_tolerance": tolerance}
     # DuckLake table locator — REVIEW CATALOG ONLY. It's a gs:// table id, not a fetchable object:
     # a browser can't open gs://, the bucket is private (IAM-gated), and even with the parquet
     # chunks a consumer can't materialise the table without the private DuckLake catalog DSN. So the

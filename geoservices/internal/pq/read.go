@@ -132,6 +132,13 @@ func (l *Layer) Read(ctx context.Context, cols []string, rows []int64) (*Rows, e
 		leaves[c] = lf
 	}
 
+	groups := make([]int, len(spans))
+	for s, sp := range spans {
+		groups[s] = sp.g
+	}
+	if err := l.prefetch(ctx, leaves, groups); err != nil {
+		return nil, err
+	}
 	// Every (column, row group) in parallel: cached runs, or fetch and decode.
 	runs := make([][][]run, len(cols))
 	g, gctx := errgroup.WithContext(ctx)

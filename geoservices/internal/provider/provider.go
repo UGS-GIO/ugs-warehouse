@@ -80,12 +80,12 @@ func (pr *Provider) Version(ctx context.Context, topicID, render string) (string
 	if err != nil {
 		return "", err
 	}
-	layer, err := pr.Open(ctx, item.Data())
-	if err != nil {
-		return "", err
-	}
-	d, err := pr.Catalog.Drawing(ctx, item, render)
-	if err != nil {
+	var layer *pq.Layer
+	var d *catalog.Drawing
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) { layer, err = pr.Open(gctx, item.Data()); return })
+	g.Go(func() (err error) { d, err = pr.Catalog.Drawing(gctx, item, render); return })
+	if err := g.Wait(); err != nil {
 		return "", err
 	}
 	return item.Version + "|" + layer.ID() + "|" + d.Version, nil
@@ -204,7 +204,15 @@ func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, rende
 	if thin {
 		sel.Page = &pq.Page{Offset: p.Page.Offset, Limit: readLimit}
 	}
+	// While a bbox scan runs, fetch the columns the read after it needs.
+	warmed := make(chan struct{})
+	if p.Box != nil && len(p.IDs) == 0 {
+		go func() { source.Warm(ctx, p.Columns, p.Box); close(warmed) }()
+	} else {
+		close(warmed)
+	}
 	rows, err := source.Select(ctx, sel)
+	<-warmed
 	if err != nil {
 		return nil, err
 	}

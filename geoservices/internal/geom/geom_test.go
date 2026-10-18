@@ -129,3 +129,32 @@ func FuzzFromWKB(f *testing.F) {
 		FromWKB(b, tol)
 	})
 }
+
+func TestContains(t *testing.T) {
+	box := orb.Polygon{{{0, 0}, {4, 0}, {4, 4}, {0, 4}, {0, 0}}}
+	holed := orb.Polygon{box[0], {{1, 1}, {1, 2}, {2, 2}, {2, 1}, {1, 1}}}
+	tests := []struct {
+		name string
+		a, b orb.Geometry
+		want bool
+	}{
+		{"point inside", box, orb.Point{1, 1}, true},
+		{"point on the boundary", box, orb.Point{0, 2}, true},
+		{"point outside", box, orb.Point{5, 1}, false},
+		{"line inside", box, orb.LineString{{1, 1}, {3, 3}}, true},
+		{"line leaving", box, orb.LineString{{1, 1}, {5, 3}}, false},
+		{"polygon inside", box, orb.Polygon{{{1, 1}, {2, 1}, {2, 2}, {1, 1}}}, true},
+		{"polygon sharing an edge", box, orb.Polygon{{{0, 0}, {4, 0}, {2, 2}, {0, 0}}}, true},
+		{"polygon over a hole", holed, orb.Polygon{{{0.5, 0.5}, {3, 0.5}, {3, 3}, {0.5, 0.5}}}, false},
+		{"line across a notch", orb.Polygon{{{0, 0}, {4, 0}, {4, 4}, {2, 1}, {0, 4}, {0, 0}}}, orb.LineString{{1, 3}, {3, 3}}, false},
+		{"larger is not contained", orb.Polygon{{{1, 1}, {2, 1}, {2, 2}, {1, 1}}}, box, false},
+		{"each part inside", box, orb.MultiPolygon{{{{1, 1}, {2, 1}, {2, 2}, {1, 1}}}, {{{3, 3}, {3.5, 3}, {3.5, 3.5}, {3, 3}}}}, true},
+		{"point on a line", orb.LineString{{0, 0}, {2, 2}}, orb.Point{1, 1}, true},
+		{"nil", box, nil, false},
+	}
+	for _, tt := range tests {
+		if got := Contains(tt.a, tt.b); got != tt.want {
+			t.Errorf("%s: got %v", tt.name, got)
+		}
+	}
+}

@@ -20,6 +20,7 @@ to convert the data.
 | **COG** | Cloud Optimized GeoTIFF of a scanned geologic map | QGIS, ArcGIS Pro, rasterio | `…/geolmap/cogs/{series}.cog.tif` |
 | **STAC** | The catalog of all layers and maps (JSON) | Finding data, scripts | `…/warehouse/stac/catalog.json` |
 | **OGC API Features** | A feature service that you can query | ArcGIS Pro, QGIS, ArcGIS Online | `…/collections/{id}/items` on the service below |
+| **ArcGIS feature layer** | The layer with UGS symbology, popups and a table | ArcGIS Online, ArcGIS Pro, Experience Builder, StoryMaps | `…/ugs/rest/services/{id}/{symbology}/FeatureServer/0` on the service below |
 
 All file URLs start with **`https://maps-assets.geology.utah.gov`**.
 
@@ -31,6 +32,9 @@ filter on these columns, tools such as DuckDB read only the rows in your area.
 > The OGC API Features service is at
 > `https://ugs-warehouse-features-xedvkyurga-uc.a.run.app`. The collection id is the same as the
 > layer id.
+>
+> The ArcGIS feature layers are at
+> `https://ugs-warehouse-geoservices-534590904912.us-central1.run.app`.
 
 ---
 
@@ -180,6 +184,13 @@ Viewer, Experience Builder and StoryMaps.
 
 You can copy this URL from **Links** > **ArcGIS feature layer** on the layer page in the viewer.
 
+Some layers have more than one symbology, for example wells by purpose or by box type. Each
+symbology has its own URL. Select one in the dropdown next to **ArcGIS feature layer**, then copy
+the URL. Use `default` for the standard symbology.
+
+Large layers draw a simplified shape when you zoom out to the full state, and the full detail when
+you zoom in. The first request after the service is idle can take a few seconds.
+
 ### Geologic map rasters (COG)
 
 1. Click **Add Data** > **Data From Path**.
@@ -194,9 +205,9 @@ Pro's STAC connection needs a STAC API that you can search. This catalog is a se
 so Pro cannot connect to it. Find a layer or map in the [web viewer](#find-a-layer), then add its
 URL as shown above.
 
-> Pro support for Parquet files depends on the Pro version. For vector layers, use the OGC API
-> connection. To get a file geodatabase, export from the [web viewer](#web-viewer) or use
-> [ogr2ogr](#gdal-and-ogr2ogr).
+> Pro support for Parquet files depends on the Pro version. For vector layers, use the
+> [feature layer](#feature-layers-with-ugs-symbology) or the OGC API connection. To get a file
+> geodatabase, export from the [web viewer](#web-viewer) or use [ogr2ogr](#gdal-and-ogr2ogr).
 
 ---
 

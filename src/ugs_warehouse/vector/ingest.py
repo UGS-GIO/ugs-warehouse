@@ -57,17 +57,8 @@ def _related(topic: Topic) -> dict:
         return {}
 
 
-def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
-               skip_unchanged: bool = True) -> int:
-    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
-    transformed table → catalog refresh.
-
-    `skip_unchanged` (default on; `--force` turns it off) compares a content fingerprint of the
-    transformed view to the published STAC item; an exact match (with the PMTiles still present)
-    skips the DATA sinks — the expensive tippecanoe rebuild would produce byte-identical output.
-    The STAC sink still runs, since curated registry metadata changes without the data changing
-    (#54); rewriting an item + ISO sidecar is two small object writes, never what the skip
-    protected."""
+def _preflight(topic: Topic, con, view: str, dry_run: bool) -> int | None:
+    """Geometry check + dry-run report: an rc to stop with, or None to run the sinks."""
     count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
     non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
     if non_null == 0:
@@ -89,6 +80,65 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         print(f"  columns              : {cols}")
         print(f"  sample row (no geom) : {sample}")
         return 0
+    return None
+
+
+def _data_sinks(topic: Topic, con, view: str, written: dict[str, gcs.FileMeta]) -> list:
+    """The fingerprint-gated sinks as (name, fn); each records its write in `written`."""
+    def _archive() -> None:
+        written["data"] = sink_archive.write(topic, con, view)
+
+    def _overview() -> None:
+        # Only beside an archive written this run; when the archive failed the old pair stays.
+        if "data" in written and (overview := sink_archive.write_overview(topic, con, view)):
+            written["overview"] = overview
+
+    def _pmtiles() -> None:
+        written["pmtiles"] = sink_pmtiles.build(topic, con, view)
+
+    return [
+        ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
+        ("archive",  _archive),
+        ("overview", _overview),
+        ("pmtiles",  _pmtiles),
+    ]
+
+
+def _run_sink(topic: Topic, name: str, fn) -> bool:
+    """Run one sink in isolation: a failure is logged and reported, never raised."""
+    try:
+        fn()
+        return True
+    except Exception:  # per-sink isolation: log + continue, never silent fail
+        log.exception("[%s] sink %s FAILED", topic.fqn, name,
+                      extra={"topic": topic.fqn, "sink": name})
+        return False
+
+
+def _refresh_catalog(topic: Topic) -> bool:
+    """Rebuild the catalog; False (logged) on failure."""
+    try:
+        stac.refresh_catalog()
+        return True
+    except Exception:
+        log.exception("[%s] stac catalog refresh FAILED", topic.fqn, extra={"topic": topic.fqn})
+        return False
+
+
+def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
+               skip_unchanged: bool = True) -> int:
+    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
+    transformed table → catalog refresh.
+
+    `skip_unchanged` (default on; `--force` turns it off) compares a content fingerprint of the
+    transformed view to the published STAC item; an exact match (with the PMTiles still present)
+    skips the DATA sinks — the expensive tippecanoe rebuild would produce byte-identical output.
+    The STAC sink still runs, since curated registry metadata changes without the data changing
+    (#54); rewriting an item + ISO sidecar is two small object writes, never what the skip
+    protected."""
+    rc = _preflight(topic, con, view, dry_run)
+    if rc is not None:
+        return rc
 
     # Content fingerprint — always computed (so every run records a fresh `ugs:content_hash`, even a
     # forced one, keeping future skips correct). Only acted on when --skip-unchanged is set.
@@ -101,7 +151,6 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
 
     meta = backend.read_metadata(topic)
     related_info = _related(topic)
-    rc = 0
     # The data sinks are what the fingerprint gates. The STAC sink always runs: its inputs include
     # curated registry metadata, which an editor changes without touching a single row (#54). It
     # reads the view and derives its asset hrefs from config, so it does not depend on the skipped
@@ -112,24 +161,13 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     # the published item already says.
     written: dict[str, gcs.FileMeta] = {}
 
-    def _archive() -> None:
-        written["data"] = sink_archive.write(topic, con, view)
-
-    def _overview() -> None:
-        # Only beside an archive written this run; when the archive failed the old pair stays.
-        if "data" in written and (overview := sink_archive.write_overview(topic, con, view)):
-            written["overview"] = overview
-
-    def _pmtiles() -> None:
-        written["pmtiles"] = sink_pmtiles.build(topic, con, view)
-
-    data_sinks = [] if unchanged else [
-        ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
-        ("archive",  _archive),
-        ("overview", _overview),
-        ("pmtiles",  _pmtiles),
-    ]
+    data_sinks = [] if unchanged else _data_sinks(topic, con, view, written)
+    rc = 0
     data_failed = False
+    for name, fn in data_sinks:
+        if not _run_sink(topic, name, fn):
+            rc = 1
+            data_failed = True
 
     def _stac() -> None:
         # The hash vouches for the published artifacts, so it only moves when they were all
@@ -139,21 +177,10 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         sink_stac.write(topic, con, view, metadata=meta, related=related_info,
                         content_hash=content_hash, file_meta=written)
 
-    for name, fn in [*data_sinks, ("stac", _stac)]:
-        try:
-            fn()
-        except Exception:  # per-sink isolation: log + continue, never silent fail
-            log.exception("[%s] sink %s FAILED", topic.fqn, name,
-                          extra={"topic": topic.fqn, "sink": name})
-            rc = 1
-            data_failed = data_failed or name != "stac"
-
-    if not skip_refresh:
-        try:
-            stac.refresh_catalog()
-        except Exception:
-            log.exception("[%s] stac catalog refresh FAILED", topic.fqn, extra={"topic": topic.fqn})
-            rc = 1
+    if not _run_sink(topic, "stac", _stac):
+        rc = 1
+    if not skip_refresh and not _refresh_catalog(topic):
+        rc = 1
     return rc
 
 

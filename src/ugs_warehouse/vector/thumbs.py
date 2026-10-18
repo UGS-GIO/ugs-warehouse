@@ -180,6 +180,103 @@ def _render_webp(style: dict, bbox: list[float], out: str) -> None:
             browser.close()
 
 
+def _bbox_valid(bbox: list) -> bool:
+    """Whether the first four bbox values are WGS84 lon/lat."""
+    west, south, east, north = bbox[0], bbox[1], bbox[2], bbox[3]
+    return not (west is None or south is None or east is None or north is None or
+                not (-180.1 <= west <= 180.1) or not (-90.1 <= south <= 90.1) or
+                not (-180.1 <= east <= 180.1) or not (-90.1 <= north <= 90.1))
+
+
+def _ensure_stac_thumbnail(stac_path: str, stem: str, flat_stray: str,
+                           meta: gcs.FileMeta | None = None) -> tuple[str, dict | None]:
+    """Stamp onto the item as it is in GCS, and only if it is still that version when the write
+    lands (a GCS generation match). A write in between (an ingest, a restyle, an ops-console
+    edit) is re-read and merged instead of reverted, and a topic retired meanwhile is never
+    re-created. Returns ("stamped" | "current" | "gone", the thumbnail asset)."""
+    for _ in range(STAMP_ATTEMPTS):
+        try:
+            raw, version = gcs.get_bytes_versioned(stac_path)
+        except FileNotFoundError:
+            return "gone", None
+        fresh = json.loads(raw)
+        assets = fresh.setdefault("assets", {})
+        current = assets.get("thumbnail") or {}
+        # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
+        # the file:size/file:checksum an earlier render stamped instead of dropping them. Same
+        # asset the ingest stamps (vector/sink_stac.py).
+        want = {**current, **stac.topic_thumbnail_asset(stem), **stac.file_fields(meta)}
+        if current == want:
+            state = "current"
+            break
+        assets["thumbnail"] = want
+        try:
+            # Same headers as stac.write_item, so a stamped item doesn't flip to no-cache.
+            gcs.put_bytes_if_unchanged(json.dumps(fresh, indent=2).encode("utf-8"), stac_path, version,
+                                       content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
+        except gcs.Changed:
+            hlog(f"{stac_path} changed between read and write; re-reading", step="stac", level="NOTICE")
+            continue
+        hlog(f"stamped thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
+        state = "stamped"
+        break
+    else:
+        raise RuntimeError(f"{stac_path} kept changing under the stamp; gave up after {STAMP_ATTEMPTS} tries")
+    # Self-heal: drop the flat stray an earlier build mis-wrote. `stem` is a topic id, never
+    # "collection", so collection.json (same level) is never touched.
+    if gcs.exists(flat_stray):
+        gcs.delete(flat_stray)
+        hlog(f"removed stray flat item {flat_stray}", step="stac")
+    return state, want
+
+
+def _sidecar_matches(img_obj: str, sha_obj: str, want_hash: str) -> bool:
+    """Whether the image exists and its sidecar holds `want_hash`."""
+    if not (gcs.exists(img_obj) and gcs.exists(sha_obj)):
+        return False
+    try:
+        return gcs.get_bytes(sha_obj).decode().strip() == want_hash
+    except Exception as e:  # noqa: BLE001 — logged; the re-render rewrites the sidecar
+        hlog(f"unreadable sidecar {sha_obj}: {_first_line(e)}; re-rendering", step="resolve",
+             level="WARNING")
+        return False
+
+
+def _render_checked(style: dict, bbox: list[float], out: str) -> str | None:
+    """Render to `out` and check it is a WebP image. Returns the failure code, or None on success."""
+    try:
+        _render_webp(style, bbox, out)
+    except Exception as e:  # noqa: BLE001
+        hlog(f"FAIL render: {str(e).strip()[-300:]}", step="render", level="ERROR", category="attention", err=True)
+        return "fail:render"
+    if not os.path.exists(out) or os.path.getsize(out) == 0:
+        hlog("FAIL no image produced", step="render", level="ERROR", category="attention", err=True)
+        return "fail:noimage"
+    with open(out, "rb") as f:
+        head = f.read(12)
+    # Uploaded and stamped as image/webp, so the bytes have to be WebP.
+    if head[:4] != b"RIFF" or head[8:12] != b"WEBP":
+        hlog(f"FAIL render is not WebP (starts {head!r})", step="render", level="ERROR",
+             category="attention", err=True)
+        return "fail:format"
+    return None
+
+
+def _drop_retired(img_obj: str, sha_obj: str) -> str:
+    """Delete the thumbnail of a topic retired mid-render. Returns the outcome code."""
+    # Retired while rendering: take back the thumbnail so nothing outlives the topic (a later
+    # topic with this id would otherwise be bound to it). gcs.delete swallows errors, so check.
+    gcs.delete(img_obj)
+    gcs.delete(sha_obj)
+    if gcs.exists(img_obj) or gcs.exists(sha_obj):
+        hlog(f"FAIL topic retired mid-render but its thumbnail would not delete: {img_obj}",
+             step="result", level="ERROR", category="attention", err=True)
+        return "fail:cleanup"
+    hlog("topic retired mid-render; dropped its new thumbnail", step="result",
+         level="NOTICE", category="expected")
+    return "skip:gone"
+
+
 def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dict | None]:
     """Render + stamp one topic whose item lives at `stac_path`. Returns (outcome code, the thumbnail
     asset now on the item: set for "ok" and "skip:exists", else None). main() checks every returned
@@ -194,10 +291,7 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
 
     # A bbox outside lon/lat means the item's CRS is mislabeled (the viewer would misplace it too),
     # and it would throw in MapLibre's fitBounds.
-    west, south, east, north = bbox[0], bbox[1], bbox[2], bbox[3]
-    if (west is None or south is None or east is None or north is None or
-            not (-180.1 <= west <= 180.1) or not (-90.1 <= south <= 90.1) or
-            not (-180.1 <= east <= 180.1) or not (-90.1 <= north <= 90.1)):
+    if not _bbox_valid(bbox):
         hlog(f"FAIL invalid bbox coordinates: {bbox} (must be WGS84 lon/lat)",
              step="resolve", level="ERROR", category="attention", err=True)
         return "fail:invalid_bbox", None
@@ -215,57 +309,10 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
     # at the path it derived from ugs:dbt_schema.
     flat_stray = f"{config.STAC_PREFIX}/{_collection_path(item)}/{stem}.json"
 
-    def ensure_stac_thumbnail(meta: gcs.FileMeta | None = None) -> tuple[str, dict | None]:
-        """Stamp onto the item as it is in GCS, and only if it is still that version when the write
-        lands (a GCS generation match). A write in between (an ingest, a restyle, an ops-console
-        edit) is re-read and merged instead of reverted, and a topic retired meanwhile is never
-        re-created. Returns ("stamped" | "current" | "gone", the thumbnail asset)."""
-        for _ in range(STAMP_ATTEMPTS):
-            try:
-                raw, version = gcs.get_bytes_versioned(stac_path)
-            except FileNotFoundError:
-                return "gone", None
-            fresh = json.loads(raw)
-            assets = fresh.setdefault("assets", {})
-            current = assets.get("thumbnail") or {}
-            # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
-            # the file:size/file:checksum an earlier render stamped instead of dropping them. Same
-            # asset the ingest stamps (vector/sink_stac.py).
-            want = {**current, **stac.topic_thumbnail_asset(stem), **stac.file_fields(meta)}
-            if current == want:
-                state = "current"
-                break
-            assets["thumbnail"] = want
-            try:
-                # Same headers as stac.write_item, so a stamped item doesn't flip to no-cache.
-                gcs.put_bytes_if_unchanged(json.dumps(fresh, indent=2).encode("utf-8"), stac_path, version,
-                                           content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
-            except gcs.Changed:
-                hlog(f"{stac_path} changed between read and write; re-reading", step="stac", level="NOTICE")
-                continue
-            hlog(f"stamped thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
-            state = "stamped"
-            break
-        else:
-            raise RuntimeError(f"{stac_path} kept changing under the stamp; gave up after {STAMP_ATTEMPTS} tries")
-        # Self-heal: drop the flat stray an earlier build mis-wrote. `stem` is a topic id, never
-        # "collection", so collection.json (same level) is never touched.
-        if gcs.exists(flat_stray):
-            gcs.delete(flat_stray)
-            hlog(f"removed stray flat item {flat_stray}", step="stac")
-        return state, want
-
-    up_to_date = False
-    if not force and gcs.exists(img_obj) and gcs.exists(sha_obj):
-        try:
-            up_to_date = gcs.get_bytes(sha_obj).decode().strip() == want_hash
-        except Exception as e:  # noqa: BLE001 — logged; the re-render rewrites the sidecar
-            hlog(f"unreadable sidecar {sha_obj}: {_first_line(e)}; re-rendering", step="resolve",
-                 level="WARNING")
-    if up_to_date:
+    if not force and _sidecar_matches(img_obj, sha_obj, want_hash):
         hlog("thumbnail up to date (data and style unchanged)", step="resolve", level="NOTICE",
              category="expected")
-        state, asset = ensure_stac_thumbnail()
+        state, asset = _ensure_stac_thumbnail(stac_path, stem, flat_stray)
         return ("skip:gone", None) if state == "gone" else ("skip:exists", asset)
 
     style = _compose_style(layers, pmtiles, _source_layer(item))
@@ -273,39 +320,17 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
     try:
         out = os.path.join(work, "thumb.webp")
         hlog(f"rendering ({'sand' if layers is SAND_LAYERS else 'styled'})", step="render")
-        try:
-            _render_webp(style, bbox, out)
-        except Exception as e:  # noqa: BLE001
-            hlog(f"FAIL render: {str(e).strip()[-300:]}", step="render", level="ERROR", category="attention", err=True)
-            return "fail:render", None
-        if not os.path.exists(out) or os.path.getsize(out) == 0:
-            hlog("FAIL no image produced", step="render", level="ERROR", category="attention", err=True)
-            return "fail:noimage", None
-        with open(out, "rb") as f:
-            head = f.read(12)
-        # Uploaded and stamped as image/webp, so the bytes have to be WebP.
-        if head[:4] != b"RIFF" or head[8:12] != b"WEBP":
-            hlog(f"FAIL render is not WebP (starts {head!r})", step="render", level="ERROR",
-                 category="attention", err=True)
-            return "fail:format", None
+        failed = _render_checked(style, bbox, out)
+        if failed:
+            return failed, None
 
         # Drop the old sidecar first: a --force re-render of an unchanged style would otherwise leave
         # one that still matches, and a stamp that then failed would never be redone.
         gcs.delete(sha_obj)
         meta = gcs.upload(out, img_obj, content_type=config.WEBP_MIME, cache_control=gcs.CACHE_MUTABLE)
-        state, asset = ensure_stac_thumbnail(meta)
+        state, asset = _ensure_stac_thumbnail(stac_path, stem, flat_stray, meta)
         if state == "gone":
-            # Retired while rendering: take back the thumbnail so nothing outlives the topic (a later
-            # topic with this id would otherwise be bound to it). gcs.delete swallows errors, so check.
-            gcs.delete(img_obj)
-            gcs.delete(sha_obj)
-            if gcs.exists(img_obj) or gcs.exists(sha_obj):
-                hlog(f"FAIL topic retired mid-render but its thumbnail would not delete: {img_obj}",
-                     step="result", level="ERROR", category="attention", err=True)
-                return "fail:cleanup", None
-            hlog("topic retired mid-render; dropped its new thumbnail", step="result",
-                 level="NOTICE", category="expected")
-            return "skip:gone", None
+            return _drop_retired(img_obj, sha_obj), None
         # The sidecar marks this render as done, so it goes last: a stamp that failed renders again.
         gcs.put_bytes(want_hash.encode(), sha_obj, content_type="text/plain", cache_control=gcs.CACHE_MUTABLE)
         hlog(f"OK thumbnail → {img_obj}", step="result", category="ok")
@@ -411,6 +436,56 @@ def _still_lags(thumbnails: dict[str, dict]) -> bool:
     return _index_lags(thumbnails) and _index_lags({p: a for p, a in thumbnails.items() if gcs.exists(p)})
 
 
+def _select_paths(item_ids: list[str], limit: int | None) -> list[str]:
+    """The item paths this run renders: the named topics (or all), this task's shard, then `limit`."""
+    paths = _topic_item_paths()
+    if item_ids:
+        want = {s.strip() for s in item_ids}
+        paths = [p for p in paths if _stem(p) in want]
+    hlog(f"{len(paths)} topics", step="startup")
+
+    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
+    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    if n > 1:
+        paths = paths[i::n]
+        hlog(f"shard {i + 1}/{n}: {len(paths)} topics", step="shard")
+    if limit:
+        paths = paths[:limit]
+    return paths
+
+
+def _refresh_index(thumbnails: dict[str, dict]) -> bool:
+    """Refresh the catalog until the rollup index carries these thumbnails. Returns whether it does."""
+    refresh_error = None  # set when the latest attempt's refresh raised
+    for attempt in range(1, REFRESH_ATTEMPTS + 1):
+        if attempt > 1:
+            # Jittered so runs started by one burst don't retry in step, then re-checked first: a
+            # refresh another run made meanwhile already carries this run's stamp.
+            time.sleep(random.uniform(0.5, 1.5) * REFRESH_RETRY_SECONDS)
+            if not _still_lags(thumbnails):
+                return True
+        try:
+            stac.refresh_catalog()
+            refresh_error = None
+        except Exception as e:  # noqa: BLE001 — concurrent refreshes can rate-limit each other
+            refresh_error = _error_tail(e)
+            hlog(f"catalog refresh {attempt}/{REFRESH_ATTEMPTS} failed: {refresh_error}",
+                 step="catalog", level="WARNING")
+            continue
+        # Checked again so a mismatch a refresh can't fix alerts instead of repeating every night.
+        if not _still_lags(thumbnails):
+            return True
+        hlog(f"items.json still behind after refresh {attempt}/{REFRESH_ATTEMPTS} "
+             "(another run's refresh landing last?)", step="catalog", level="WARNING")
+    # A last attempt whose refresh raised was never checked; another run's may have landed.
+    if refresh_error and not _still_lags(thumbnails):
+        return True
+    why = f"; the last refresh raised {refresh_error}" if refresh_error else ""
+    hlog(f"FAIL items.json still missing thumbnails after {REFRESH_ATTEMPTS} refresh attempts{why}",
+         step="catalog", level="ERROR", category="attention", err=True)
+    return False
+
+
 def main() -> int:
     import argparse
 
@@ -422,19 +497,7 @@ def main() -> int:
                     help="Re-render even if the data and style are unchanged")
     args = ap.parse_args()
 
-    paths = _topic_item_paths()
-    if args.item_id:
-        want = {s.strip() for s in args.item_id}
-        paths = [p for p in paths if _stem(p) in want]
-    hlog(f"{len(paths)} topics", step="startup")
-
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
-    if n > 1:
-        paths = paths[i::n]
-        hlog(f"shard {i + 1}/{n}: {len(paths)} topics", step="shard")
-    if args.limit:
-        paths = paths[:args.limit]
+    paths = _select_paths(args.item_id, args.limit)
 
     tally = {"ok": 0, "expected": 0, "attention": 0}
     rc = 0
@@ -455,37 +518,7 @@ def main() -> int:
         # Only refresh_catalog rebuilds items.json; without this a new thumbnail waits for whichever
         # ingest happens to run next.
         hlog("items.json is missing thumbnails; refreshing the catalog", step="catalog")
-        caught_up = False
-        refresh_error = None  # set when the latest attempt's refresh raised
-        for attempt in range(1, REFRESH_ATTEMPTS + 1):
-            if attempt > 1:
-                # Jittered so runs started by one burst don't retry in step, then re-checked first: a
-                # refresh another run made meanwhile already carries this run's stamp.
-                time.sleep(random.uniform(0.5, 1.5) * REFRESH_RETRY_SECONDS)
-                if not _still_lags(thumbnails):
-                    caught_up = True
-                    break
-            try:
-                stac.refresh_catalog()
-                refresh_error = None
-            except Exception as e:  # noqa: BLE001 — concurrent refreshes can rate-limit each other
-                refresh_error = _error_tail(e)
-                hlog(f"catalog refresh {attempt}/{REFRESH_ATTEMPTS} failed: {refresh_error}",
-                     step="catalog", level="WARNING")
-                continue
-            # Checked again so a mismatch a refresh can't fix alerts instead of repeating every night.
-            if not _still_lags(thumbnails):
-                caught_up = True
-                break
-            hlog(f"items.json still behind after refresh {attempt}/{REFRESH_ATTEMPTS} "
-                 "(another run's refresh landing last?)", step="catalog", level="WARNING")
-        # A last attempt whose refresh raised was never checked; another run's may have landed.
-        if not caught_up and refresh_error and not _still_lags(thumbnails):
-            caught_up = True
-        if not caught_up:
-            why = f"; the last refresh raised {refresh_error}" if refresh_error else ""
-            hlog(f"FAIL items.json still missing thumbnails after {REFRESH_ATTEMPTS} refresh attempts{why}",
-                 step="catalog", level="ERROR", category="attention", err=True)
+        if not _refresh_index(thumbnails):
             tally["attention"] += 1
             rc = 1
     hlog(f"thumbnails complete: {tally['ok']} ok, {tally['expected']} skipped, "

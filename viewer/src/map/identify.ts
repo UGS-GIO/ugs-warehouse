@@ -1,7 +1,7 @@
 // Identify under a geologic-map raster: the raster Item's `units` PMTiles loads as an invisible
 // vector layer, and a click on the raster queries it. Framework-free so the click logic is tested
 // without a map.
-import { catalogItemHref, pubOfEntry, type StacDoc } from "@/stac";
+import { assetKind, catalogItemHref, pubOfEntry, type StacDoc } from "@/stac";
 import { identifyIds, validBbox } from "./map-model";
 
 // The tile layer inside every `units` PMTiles.
@@ -108,10 +108,10 @@ const BOOKLET_TITLE = /booklet|pamphlet|\btext\b/i;
 // The PDF that holds a publication's unit descriptions: its booklet or text when it has one, else
 // the publication PDF itself.
 export function descriptionsPdfOf(d: StacDoc | undefined): PdfRef | undefined {
-  const pdfs = Object.entries(d?.assets ?? {}).filter(([, a]) => a?.type === "application/pdf" && a.href);
+  const pdfs = Object.entries(d?.assets ?? {}).filter(([, a]) => a?.href && assetKind(a) === "pdf");
   const [, a] = pdfs.find(([, a]) => BOOKLET_TITLE.test(a.title ?? ""))
     ?? pdfs.find(([k]) => k === "publication") ?? pdfs[0] ?? [];
-  return a ? { href: a.href, label: (a.title ?? "Publication").replace(/\s*-\s*PDF$/i, "") } : undefined;
+  return a ? { href: a.href, label: (a.title ?? "").replace(/\s*-\s*PDF$/i, "").trim() || "Publication" } : undefined;
 }
 
 // The catalog page of an entry, from its STAC self href.

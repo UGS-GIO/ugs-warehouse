@@ -141,6 +141,8 @@ describe("pubContext", () => {
       plate_1_pdf: { href: "https://pubs.example/plate.pdf", type: "application/pdf", title: "Plate 1 - PDF" } } }))
       .toEqual({ href: "https://pubs.example/p.pdf", label: "Publication" });
     expect(descriptionsPdfOf({ assets: { zip: { href: "https://pubs.example/g.zip", type: "application/zip" } } })).toBeUndefined();
+    expect(descriptionsPdfOf({ assets: { file: { href: "https://pubs.example/untyped.pdf", title: "" } } }))
+      .toEqual({ href: "https://pubs.example/untyped.pdf", label: "Publication" });
   });
 });
 
@@ -177,7 +179,7 @@ describe("UnitCard", () => {
   it("says where the descriptions are when the GIS data has none", async () => {
     const bare = { seriesId: "M-4", code: "Qal", name: "Alluvium", rank: 1 };
     await renderCard(<UnitCard result={{ kind: "unit", unit: bare }} pub={pubContext("M-4", entries)} />);
-    expect(screen.getByText(/not recorded in this map's GIS data/)).toBeTruthy();
+    expect(screen.getByText(/description is not recorded in the map's GIS data/)).toBeTruthy();
     const pdf = screen.getByRole("link", { name: "Booklet (PDF) ↗" });
     expect(pdf.getAttribute("href")).toBe("https://pubs.example/M-4-booklet.pdf");
     expect(pdf.getAttribute("target")).toBe("_blank");
@@ -185,7 +187,13 @@ describe("UnitCard", () => {
 
   it("leaves the note out when the unit has a description or a descriptions table", async () => {
     await renderCard(<UnitCard result={{ kind: "unit", unit: { ...unit, description: undefined } }} pub={pubContext("M-1", entries)} />);
-    expect(screen.queryByText(/not recorded in this map's GIS data/)).toBeNull();
+    expect(screen.queryByText(/not recorded in the map's GIS data/)).toBeNull();
+  });
+
+  it("waits for the publication before saying the description is missing", async () => {
+    const bare = { seriesId: "M-4", code: "Qal", rank: 1 };
+    await renderCard(<UnitCard result={{ kind: "unit", unit: bare }} />);
+    expect(screen.queryByText(/not recorded in the map's GIS data/)).toBeNull();
   });
 
   it("shows the scan-only notice with the covering publication", async () => {

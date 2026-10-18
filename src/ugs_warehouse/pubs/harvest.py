@@ -612,34 +612,15 @@ def prepare_plates(zip_paths, work, units_only=False):
     _report(color_source_sat=None)
     for zip_path in zip_paths:
         with zipfile.ZipFile(zip_path) as z:
-            names = z.namelist()
-            for _nm in names:                        # full source inventory for the run report
-                if not _nm.endswith("/"):
-                    _report_add("found", {"name": _nm, "kind": _classify(_nm)})
-            _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$", r"utah-500k.*\.tiff?$")
-                     or next((n for n in names if n.lower().endswith((".tif", ".tiff")) and not any(
-                          x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
-            _shp = pick(names, r"geologicunits\.shp$", r"units\.shp$")
-            if _gtif:
-                gtif = _gtif
-                target_zip = zip_path
-                inner_gtif = _gtif
-            if _shp:
-                shp = _shp
-            pdf_candidates += [(zip_path, n) for n in names if n.lower().endswith(".pdf")]
-            tif_candidates += [(zip_path, n) for n in names if n.lower().endswith((".tif", ".tiff"))
-                               and not any(j in n.lower() for j in
-                                           ("legend", "correlation", "thumb", "index", "keyboard", "hillshade"))]
-            want = []
-            if _shp:
-                stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
-                want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
-            if _gtif and not units_only:
-                gstem = re.sub(r"\.[^.]+$", "", _gtif)
-                want += [n for n in names if n.startswith(gstem + ".")
-                         and n.lower().endswith((".tfwx", ".tfw", ".wld", ".aux.xml", ".prj"))]
-            for nm in want:
-                z.extract(nm, work)
+            _gtif, _shp, pdfs, tifs = _scan_zip(z, zip_path, work, units_only)
+        if _gtif:
+            gtif = _gtif
+            target_zip = zip_path
+            inner_gtif = _gtif
+        if _shp:
+            shp = _shp
+        pdf_candidates += pdfs
+        tif_candidates += tifs
 
     shp_path = os.path.join(work, shp) if shp else None
     _report("used", units_shp=shp)
@@ -657,18 +638,10 @@ def prepare_plates(zip_paths, work, units_only=False):
     if best and best[2] >= COLOR_SAT_FLOOR:
         target_zip, inner_gtif, sat = best
         with zipfile.ZipFile(target_zip) as z:                 # bring the chosen plate's sidecars over
-            gstem = re.sub(r"\.[^.]+$", "", inner_gtif)
-            for nm in z.namelist():
-                if nm.startswith(gstem + ".") and nm.lower().endswith(
-                        (".tfwx", ".tfw", ".wld", ".aux.xml", ".prj")):
-                    z.extract(nm, work)
+            for nm in _sidecar_names(z.namelist(), inner_gtif):
+                z.extract(nm, work)
         _report(color_source_sat=sat)
-        virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
-        gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
-        _report(tier="geotiff")
-        _report("used", plate={"name": inner_gtif, "dpi": None})
-        _report_derive_skipped(shp)
-        return gtif_path, shp_path
+        return _geotiff_plate(target_zip, inner_gtif, work, shp), shp_path
     if tif_candidates:
         # We probed rasters but none cleared the color floor. Usually a genuinely grayscale scan (fine),
         # but this is also where a COLOR plate that failed to READ would silently vanish — surface it.
@@ -683,12 +656,50 @@ def prepare_plates(zip_paths, work, units_only=False):
     if not gtif:
         _report_derive_skipped(shp)
         return None, shp_path
+    return _geotiff_plate(target_zip, inner_gtif, work, shp), shp_path
+
+
+def _sidecar_names(names, inner):
+    """Members of `names` that are georef sidecars of the raster `inner`."""
+    stem = re.sub(r"\.[^.]+$", "", inner)
+    return [n for n in names if n.startswith(stem + ".")
+            and n.lower().endswith((".tfwx", ".tfw", ".wld", ".aux.xml", ".prj"))]
+
+
+def _scan_zip(z, zip_path, work, units_only):
+    """Inventory one open zip, extract its units shapefile and plate sidecars into `work`, and
+    return (gtif, shp, pdf_candidates, tif_candidates)."""
+    names = z.namelist()
+    for _nm in names:                        # full source inventory for the run report
+        if not _nm.endswith("/"):
+            _report_add("found", {"name": _nm, "kind": _classify(_nm)})
+    _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$", r"utah-500k.*\.tiff?$")
+             or next((n for n in names if n.lower().endswith((".tif", ".tiff")) and not any(
+                  x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
+    _shp = pick(names, r"geologicunits\.shp$", r"units\.shp$")
+    pdfs = [(zip_path, n) for n in names if n.lower().endswith(".pdf")]
+    tifs = [(zip_path, n) for n in names if n.lower().endswith((".tif", ".tiff"))
+            and not any(j in n.lower() for j in
+                        ("legend", "correlation", "thumb", "index", "keyboard", "hillshade"))]
+    want = []
+    if _shp:
+        stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
+        want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
+    if _gtif and not units_only:
+        want += _sidecar_names(names, _gtif)
+    for nm in want:
+        z.extract(nm, work)
+    return _gtif, _shp, pdfs, tifs
+
+
+def _geotiff_plate(target_zip, inner_gtif, work, shp):
+    """Georef-correct the chosen GeoTIFF plate in place in its zip and record it as used."""
     virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
     gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
     _report(tier="geotiff")
     _report("used", plate={"name": inner_gtif, "dpi": None})
     _report_derive_skipped(shp)
-    return gtif_path, shp_path
+    return gtif_path
 
 
 def source_raster(series_id) -> str | None:
@@ -851,12 +862,178 @@ def _write_previews(pub: identity.Pub, cog: str, work: str) -> None:
     _report("produced", thumbnail=pub.thumb_object, sheet=pub.sheet_object)
 
 
+def _download_zips(zurls, work) -> list[str]:
+    """Download each source zip into `work`, capped at MAX_ZIP_SIZE_MB."""
+    zip_paths = []
+    max_b = MAX_ZIP_SIZE_MB * 1024 * 1024 if MAX_ZIP_SIZE_MB > 0 else None
+    hlog(f"downloading {len(zurls)} source zip(s)", step="download")
+    for i, zurl in enumerate(zurls):
+        zp = os.path.join(work, f"pub{i}.zip")
+        download(encode_url(zurl), zp, max_bytes=max_b)
+        zip_paths.append(zp)
+    return zip_paths
+
+
+def _resolve_plate(zip_paths, work, source):
+    """(plate, shp, fail): the source raster when `source` is set, else the plate in the zips."""
+    plate, shp = prepare_plates(zip_paths, work, units_only=bool(source))
+    if source:
+        plate = _source_plate(source, work)
+        if not _gdalinfo(plate).get("coordinateSystem", {}).get("wkt"):
+            hlog(f"FAIL source raster {source} has no CRS", step="plate",
+                 level="ERROR", category="attention", err=True)
+            return plate, shp, "fail:source_no_crs"
+        _report_derive_skipped(shp)
+    if not plate:
+        hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
+             level="ERROR", category="attention", err=True)
+        return plate, shp, "fail:noplate"
+    return plate, shp, None
+
+
+def _to_8bit(plate, work):
+    """(plate, cast_args, fail): the plate as 8-bit imagery plus the warp args that keep it 8-bit."""
+    # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
+    # type, and browsers draw 16-bit plates almost black.
+    kind = _plate_kind(plate)
+    if kind == "grid":
+        hlog("FAIL plate is not 8-bit map imagery (a data grid, or real 16-bit color)", step="plate",
+             level="ERROR", category="attention", err=True)
+        return plate, [], "fail:not_8bit"
+    if kind == "lineart":
+        plate = _lineart_to_byte(plate, work)
+    elif kind == "palette":
+        plate = _palette_to_rgba(plate, work)
+    # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear. INIT_DEST
+    # is explicit because, with no nodata, GDAL 3.11 exits 1 on its default and leaves a partial file.
+    cast_args = ["-ot", "Byte", "-dstnodata", "None", "-wo", "INIT_DEST=0"] if kind == "color" else []
+    return plate, cast_args, None
+
+
+def _warp_plate(plate, clipped, cut, n_feat, cast_args) -> None:
+    """Warp the plate to EPSG:3857, cropped to the map footprint when the index has one."""
+    # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".
+    # Fall back to an uncropped warp (full sheet) instead of failing the pub.
+    if n_feat > 0:
+        cutline_args = ["-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline"]
+        hlog("warping (cutline + reproject 3857) → COG", step="cog")
+    else:
+        cutline_args = []
+        hlog("no map footprint in the index — warping uncropped (full sheet)",
+             step="cog", level="WARNING")
+    run(["gdalwarp", *cutline_args, *cast_args,
+         "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
+         "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
+
+
+def _free_inputs(plates, zip_paths) -> None:
+    """Remove the plate files (not VRTs) and the source zips."""
+    for p in plates:
+        if p and os.path.exists(p) and not p.endswith(".vrt"):
+            os.remove(p)
+    for zp in zip_paths:
+        if os.path.exists(zp):
+            os.remove(zp)
+
+
+def _cog_profile() -> dict:
+    """The rio-cogeo profile for COG_COMPRESS."""
+    from rio_cogeo.profiles import cog_profiles
+
+    prof = dict(cog_profiles.get(COG_COMPRESS))
+    prof["bigtiff"] = "IF_SAFER"
+    if COG_COMPRESS == "webp":
+        prof["WEBP_LEVEL"] = COG_QUALITY
+    elif COG_COMPRESS in ("zstd", "deflate", "lzw"):
+        prof["predictor"] = 2
+    return prof
+
+
+def _write_cog(src, cog, prof) -> None:
+    """Write `src` as a web-optimized COG, retrying a failed or undersized webp encode as lzw."""
+    from rio_cogeo.cogeo import cog_translate
+
+    def _to_lzw(why: str) -> None:
+        hlog(f"webp COG {why} → retry with lzw", step="cog", level="WARNING")
+        if os.path.exists(cog):
+            os.remove(cog)
+        prof["compress"] = "lzw"
+        prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
+        cog_translate(src, cog, prof, web_optimized=True,
+                      zoom_level_strategy=COG_ZOOM_STRATEGY,
+                      overview_resampling="bilinear", quiet=True)
+
+    # webp can still fail to encode a plate; lossless lzw keeps web_optimized
+    # so the result is still tiled + overviewed for range reads.
+    try:
+        cog_translate(src, cog, prof, web_optimized=True,
+                      zoom_level_strategy=COG_ZOOM_STRATEGY,
+                      overview_resampling="bilinear", quiet=True)
+    except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
+        if COG_COMPRESS != "webp":
+            raise
+        _to_lzw(f"failed ({type(e).__name__}: {str(e)[:80]})")
+    else:
+        # webp can "succeed" yet emit a tiny/garbage COG; deflate/lzw don't — so this
+        # sanity-retry is webp-only (a real deflate encode error already re-raised above).
+        if COG_COMPRESS == "webp" and (not os.path.exists(cog) or os.path.getsize(cog) < 100_000):
+            _to_lzw("empty/undersized")
+
+
+def _validate_cog(cog) -> str | None:
+    """The fail status for a COG that must not publish, or None when it is valid 8-bit color."""
+    from rio_cogeo.cogeo import cog_validate
+
+    ok, _, _ = cog_validate(cog)
+    if not ok:
+        hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
+        return "fail:cog"
+    cog_types = _band_types(cog)
+    if not cog_types or any(t != "Byte" for t in cog_types):
+        hlog(f"FAIL COG bands are {cog_types}, not 8-bit", step="validate",
+             level="ERROR", category="attention", err=True)
+        return "fail:not_8bit"
+    # "It ran ≠ it's right": a COLOR source that came out grayscale means the pipeline silently
+    # dropped the color — never publish it. (No-op for a webp COG the rasterio wheel can't read:
+    # _source_saturation returns -1, which fails the `0 <= cog_sat` check.)
+    src_sat = _pub_report.get("color_source_sat")
+    if src_sat is not None and src_sat >= COLOR_SAT_FLOOR:
+        cog_sat = _source_saturation(cog)
+        if 0 <= cog_sat < COLOR_SAT_FLOOR:
+            hlog(f"FAIL color source (sat {src_sat:.0f}) produced a GRAYSCALE COG (sat {cog_sat:.1f}) "
+                 "— refusing to publish", step="validate", level="ERROR", category="attention", err=True)
+            return "fail:grayscale_cog"
+    return None
+
+
+def _publish(pub: identity.Pub, cog, shp, prof, work) -> None:
+    """Upload the COG, the units parquet and the previews, and log the OK line."""
+    series_id = pub.series_id
+    # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
+    # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
+    # the slow "flood of requests" on zoom. COGs are write-once (upload_write_once refuses to
+    # overwrite an existing object) — a revision publishes as a new edition (new series_id),
+    # never an in-place rewrite, so long-cache is always safe.
+    gcs.upload_write_once(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+    _report("produced", cog={"object": pub.cog_object,
+                             "size_mb": os.path.getsize(cog) // 1024 // 1024,
+                             "compress": prof.get("compress", COG_COMPRESS)})
+    if shp:
+        gpq = os.path.join(work, f"{series_id}.units.parquet")
+        geoparquet.write(shp, gpq)
+        units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
+        gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        _report("produced", units_parquet=units_obj)
+    if THUMBS:
+        _write_previews(pub, cog, work)
+    used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
+    qual = f" q{COG_QUALITY}" if used == "webp" else ""
+    hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")
+
+
 def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
     """One harvest attempt over a set of source zip URL(s), with the plate taken from the map's
     source raster object when `source` is set. Returns 'ok' | 'fail:…'."""
-    from rio_cogeo.cogeo import cog_translate, cog_validate
-    from rio_cogeo.profiles import cog_profiles
-
     series_id = pub.series_id
     _series_ctx.set(series_id)
     # Each attempt re-inventories the source (harvest_one may retry with a different zip set), so
@@ -867,99 +1044,25 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
         cut, n_feat = footprint(series_id, work)
-        zip_paths = []
-        max_b = MAX_ZIP_SIZE_MB * 1024 * 1024 if MAX_ZIP_SIZE_MB > 0 else None
-        hlog(f"downloading {len(zurls)} source zip(s)", step="download")
-        for i, zurl in enumerate(zurls):
-            zp = os.path.join(work, f"pub{i}.zip")
-            download(encode_url(zurl), zp, max_bytes=max_b)
-            zip_paths.append(zp)
-
-        plate, shp = prepare_plates(zip_paths, work, units_only=bool(source))
-        if source:
-            plate = _source_plate(source, work)
-            if not _gdalinfo(plate).get("coordinateSystem", {}).get("wkt"):
-                hlog(f"FAIL source raster {source} has no CRS", step="plate",
-                     level="ERROR", category="attention", err=True)
-                return "fail:source_no_crs"
-            _report_derive_skipped(shp)
-        if not plate:
-            hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
-                 level="ERROR", category="attention", err=True)
-            return "fail:noplate"
-
-        # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
-        # type, and browsers draw 16-bit plates almost black.
-        kind = _plate_kind(plate)
+        zip_paths = _download_zips(zurls, work)
+        plate, shp, fail = _resolve_plate(zip_paths, work, source)
+        if fail:
+            return fail
         source_plate = plate
-        if kind == "grid":
-            hlog("FAIL plate is not 8-bit map imagery (a data grid, or real 16-bit color)", step="plate",
-                 level="ERROR", category="attention", err=True)
-            return "fail:not_8bit"
-        if kind == "lineart":
-            plate = _lineart_to_byte(plate, work)
-        elif kind == "palette":
-            plate = _palette_to_rgba(plate, work)
-        # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear. INIT_DEST
-        # is explicit because, with no nodata, GDAL 3.11 exits 1 on its default and leaves a partial file.
-        cast_args = ["-ot", "Byte", "-dstnodata", "None", "-wo", "INIT_DEST=0"] if kind == "color" else []
+        plate, cast_args, fail = _to_8bit(plate, work)
+        if fail:
+            return fail
 
         clipped = os.path.join(work, "clipped.tif")
-        # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".
-        # Fall back to an uncropped warp (full sheet) instead of failing the pub.
-        if n_feat > 0:
-            cutline_args = ["-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline"]
-            hlog("warping (cutline + reproject 3857) → COG", step="cog")
-        else:
-            cutline_args = []
-            hlog("no map footprint in the index — warping uncropped (full sheet)",
-                 step="cog", level="WARNING")
-        run(["gdalwarp", *cutline_args, *cast_args,
-             "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
-             "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
+        _warp_plate(plate, clipped, cut, n_feat, cast_args)
         # /tmp is RAM on Cloud Run: free the plate and the zips (the warp read them last) before the
         # COG write needs room, which matters for a multi-GB source raster.
-        for p in {source_plate, plate}:
-            if p and os.path.exists(p) and not p.endswith(".vrt"):
-                os.remove(p)
-        for zp in zip_paths:
-            if os.path.exists(zp):
-                os.remove(zp)
+        _free_inputs({source_plate, plate}, zip_paths)
         cog = os.path.join(work, f"{series_id}.cog.tif")
-        prof = dict(cog_profiles.get(COG_COMPRESS))
-        prof["bigtiff"] = "IF_SAFER"
-        if COG_COMPRESS == "webp":
-            prof["WEBP_LEVEL"] = COG_QUALITY
-        elif COG_COMPRESS in ("zstd", "deflate", "lzw"):
-            prof["predictor"] = 2
+        prof = _cog_profile()
 
         rgb_clipped = ensure_rgb(clipped)
-
-        def _to_lzw(why: str) -> None:
-            hlog(f"webp COG {why} → retry with lzw", step="cog", level="WARNING")
-            if os.path.exists(cog):
-                os.remove(cog)
-            prof["compress"] = "lzw"
-            prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
-                          zoom_level_strategy=COG_ZOOM_STRATEGY,
-                          overview_resampling="bilinear", quiet=True)
-
-        # webp can still fail to encode a plate; lossless lzw keeps web_optimized
-        # so the result is still tiled + overviewed for range reads.
-        try:
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
-                          zoom_level_strategy=COG_ZOOM_STRATEGY,
-                          overview_resampling="bilinear", quiet=True)
-        except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
-            if COG_COMPRESS != "webp":
-                raise
-            _to_lzw(f"failed ({type(e).__name__}: {str(e)[:80]})")
-        else:
-            # webp can "succeed" yet emit a tiny/garbage COG; deflate/lzw don't — so this
-            # sanity-retry is webp-only (a real deflate encode error already re-raised above).
-            if COG_COMPRESS == "webp" and (not os.path.exists(cog) or os.path.getsize(cog) < 100_000):
-                _to_lzw("empty/undersized")
+        _write_cog(rgb_clipped, cog, prof)
 
         # Free up tmpfs RAM by deleting the intermediate clipped/rgb images
         for f in (clipped, rgb_clipped):
@@ -969,45 +1072,10 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
                 except Exception:
                     pass
 
-        ok, _, _ = cog_validate(cog)
-        if not ok:
-            hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
-            return "fail:cog"
-        cog_types = _band_types(cog)
-        if not cog_types or any(t != "Byte" for t in cog_types):
-            hlog(f"FAIL COG bands are {cog_types}, not 8-bit", step="validate",
-                 level="ERROR", category="attention", err=True)
-            return "fail:not_8bit"
-        # "It ran ≠ it's right": a COLOR source that came out grayscale means the pipeline silently
-        # dropped the color — never publish it. (No-op for a webp COG the rasterio wheel can't read:
-        # _source_saturation returns -1, which fails the `0 <= cog_sat` check.)
-        src_sat = _pub_report.get("color_source_sat")
-        if src_sat is not None and src_sat >= COLOR_SAT_FLOOR:
-            cog_sat = _source_saturation(cog)
-            if 0 <= cog_sat < COLOR_SAT_FLOOR:
-                hlog(f"FAIL color source (sat {src_sat:.0f}) produced a GRAYSCALE COG (sat {cog_sat:.1f}) "
-                     "— refusing to publish", step="validate", level="ERROR", category="attention", err=True)
-                return "fail:grayscale_cog"
-        # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
-        # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
-        # the slow "flood of requests" on zoom. COGs are write-once (upload_write_once refuses to
-        # overwrite an existing object) — a revision publishes as a new edition (new series_id),
-        # never an in-place rewrite, so long-cache is always safe.
-        gcs.upload_write_once(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
-        _report("produced", cog={"object": pub.cog_object,
-                                 "size_mb": os.path.getsize(cog) // 1024 // 1024,
-                                 "compress": prof.get("compress", COG_COMPRESS)})
-        if shp:
-            gpq = os.path.join(work, f"{series_id}.units.parquet")
-            geoparquet.write(shp, gpq)
-            units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
-            gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
-            _report("produced", units_parquet=units_obj)
-        if THUMBS:
-            _write_previews(pub, cog, work)
-        used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
-        qual = f" q{COG_QUALITY}" if used == "webp" else ""
-        hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")
+        fail = _validate_cog(cog)
+        if fail:
+            return fail
+        _publish(pub, cog, shp, prof, work)
         return "ok"
     except ZipTooLargeError as e:
         hlog(f"zip too large to process (size cap): {e}", step="download",

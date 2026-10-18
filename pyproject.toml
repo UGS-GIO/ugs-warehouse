@@ -99,5 +99,9 @@ target-version = "py311"
 #   E4/E7/E9 = pycodestyle (imports, statements, syntax)
 #   F        = pyflakes (real errors: undefined names, unused imports)
 #   I        = import sorting (auto-fixable)
+#   C901     = mccabe complexity
 # Grow this set deliberately, ideally org-wide, not by accident.
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15

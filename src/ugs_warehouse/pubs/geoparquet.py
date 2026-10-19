@@ -23,6 +23,12 @@ def write(src, path) -> None:
     """Write a GeoDataFrame, or a vector file gpio can convert, as GeoParquet 1.1 with a bbox
     covering column, Hilbert-sorted, in ~32 MB row groups with a page index. A file's geometry
     column is `geom`."""
+    _write_sorted(src, path)
+    _page(path)  # after the sorted table is out of scope, so only one row group is held at a time
+
+
+def _write_sorted(src, path) -> None:
+    """The gpio write: bbox covering, Hilbert sort, ~32 MB row groups."""
     import geoparquet_io as gpio
 
     if isinstance(src, str):
@@ -41,7 +47,6 @@ def write(src, path) -> None:
         table = gpio.Table(arrow, geometry_column=src.geometry.name, crs=crs)
     table.add_bbox().sort_hilbert().write(
         str(path), geoparquet_version="1.1", row_group_size_mb=ROW_GROUP_MB)
-    _page(path)
 
 
 def _page(path) -> None:

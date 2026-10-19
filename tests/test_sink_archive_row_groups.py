@@ -201,3 +201,14 @@ def test_is_current_accepts_only_the_format_write_makes(tmp_path) -> None:
         with open(path, "rb") as f:
             gcs.put_bytes(f.read(), config.archive_path(topic.stem), content_type="application/x")
         assert sink_archive.is_current(topic) is current, path
+
+
+def test_archive_signature_follows_the_writer_settings(monkeypatch) -> None:
+    """A writer setting change makes every topic's fingerprint differ, so skip-unchanged rebuilds
+    it with the new pages and overview levels."""
+    before = sink_archive.archive_signature()
+    monkeypatch.setattr(sink_archive, "PAGE_ROWS", sink_archive.PAGE_ROWS * 2)
+    assert sink_archive.archive_signature() != before
+    monkeypatch.undo()
+    monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001,))
+    assert sink_archive.archive_signature() != before

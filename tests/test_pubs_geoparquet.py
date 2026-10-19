@@ -69,7 +69,6 @@ def test_write_adds_a_page_index_with_small_pages(tmp_path):
 
     meta = pq.read_metadata(out)
     assert all(meta.row_group(0).column(c).has_offset_index for c in range(meta.num_columns))
-    pages = pq.ParquetFile(out).metadata.row_group(0).column(0)
-    assert pages.has_column_index
+    assert meta.row_group(0).column(0).has_column_index
     assert _geo(out)["columns"]["geometry"]["covering"] == COVERING
     assert len(gpd.read_parquet(out)) == n

@@ -89,9 +89,9 @@ def _data_sinks(topic: Topic, con, view: str, written: dict[str, gcs.FileMeta]) 
         written["data"] = sink_archive.write(topic, con, view)
 
     def _overview() -> None:
-        # Only beside an archive written this run; when the archive failed the old pair stays.
-        if "data" in written and (overview := sink_archive.write_overview(topic, con, view)):
-            written["overview"] = overview
+        # Only beside an archive written this run; when the archive failed the old set stays.
+        if "data" in written:
+            sink_archive.write_overviews(topic, con, view, written)
 
     def _pmtiles() -> None:
         written["pmtiles"] = sink_pmtiles.build(topic, con, view)

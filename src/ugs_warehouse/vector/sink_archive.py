@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 import tempfile
 
@@ -22,6 +23,7 @@ from ..core import config, gcs
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
+log = logging.getLogger("ugs-warehouse.ingest")
 GEOPARQUET_VERSION = "1.1.0"
 
 # A row group is the smallest unit a range-reading client can fetch, so it floors both the viewer's
@@ -41,11 +43,13 @@ PAGE_BYTES = 64 * 1024       # ~100 rows of polygon geometry: what a page-index 
 PAGE_ROWS = 1024
 
 # A statewide map of a heavy layer cannot be drawn from the archive without reading all of it, so
-# heavy line and polygon layers also get a generalized copy. 0.0005 deg (~50 m) is finer than a
-# pixel through zoom 11; nonriverine wetlands go from 891 MB of geometry to 10 MB.
-OVERVIEW_TOLERANCE = 0.0005
-OVERVIEW_MIN_BYTES = 64 * 1024**2
-
+# heavy line and polygon layers also get generalized copies, one per drawing scale. Each tolerance
+# is just under a pixel at ArcGIS LOD 11, 9 and 7 in degrees (m/px / 111,320, how the FeatureServer
+# reads maxAllowableOffset), and the server reads the coarsest copy at or under the request's.
+# Points get none: the server does not simplify them.
+OVERVIEW_TOLERANCES = (0.00068, 0.0027, 0.0108)
+OVERVIEW_MIN_BYTES = 16 * 1024**2
+OVERVIEW_MIN_SHRINK = 0.7   # a level must be under 70% of the file before it, or it is not written
 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.
@@ -204,35 +208,76 @@ def is_current(topic: Topic) -> bool:
             and paged)
 
 
-def write_overview(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta | None:
-    """Write `{stem}_overview.parquet`, the archive simplified to OVERVIEW_TOLERANCE, when the
-    layer is heavy enough to need one; otherwise remove a stale one. Rows keep their feature_id,
-    so a feature drawn from the overview is the same feature in the archive."""
-    path = config.overview_path(topic.stem)
+def _overview_table(con: duckdb.DuckDBPyConnection, view: str, tolerance: float) -> str:
+    """Materialize `view` generalized to `tolerance`, in feature_id order; returns the table.
+
+    Rows keep every attribute, so each is the same feature as in the archive. A speck, a feature
+    under the tolerance both ways, is drawn as at most a pixel: one per tolerance cell is kept, so
+    a dense field of them still shows. A polygon narrower than the tolerance (2 * area / perimeter),
+    a stream channel say, folds into a straight dash at the full tolerance, so it gets a quarter of
+    it. A shape ST_Simplify collapses keeps its topology instead."""
+    t = float(tolerance)
+    speck = f"ST_XMax(geom) - ST_XMin(geom) < {t} AND ST_YMax(geom) - ST_YMin(geom) < {t}"
+    thin = f"ST_Dimension(geom) = 2 AND 2 * ST_Area(geom) < {t} * ST_Perimeter(geom)"
+    con.execute(f"CREATE OR REPLACE TEMP TABLE {view}_specks AS SELECT arg_max(feature_id, "
+                f"ST_XMax(geom) - ST_XMin(geom) + ST_YMax(geom) - ST_YMin(geom)) AS feature_id "
+                f"FROM {view} WHERE {speck} "
+                f"GROUP BY floor(ST_XMin(geom) / {t}), floor(ST_YMin(geom) / {t})")
+    # The speck filter is a join, which does not keep row order; feature_id is the hilbert order.
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE {view}_overview AS SELECT * EXCLUDE (_simple) REPLACE ("
+        f"CASE WHEN {thin} THEN ST_SimplifyPreserveTopology(geom, {t / 4}) "
+        f"WHEN ST_IsEmpty(_simple) THEN ST_SimplifyPreserveTopology(geom, {t}) "
+        f"ELSE _simple END AS geom) "
+        f"FROM (SELECT *, CASE WHEN {thin} THEN NULL ELSE ST_Simplify(geom, {t}) END AS _simple "
+        f"FROM {view} WHERE NOT ({speck}) OR feature_id IN (SELECT feature_id FROM {view}_specks)) "
+        f"WHERE NOT ST_IsEmpty(geom) ORDER BY feature_id")
+    con.execute(f"DROP TABLE {view}_specks")
+    return f"{view}_overview"
+
+
+def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
+                    written: dict[str, gcs.FileMeta]) -> None:
+    """Write `{stem}_overview_{n}.parquet` per OVERVIEW_TOLERANCES when the layer is heavy enough,
+    recording each in `written` under its asset key, and remove the ones not written.
+
+    One level at a time. A level that fails is removed and the next is still tried; the call
+    raises after the last so the sink reports the failure."""
+    paths = [config.overview_path(topic.stem, n) for n in range(1, len(OVERVIEW_TOLERANCES) + 1)]
+    gcs.delete(f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}_overview.parquet")  # pre-levels
     weight, points = con.execute(
         f"SELECT sum(octet_length(ST_AsWKB(geom))), bool_and(ST_GeometryType(geom)::VARCHAR LIKE '%POINT') "
         f"FROM {view}").fetchone()
     if points or (weight or 0) < OVERVIEW_MIN_BYTES:
-        gcs.delete(path)
-        return None
-    # A polygon smaller than the tolerance keeps its envelope, a speck where it is, as the vector
-    # tiles keep one; dropping it would empty a statewide view of a layer made of small features.
-    con.execute(
-        f"CREATE OR REPLACE TEMP VIEW {view}_overview AS SELECT * FROM (SELECT * EXCLUDE (_simple) "
-        f"REPLACE (CASE WHEN ST_IsEmpty(_simple) AND ST_Dimension(geom) = 2 THEN ST_Envelope(geom) "
-        f"ELSE _simple END AS geom) FROM (SELECT *, ST_Simplify(geom, {OVERVIEW_TOLERANCE}) AS _simple "
-        f"FROM {view})) WHERE NOT ST_IsEmpty(geom)")
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            local = os.path.join(tmp, os.path.basename(path))
-            _copy_geoparquet(con, f"{view}_overview", local)
-            meta = gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
-    except Exception:
-        gcs.delete(path)   # the old overview is of the old archive; the item must not list it
-        raise
-    print(f"[{topic.fqn}] overview: {config.public_url(path)}")
-    return meta
-
+        for path in paths:
+            gcs.delete(path)
+        return
+    previous, failed = written["data"].size, []
+    for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                local = os.path.join(tmp, os.path.basename(path))
+                table = _overview_table(con, view, tolerance)
+                try:
+                    _copy_geoparquet(con, table, local)
+                finally:
+                    con.execute(f"DROP TABLE IF EXISTS {table}")
+                size = os.path.getsize(local)
+                if size >= OVERVIEW_MIN_SHRINK * previous:
+                    print(f"[{topic.fqn}] overview {n}: {size:,} B, not under "
+                          f"{OVERVIEW_MIN_SHRINK:.0%} of {previous:,} B; skipped")
+                    gcs.delete(path)
+                    continue
+                written[f"overview_{n}"] = gcs.upload(local, path, content_type=PARQUET_MIME,
+                                                      cache_control=gcs.CACHE_MUTABLE)
+                previous = size
+                print(f"[{topic.fqn}] overview {n} ({tolerance} deg): {config.public_url(path)}")
+        except Exception:
+            log.exception("[%s] overview %d FAILED", topic.fqn, n, extra={"topic": topic.fqn})
+            gcs.delete(path)   # the old one is of the old archive; the item must not list it
+            failed.append(n)
+    if failed:
+        raise RuntimeError(f"overview levels {failed} failed")
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:
     """Write `{stem}.parquet` (latest) + dated archive to GCS. DuckDB streams the COPY (with the

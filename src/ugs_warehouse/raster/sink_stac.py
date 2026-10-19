@@ -14,7 +14,7 @@ from .identity import Raster
 COG_MIME = config.COG_MIME
 
 
-def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None = None,
+def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
                properties: dict | None = None, has_thumbnail: bool = False,
                proj_epsg: int | None = None, has_webmercator: bool = False,
                file_meta: dict[str, gcs.FileMeta] | None = None) -> dict:
@@ -53,10 +53,16 @@ def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None = Non
     )
 
 
-def write(raster: Raster, **build_kwargs) -> str:
-    """Build (`build_item`'s keywords) + upload the item JSON. Caller runs
-    `core.stac.refresh_catalog()` after."""
-    item = build_item(raster, **build_kwargs)
+def write(raster: Raster, *, bbox: list[float], geometry: dict | None = None,
+          properties: dict | None = None, has_thumbnail: bool = False,
+          proj_epsg: int | None = None, has_webmercator: bool = False,
+          file_meta: dict[str, gcs.FileMeta] | None = None) -> str:
+    """Build + upload the item JSON. Caller runs `core.stac.refresh_catalog()` after."""
+    item = build_item(
+        raster, bbox=bbox, geometry=geometry, properties=properties,
+        has_thumbnail=has_thumbnail, proj_epsg=proj_epsg,
+        has_webmercator=has_webmercator, file_meta=file_meta,
+    )
     stac.attach_renders(item)  # ugs-styles colormap/rescale -> render extension (graceful if none)
     stac.stamp_file_meta(item)  # the copied COG's checksum, once a backfill has stored one
     return stac.write_item(item)

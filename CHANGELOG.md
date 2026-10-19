@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.2...v1.11.3) (2026-10-19)
+
+
+### Performance Improvements
+
+* **archive:** write overviews by vertex count instead of geometry bytes ([#619](https://github.com/UGS-GIO/ugs-warehouse/issues/619)) ([1e0a42f](https://github.com/UGS-GIO/ugs-warehouse/commit/1e0a42fc45d4bb46aafcebf5c1bc496992fbe9cd))
+
 ## [1.11.2](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.1...v1.11.2) (2026-10-19)
 
 

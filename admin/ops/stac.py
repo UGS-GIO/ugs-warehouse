@@ -128,7 +128,7 @@ def _cog_coverage() -> dict:
             items = idx.get("items", [])
             return len(items), [it["id"] for it in items if _has_cog(it)]
 
-        total, cog_ids, error = 0, [], False
+        total, cog_ids, error, message = 0, [], False, ""
         with cf.ThreadPoolExecutor(max_workers=16) as ex:
             for n, ids in ex.map(scan, old):
                 total += n

@@ -453,7 +453,7 @@ def _utm_crs(frame, east: str, north: str) -> tuple[str | None, str]:
     zone = _ZONE.search(text)
     datum = next((d for d in _DATUMS if d in text), None)
     for col in frame.columns:
-        values = {str(v).strip() for v in frame[col] if not _blank(v)}
+        values = {str(v).strip() for v in frame[col].dropna().unique() if not _blank(v)}
         if len(values) != 1:
             continue
         only = _norm(next(iter(values)))

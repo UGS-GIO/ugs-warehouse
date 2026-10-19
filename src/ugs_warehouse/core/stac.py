@@ -475,7 +475,7 @@ def prior_collection_field(collection_path: str, field: str):
     """A field of the published collection.json at `collection_path`, or None when there is none
     yet. Lets a reingest keep a value the source no longer carries (preserve-on-empty)."""
     try:
-        return json.loads(gcs.get_bytes(collection_object_path(collection_path)).decode()).get(field)
+        return json.loads(gcs.get_bytes(collection_object_path(collection_path))).get(field)
     except FileNotFoundError:
         return None
 
@@ -1215,7 +1215,7 @@ def _write_pub_series(pub_colls: dict[str, int], has_mappable_item: set[str]
     def _meta(path: str) -> tuple[str, _PubMeta | str]:
         # Reduced in the reading thread, so a full collection.json is dropped as soon as it is read.
         try:
-            doc = json.loads(gcs.get_bytes(collection_object_path(path)).decode())
+            doc = json.loads(gcs.get_bytes(collection_object_path(path)))
         except Exception as e:  # noqa: BLE001 (reported as a problem; the refresh carries on)
             return path, f"unreadable collection.json: {path}: {type(e).__name__}: {e}"
         defect = _index_defect(doc)
@@ -1424,7 +1424,7 @@ def _fetch_item(path: str, iid: str, dropped: list[str]) -> dict | None:
     """One item doc from GCS, or None when it is gone or unreadable (the latter logged and
     recorded in `dropped`)."""
     try:
-        return json.loads(gcs.get_bytes(item_object_path(path, iid)).decode())
+        return json.loads(gcs.get_bytes(item_object_path(path, iid)))
     except FileNotFoundError:
         return None  # listed-then-deleted between the list and this read — legitimately silent
     except Exception as e:  # noqa: BLE001 — one bad item shouldn't sink the refresh, but say so

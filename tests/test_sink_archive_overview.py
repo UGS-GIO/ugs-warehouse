@@ -34,7 +34,7 @@ def uploads(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sink_archive.gcs, "upload", upload)
     monkeypatch.setattr(sink_archive.gcs, "delete", lambda path: calls["delete"].append(path))
-    monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_BYTES", 1)
+    monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_VERTICES", 1)
     monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001, 0.01, 0.1))
     return calls
 
@@ -100,7 +100,7 @@ def test_a_channel_narrower_than_the_tolerance_keeps_its_bends(uploads):
 
 
 def test_points_and_light_layers_remove_stale_overviews(uploads, monkeypatch):
-    monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_BYTES", 10**6)
+    monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_VERTICES", 10**6)
     for sql in ("SELECT 1 AS feature_id, ST_Point(0, 0) AS geom",
                 "SELECT 1 AS feature_id, ST_Buffer(ST_Point(0, 0), 1) AS geom"):
         _write(sql)

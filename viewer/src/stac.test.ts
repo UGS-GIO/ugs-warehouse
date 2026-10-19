@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, parquetAsset, rasterTilesAsset, relatedJoins } from "./stac";
-import { ROOT_INDEX_URL, rootIndexItems, hasItemsIndex } from "./stac/items-index";
+import { assetUsages, parquetAsset, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { ROOT_INDEX_URL, rootIndexItems, hasItemsIndex, indexItemRefs } from "./stac/items-index";
 import type { StacDoc } from "./stac";
+import { joinsRows, vectorSpecOf } from "./map/preview-spec";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -204,14 +205,428 @@ describe("rasterTilesAsset", () => {
 
 
 describe("rootIndexItems", () => {
-  it("resolves each self link from the root and skips an entry without one", () => {
-    const refs = rootIndexItems({ items: [
+  it("resolves each self link from the root and skips an entry without one, warning once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const idx = { items: [
       { id: "M-1", links: [{ rel: "self", href: "./ugs-publications/M/M-1/M-1.json" }] },
       { id: "broken", links: [] },
-    ] } as never);
+    ] } as never;
+    const refs = rootIndexItems(idx);
+    rootIndexItems(idx);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("1 entry without a self link");
+    warn.mockRestore();
     expect(refs).toHaveLength(1);
     expect(refs[0].href).toBe(new URL("./ugs-publications/M/M-1/M-1.json", ROOT_INDEX_URL).href);
     expect(refs[0].collId).toBe("ugs-publications/M");
+  });
+
+  it("files a root-relative collection.json self under its series", () => {
+    const [ref] = rootIndexItems({ items: [
+      { id: "OFR-9", links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/collection.json" }] },
+    ] } as never);
+    expect(ref.href).toBe(new URL("./ugs-publications/OFR/OFR-9/collection.json", ROOT_INDEX_URL).href);
+    expect(ref.collId).toBe("ugs-publications/OFR");
+    expect(idOf(ref.href)).toBe("OFR-9");
+  });
+});
+
+// A migrated publication series indexes one entry per publication Collection, self-linked to
+// `<series>/<SID>/collection.json`; its Items sit at `<series>/<SID>/<item>/<item>.json`.
+describe("publication Collection hrefs", () => {
+  const base = "https://maps-assets.geology.utah.gov/warehouse/stac/";
+  const pub = `${base}ugs-publications/OFR/OFR-9/collection.json`;
+  it("keys a publication Collection by its own folder and names it by its SID", () => {
+    expect(collKeyOf(pub)).toBe("ugs-publications/OFR/OFR-9");
+    expect(idOf(pub)).toBe("OFR-9");
+  });
+  it("lists a publication under its series, and an item under its collection", () => {
+    expect(entryCollKeyOf(pub)).toBe("ugs-publications/OFR");
+    expect(entryCollKeyOf(`${base}ugs-publications/M/M-1/M-1.json`)).toBe("ugs-publications/M");
+    expect(entryCollKeyOf(`${base}ugs-publications/OFR/OFR-9/plate/plate.json`)).toBe("ugs-publications/OFR/OFR-9");
+    expect(entryCollKeyOf(`${base}ugs-rasters/collection.json`)).toBeUndefined();
+  });
+  it("routes a publication to its series and an Item inside it to the publication", () => {
+    expect(catalogItemHref(pub)).toBe("?c=ugs-publications%2FOFR&i=OFR-9");
+    expect(catalogItemHref(`${base}ugs-publications/OFR/OFR-9/plate/plate.json`))
+      .toBe("?c=ugs-publications%2FOFR%2FOFR-9&i=plate");
+  });
+  it("tells a catalog href from a collection href", () => {
+    expect(isCatalogHref(`${base}ugs-publications/OFR/catalog.json?x=1`)).toBe(true);
+    expect(isCatalogHref(pub)).toBe(false);
+    expect(isCollectionHref(pub)).toBe(true);
+  });
+});
+
+describe("pubHrefFor", () => {
+  const series = { id: "ugs-publications/OFR",
+    href: "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/catalog.json" };
+  const dir = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/";
+  it("builds a publication's collection.json from c = <series>", () => {
+    expect(pubHrefFor(series, "ugs-publications/OFR", "OFR-9")).toBe(`${dir}OFR-9/collection.json`);
+  });
+  it("builds an Item inside a publication from c = <series>/<SID>", () => {
+    expect(pubHrefFor(series, "ugs-publications/OFR/OFR-9", "OFR-9__geounits"))
+      .toBe(`${dir}OFR-9/OFR-9__geounits/OFR-9__geounits.json`);
+    expect(pubSidIn(series.id, "ugs-publications/OFR/OFR-9")).toBe("OFR-9");
+  });
+  it("names nothing for another collection, a deeper path, or a collection-type series", () => {
+    expect(pubHrefFor(series, "ugs-publications/B", "B-1")).toBeUndefined();
+    expect(pubHrefFor(series, "ugs-publications/OFR/OFR-9/x", "y")).toBeUndefined();
+    expect(pubHrefFor({ id: series.id, href: `${dir}collection.json` }, series.id, "OFR-9")).toBeUndefined();
+    expect(pubSidIn(series.id, "ugs-publications/OFRX/1")).toBeUndefined();
+  });
+});
+
+describe("publication layers in the root index", () => {
+  const tagged: StacDoc = { id: "OFR-9__flows", properties: {
+    title: "Debris Flow Paths", "ugs:in_publication": "OFR-9", "ugs:publication_title": "Geologic map of X" } };
+  it("reads the publication a tagged entry belongs to, and labels the layer with it", () => {
+    expect(pubOfEntry(tagged)).toEqual({ id: "OFR-9", title: "Geologic map of X" });
+    expect(layerLabel(tagged, "x")).toBe("Debris Flow Paths · Geologic map of X");
+  });
+  it("ignores a raster's provenance ugs:pub_id, and labels by the id when the title is missing", () => {
+    const raster: StacDoc = { id: "r", properties: { title: "Mosaic", "ugs:pub_id": "OFR-123" } };
+    expect(pubOfEntry(raster)).toBeUndefined();
+    expect(layerLabel(raster, "r")).toBe("Mosaic");
+    expect(pubOfEntry({ properties: { "ugs:in_publication": "OFR-9" } })).toEqual({ id: "OFR-9", title: "OFR-9" });
+  });
+  it("keeps a tagged entry as a ref the map resolves by its item id", () => {
+    const [ref] = rootIndexItems({ items: [{ ...tagged,
+      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9__flows/OFR-9__flows.json" }] }] });
+    expect(ref.collId).toBe("ugs-publications/OFR/OFR-9");
+    expect(idOf(ref.href)).toBe("OFR-9__flows");
+  });
+});
+
+describe("indexItemRefs", () => {
+  const series = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/catalog.json";
+  const seriesIndex = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/items.json";
+  it("resolves a series index's self links from where the index was read", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = { id: "ugs-publications/OFR", href: series, index: {
+      url: seriesIndex,
+      items: [
+        { id: "OFR-9", links: [{ rel: "self", href: "./OFR-9/collection.json" }] },
+        { id: "no-self", links: [] },
+      ],
+    } };
+    const refs = indexItemRefs(r);
+    indexItemRefs(r);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(seriesIndex);
+    warn.mockRestore();
+    expect(refs).toHaveLength(1);
+    expect(refs[0].collId).toBe("ugs-publications/OFR");
+    expect(refs[0].href).toBe("https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/OFR-9/collection.json");
+    expect(entryCollKeyOf(refs[0].href)).toBe(refs[0].collId);
+  });
+  it("places a collection's items beside it, as before", () => {
+    const coll = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/B/collection.json";
+    const refs = indexItemRefs({ id: "ugs-publications/B", href: coll, index: { items: [{ id: "B-1" }] } });
+    expect(refs[0].href).toBe("https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/B/B-1/B-1.json");
+  });
+  it("is empty before the index loads", () => {
+    expect(indexItemRefs({ id: "x", href: series })).toEqual([]);
+  });
+});
+
+const pubCollection = {
+  type: "Collection", id: "OFR-9",
+  title: "Geologic map of somewhere", description: "Full citation.",
+  keywords: ["geology"], "ugs:series_id": "OFR-9", "ugs:pub_type": "Open-File Report",
+  "ugs:author": "Doe, J.", "sci:doi": "10.34191/OFR-9", license: "CC-BY-4.0", stac_version: "1.1.0",
+  extent: { spatial: { bbox: [[-112, 40, -111, 41]] },
+            temporal: { interval: [["2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"]] } },
+  assets: { publication: { href: "https://x/ofr-9.pdf", type: "application/pdf" } },
+  links: [
+    { rel: "parent", href: "../catalog.json" },
+    { rel: "alternate", href: "https://geology.utah.gov/pub/OFR-9", type: "text/html", title: "UGS publication landing page" },
+    { rel: "cite-as", href: "https://doi.org/10.34191/OFR-9" },
+    { rel: "item", href: "./plate/plate.json", title: "Plate 1" },
+    { rel: "item", href: "./units/units.json" },
+  ],
+} as StacDoc;
+
+describe("collectionAsItem", () => {
+  it("lifts a Collection's top-level metadata into properties and keeps assets and links", () => {
+    const d = collectionAsItem(pubCollection);
+    expect(d.properties).toMatchObject({
+      title: "Geologic map of somewhere", description: "Full citation.", keywords: ["geology"],
+      "ugs:series_id": "OFR-9", "ugs:pub_type": "Open-File Report", "ugs:author": "Doe, J.",
+      "sci:doi": "10.34191/OFR-9", license: "CC-BY-4.0", datetime: "2020-01-01T00:00:00Z",
+    });
+    expect(d.properties).not.toHaveProperty("extent");
+    expect(d.properties).not.toHaveProperty("stac_version");
+    expect(d.bbox).toEqual([-112, 40, -111, 41]);
+    expect(d.assets).toBe(pubCollection.assets);
+    expect(d.links).toBe(pubCollection.links);
+    expect(d.type).toBe("Collection");
+  });
+  it("leaves an undated publication without a datetime", () => {
+    const d = collectionAsItem({ ...pubCollection, "ugs:date_unknown": true } as StacDoc);
+    expect(d.properties).not.toHaveProperty("datetime");
+    expect(d.properties?.["ugs:date_unknown"]).toBe(true);
+  });
+  it("passes an Item through untouched", () => {
+    const item: StacDoc = { type: "Feature", id: "x", properties: { title: "X" } };
+    expect(collectionAsItem(item)).toBe(item);
+  });
+});
+
+describe("placeholder footprints", () => {
+  const utah = [-114.05, 37, -109.04, 42];
+  it("is no footprint when flagged utah-bbox, or when there is no geometry or bbox", () => {
+    expect(hasFootprint({ bbox: utah, properties: { "ugs:footprint_source": "utah-bbox" } })).toBe(false);
+    expect(isPlaceholderFootprint({ properties: { "ugs:footprint_source": "utah-bbox" } })).toBe(true);
+    expect(hasFootprint({ geometry: null, properties: {} })).toBe(false);
+    expect(hasFootprint({ bbox: [-112, 40, -111, 41], properties: { "ugs:footprint_source": "cog" } })).toBe(true);
+    expect(hasFootprint(undefined)).toBe(false);
+  });
+  it("is no footprint for a table or supporting file, which carries its publication's area", () => {
+    const bbox = [-112, 40, -111, 41];
+    expect(hasFootprint({ bbox, properties: { "ugs:footprint_source": "publication", "ugs:layer_kind": "table" } })).toBe(false);
+    expect(hasFootprint({ bbox, properties: { "ugs:layer_kind": "supporting" } })).toBe(false);
+    expect(hasFootprint({ bbox, properties: { "ugs:layer_kind": "layer" } })).toBe(true);
+  });
+  it("needs a geometry or a valid lon/lat bbox, and never a null geometry", () => {
+    expect(hasFootprint({ geometry: { type: "Point", coordinates: [-111, 39] } })).toBe(true);
+    expect(hasFootprint({ bbox: [-114, 37, -109, 42] })).toBe(true);
+    expect(hasFootprint({ bbox: [-114, 37, 0, -109, 42, 0] })).toBe(true);
+    expect(hasFootprint({})).toBe(false);
+    expect(hasFootprint({ bbox: [1, 2] })).toBe(false);
+    // Projected metres, or a longitude in the latitude slot, is not a lon/lat footprint.
+    expect(hasFootprint({ bbox: [420000, 4100000, 460000, 4150000] })).toBe(false);
+    expect(hasFootprint({ bbox: [-114, -111, -109, 42] })).toBe(false);
+    expect(hasFootprint({ geometry: null, bbox: [-114, 37, -109, 42] })).toBe(false);
+  });
+  it("keeps a placeholder Collection extent out of the normalised bbox", () => {
+    const d = collectionAsItem({ ...pubCollection, "ugs:footprint_source": "utah-bbox",
+      extent: { spatial: { bbox: [utah] }, temporal: { interval: [[null, null]] } } } as StacDoc);
+    expect(d.bbox).toBeUndefined();
+    expect(hasFootprint(d)).toBe(false);
+  });
+});
+
+describe("itemMissing", () => {
+  it("is missing when the doc 404s", () => {
+    expect(itemMissing({ itemUrl: "MD-1002", itemHref: "https://x/MD-1002/collection.json",
+      error: new HttpError(404, "404 Not Found"), resolving: false })).toBe(true);
+  });
+  it("is missing once everything that could resolve the id has loaded without a match", () => {
+    expect(itemMissing({ itemUrl: "MD-1002", resolving: false })).toBe(true);
+    expect(itemMissing({ itemUrl: "MD-1002", resolving: true })).toBe(false);
+  });
+  it("is not missing while the collection.json fallback is still fetching", () => {
+    // The leaf's items.json 404'd (optional), so its item links are loading from collection.json.
+    const r = resolutionStatus([
+      { isLoading: false }, { isLoading: false },
+      { isLoading: true },                                               // fallback collection.json
+      { isLoading: false, error: new HttpError(404, "404"), optional: true },
+    ]);
+    expect(r).toEqual({ resolving: true, error: undefined });
+    expect(itemMissing({ itemUrl: "B-1", resolving: r.resolving, failed: r.error != null })).toBe(false);
+  });
+  it("is unknown, not missing, when a lookup fails", () => {
+    const offline = new TypeError("Failed to fetch");
+    const r = resolutionStatus([{ isLoading: false, error: offline }, { isLoading: false }]);
+    expect(r.error).toBe(offline);
+    expect(itemMissing({ itemUrl: "B-1", resolving: false, failed: true })).toBe(false);
+    // An absent index (404, or a catalog with no index link) is expected, not a failure.
+    expect(resolutionStatus([{ isLoading: false, error: new NoIndexError("no link"), optional: true }]).error)
+      .toBeUndefined();
+    expect(resolutionStatus([{ isLoading: false, error: new HttpError(503, "503"), optional: true }]).error)
+      .toBeInstanceOf(HttpError);
+  });
+  it("is not missing for a doc that exists, another failure, or no selection", () => {
+    expect(itemMissing({ itemUrl: "MD-10", itemHref: "https://x/a.json", resolving: false })).toBe(false);
+    expect(itemMissing({ itemUrl: "MD-10", itemHref: "https://x/a.json",
+      error: new HttpError(500, "500"), resolving: false })).toBe(false);
+    expect(itemMissing({ resolving: false })).toBe(false);
+  });
+});
+
+describe("collectionParts", () => {
+  it("lists a Collection's Items from its rel=item links, titled where the link is", () => {
+    expect(collectionParts(pubCollection)).toEqual([
+      { id: "plate", title: "Plate 1" }, { id: "units", title: "units" },
+    ]);
+  });
+  it("is empty for a report-only publication and for an Item", () => {
+    expect(collectionParts({ ...pubCollection, links: [] })).toEqual([]);
+    expect(collectionParts({ type: "Feature", links: [{ rel: "item", href: "./a/a.json" }] })).toEqual([]);
+  });
+});
+
+describe("publication links", () => {
+  it("reads the landing page from rel=via, else an HTML rel=alternate", () => {
+    expect(viaLink(pubCollection)?.href).toBe("https://geology.utah.gov/pub/OFR-9");
+    expect(viaLink({ links: [{ rel: "alternate", href: "https://x/a.json", type: "application/json" }] })).toBeUndefined();
+    expect(viaLink({ links: [
+      { rel: "alternate", href: "https://x/a.html", type: "text/html" }, { rel: "via", href: "https://x/via" },
+    ] })?.href).toBe("https://x/via");
+    expect(citeLink(pubCollection)?.href).toBe("https://doi.org/10.34191/OFR-9");
+  });
+  it("finds an Item's collection by rel=collection, else rel=parent", () => {
+    const base = "https://cdn/stac/s/P/i/i.json";
+    expect(collectionHrefOf({ links: [{ rel: "parent", href: "../collection.json" }] }, base)).toBe("https://cdn/stac/s/P/collection.json");
+    expect(collectionHrefOf({ links: [
+      { rel: "parent", href: "../p.json" }, { rel: "collection", href: "../collection.json" },
+    ] }, base)).toBe("https://cdn/stac/s/P/collection.json");
+    expect(collectionHrefOf({ links: [{ rel: "collection", href: "../collection.json" }] }, "not a url")).toBeUndefined();
+  });
+});
+
+describe("the publication's plate", () => {
+  const url = "https://cdn/stac/ugs-publications/M/M-246DM/collection.json";
+  const coll = (links: StacDoc["links"], assets: StacDoc["assets"] = {}): StacDoc =>
+    ({ type: "Collection", id: "M-246DM", links, assets });
+  const items = [
+    { rel: "item", href: "./M-246DM__UtahLandslideMaps__DebrisFlowPaths/M-246DM__UtahLandslideMaps__DebrisFlowPaths.json" },
+    { rel: "item", href: "./M-246DM_plate/M-246DM_plate.json", title: "Map plate" },
+  ];
+
+  it("is the rel=item link whose id ends _plate, resolved against the Collection's URL", () => {
+    expect(plateHrefOf(coll(items), url)).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+  });
+
+  it("is the exact <pub id>_plate Item, not a layer whose label ends _plate", () => {
+    const layer = { rel: "item", href: "./M-246DM__geologic_plate/M-246DM__geologic_plate.json" };
+    expect(plateHrefOf(coll([layer, ...items]), url)).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+    expect(plateHrefOf(coll([layer]), url)).toBeUndefined();
+  });
+
+  it("is none for a report-only pub, a single-file pub (COG already on the Collection), or an Item", () => {
+    expect(plateHrefOf(coll([]), url)).toBeUndefined();
+    expect(plateHrefOf(coll(items.slice(0, 1)), url)).toBeUndefined();
+    const cog = { cog: { href: "https://x/p.cog.tif", type: "image/tiff; application=geotiff; profile=cloud-optimized" } };
+    expect(plateHrefOf(coll(items, cog), url)).toBeUndefined();
+    expect(plateHrefOf({ type: "Feature", links: items }, url)).toBeUndefined();
+  });
+
+  it("resolves from where the Collection was fetched, through its normalised item shape", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(coll(items))));
+    const doc = await stacDocQuery(url).queryFn();
+    fetchMock.mockRestore();
+    expect(plateHrefOf(collectionAsItem(doc))).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+  });
+});
+
+describe("isServingTopic", () => {
+  it("is the vector producer's ugs:dbt_schema stamp, which a publication layer does not carry", () => {
+    expect(isServingTopic({ properties: { "ugs:dbt_schema": "hazards" } })).toBe(true);
+    expect(isServingTopic({ properties: { "ugs:series_id": "M-246DM" } })).toBe(false);
+    expect(isServingTopic(undefined)).toBe(false);
+  });
+});
+
+describe("an item with PMTiles but no ugs:dbt_schema stamp", () => {
+  const link = { rel: "pmtiles", href: "https://x/a.pmtiles", type: "application/vnd.pmtiles", "pmtiles:layers": ["a"] };
+  it("gets the safe default: its tile ids are not taken for table rows", () => {
+    const unstamped = vectorSpecOf({ id: "a", properties: {}, links: [link] });
+    expect(unstamped).toMatchObject({ kind: "vector", pmHref: "https://x/a.pmtiles", sourceLayer: "a", rowIds: false });
+    expect(joinsRows(unstamped)).toBe(false);
+    expect(joinsRows(vectorSpecOf({ id: "a", properties: { "ugs:dbt_schema": "hazards" }, links: [link] }))).toBe(true);
+    expect(vectorSpecOf({ id: "a", links: [] })).toBeNull();
+  });
+});
+
+describe("joinsRows", () => {
+  const item: StacDoc = { id: "x" };
+  it("lets a clicked tile feature page the table only when tile ids are its feature_ids", () => {
+    expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x", rowIds: true })).toBe(true);
+    expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x", rowIds: false })).toBe(false);
+    expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x" })).toBe(false);
+    expect(joinsRows({ kind: "cog", item, href: "a.tif" })).toBe(false);
+    expect(joinsRows(null)).toBe(false);
+  });
+});
+
+describe("a publication's relationships", () => {
+  const DMU = "https://x/OFR784DM__DescriptionOfMapUnits.parquet";
+  const asset = (extra: Record<string, unknown> = {}, how: Record<string, unknown> = {}) => ({
+    href: DMU, type: "application/vnd.apache.parquet", roles: ["data", "related"], title: "Description Of Map Units",
+    "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM__MapUnitPolys", fields: ["MapUnit"] }, ...how }],
+    ...extra,
+  });
+
+  it("joins a clicked unit polygon to its DMU row by the MapUnit value", () => {
+    const [j] = relatedJoins({ assets: { OFR784DM__DescriptionOfMapUnits: asset({}, { "ugs:detected_by": "inferred", "ugs:confidence": 100 }) } });
+    expect(j).toEqual({ key: "OFR784DM__DescriptionOfMapUnits", title: "Description Of Map Units", href: DMU,
+                        childField: "MapUnit", parentField: "MapUnit", inferred: { confidence: 100 } });
+  });
+
+  it("tells inferred keys from declared ones", () => {
+    expect(inferredKey({ fields: ["a"], reference: { resource: "r", fields: ["b"] }, "ugs:detected_by": "declared" })).toBeUndefined();
+    expect(inferredKey({ fields: ["a"], reference: { resource: "r", fields: ["b"] } })).toBeUndefined();
+    expect(inferredKey({ fields: ["a"], reference: { resource: "r", fields: ["b"] }, "ugs:detected_by": "inferred" })).toEqual({});
+    expect(inferredTitle({ confidence: 88 })).toContain("confidence 88 of 100");
+    expect(relatedJoins({ assets: { d: asset({}, { "ugs:detected_by": "declared" }) } })[0].inferred).toBeUndefined();
+  });
+
+  it("marks a reference table by the producer's `reference` role", () => {
+    expect(isReferenceAsset(asset({ roles: ["data", "related", "reference"] }))).toBe(true);
+    expect(isReferenceAsset(asset())).toBe(false);
+    expect(relatedJoins({ assets: { d: asset({ roles: ["data", "related", "reference"] }) } })[0].reference).toBe(true);
+  });
+
+  it("reads each Item link's kind and source dataset off the Collection, where it has them", () => {
+    expect(collectionParts({ type: "Collection", links: [
+      { rel: "item", href: "./P_plate/P_plate.json", title: "Map plate" },
+      { rel: "item", href: "./P__MapUnitPolys/P__MapUnitPolys.json", title: "Map Unit Polys",
+        "ugs:layer_kind": "layer", "ugs:source_dataset": "OFR784DM Mills Junction", "ugs:source_key": "OFR784DM_MillsJunction" },
+    ] })).toEqual([
+      { id: "P_plate", title: "Map plate" },
+      { id: "P__MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction",
+        sourceKey: "OFR784DM_MillsJunction" },
+    ]);
+  });
+});
+
+describe("partitionRelated", () => {
+  it("splits own from reference tables, keeping order", () => {
+    const rows = [{ k: "a" }, { k: "b", ref: true }, { k: "c" }, { k: "d", ref: true }];
+    const { own, reference } = partitionRelated(rows, (r) => Boolean(r.ref));
+    expect(own.map((r) => r.k)).toEqual(["a", "c"]);
+    expect(reference.map((r) => r.k)).toEqual(["b", "d"]);
+  });
+  it("reads the reference role off an asset", () => {
+    const tables = [{ key: "x", asset: { href: "x", roles: ["data", "related"] } },
+                    { key: "y", asset: { href: "y", roles: ["data", "related", "reference"] } }];
+    const { own, reference } = partitionRelated(tables, (t) => isReferenceAsset(t.asset));
+    expect([own.map((t) => t.key), reference.map((t) => t.key)]).toEqual([["x"], ["y"]]);
+  });
+});
+
+describe("parentKeyOf", () => {
+  it("drops the last path segment of a catalog key", () => {
+    expect(parentKeyOf("ugs-publications/OFR/OFR-9")).toBe("ugs-publications/OFR");
+  });
+});
+
+describe("part descriptors", () => {
+  it("reads source file, geometry and row count off a rel=item link", () => {
+    const doc: StacDoc = { type: "Collection", links: [
+      { rel: "item", href: "./a/a.json", title: "Map Unit Polys", "ugs:layer_kind": "layer", "ugs:source_file": "GIS Data - Zip",
+        "ugs:geometry_kind": "polygons", "table:row_count": 367 }] };
+    expect(collectionParts(doc)).toEqual([{ id: "a", title: "Map Unit Polys", kind: "layer", sourceFile: "GIS Data - Zip",
+      geometry: "polygons", rows: 367 }]);
+  });
+  it("describes spatial and table parts, and nothing when there is no data", () => {
+    expect(describeData({ geometry: "polygons", rows: 367 })).toBe("polygons · 367 features");
+    expect(describeData({ geometry: "points", rows: 1 })).toBe("points · 1 feature");
+    expect(describeData({ geometry: "lines", rows: 12345 })).toBe("lines · 12,345 features");
+    expect(describeData({ table: true, rows: 41 })).toBe("table · 41 rows");
+    expect(describeData({ geometry: "mixed" })).toBe("mixed");
+    expect(describeData({ table: true })).toBe("");
+    expect(describeData({})).toBe("");
+    expect(describeData({ table: true, rows: NaN })).toBe("");
+    expect(describeData({ geometry: "points", rows: Infinity })).toBe("points");
+  });
+  it("carries a related table's row count on its join", () => {
+    const joins = relatedJoins({ assets: { t: { href: "https://x/t.parquet", roles: ["data", "related"], "table:row_count": 41,
+      "ugs:foreign_keys": [{ fields: ["a"], reference: { resource: "r", fields: ["b"] } }] } } });
+    expect(joins[0].rows).toBe(41);
   });
 });
 

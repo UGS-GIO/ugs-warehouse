@@ -1,6 +1,7 @@
 import type { ItemRef } from "@/catalog/browse";
+import { unitsHrefOf } from "@/map/identify";
 import type { ActiveLayer } from "@/map/map-model";
-import { cogRenderAsset, collectionHrefOf, defaultStyleUrl, idOf, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, zarrAsset } from "@/stac";
+import { cogRenderAsset, collectionHrefOf, defaultStyleUrl, idOf, parquetAsset, pmtilesLink, pubOfEntry, rasterTilesAsset, type StacDoc, zarrAsset } from "@/stac";
 import { cubeRenderRescale, cubeStepDims, cubeVariables, resolveSelection } from "@/stac/datacube";
 import { type CubePicks, pickedRescale, VAR } from "@/zarr/cube-picks";
 
@@ -22,9 +23,10 @@ export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveL
     };
   }
   const cog = cogRenderAsset(ref.data);
-  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox };
+  const identify = { unitsHref: unitsHrefOf(ref.data), pubTitle: pubOfEntry(ref.data)?.title };
+  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox, ...identify };
   const raster = rasterTilesAsset(ref.data);
-  if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
+  if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox, ...identify };
   const zarr = zarrAsset(ref.data);
   // No drawable variable → not a layer, rather than a row that can never render.
   const variables = Object.keys(cubeVariables(ref.data));

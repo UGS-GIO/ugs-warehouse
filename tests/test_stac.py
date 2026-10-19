@@ -10,13 +10,16 @@ from ugs_warehouse.pubs import sink_stac as pubs_sink
 from ugs_warehouse.pubs.sink_stac import collection_group
 
 
-def test_pub_items_author_a_topic_category():
-    """A UGS publication is our own product, so asserting its category is not a guess."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"}, [])
+def _publication(p, **kw):
+    """A publication's (collection, items), offline."""
+    with patch("ugs_warehouse.core.stac.prior_collection_field", return_value=None):
+        return pubs_sink.build_publication(p, [], **{"registered_dois": frozenset(), **kw})
 
-    assert item["properties"]["ugs:topic_category"] == "geoscientificInformation"
+
+def test_pub_collections_author_a_topic_category():
+    """A UGS publication is our own product, so asserting its category is not a guess."""
+    coll, _ = _publication({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"})
+    assert coll["ugs:topic_category"] == "geoscientificInformation"
 
 
 def test_collection_group_routes_md_external_and_ugs():
@@ -440,6 +443,65 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
         assert posixpath.normpath(posixpath.join(p, href)) in store, href
 
 
+def _pub_coll_doc(sid, **over):
+    doc = {"type": "Collection", "id": sid, "title": sid, "links": [],
+           "extent": {"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]},
+                      "temporal": {"interval": [["2020-01-01T00:00:00Z", None]]}}}
+    doc.update(over)
+    return doc
+
+
+def _pub_refresh_store(monkeypatch, docs):
+    import json
+
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    for sid, doc in docs.items():
+        store[f"{config.STAC_PREFIX}/ugs-publications/DS/{sid}/collection.json"] = json.dumps(doc).encode()
+    return store
+
+
+def test_index_defect_names_what_a_pub_collection_lacks():
+    assert stac._index_defect([]) == "not a JSON object (list)"
+    assert stac._index_defect("x") == "not a JSON object (str)"
+    assert stac._index_defect(_pub_coll_doc("DS-1", extent={})) == "no extent.spatial.bbox[0]"
+    assert stac._index_defect(_pub_coll_doc("DS-1", extent={"spatial": {"bbox": [[]]}})) \
+        == "no extent.spatial.bbox[0]"
+    assert stac._index_defect(_pub_coll_doc("DS-1")) is None
+
+
+@pytest.mark.parametrize("sid,bad,defect", [
+    ("DS-2", {"id": None}, "no id"),
+    ("DS-4", {"extent": {"temporal": {"interval": [["2020-01-01T00:00:00Z", None]]}}},
+     "no extent.spatial.bbox[0]"),
+    ("DS-3", {"extent": {"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]},
+                         "temporal": {"interval": [[]]}}}, "empty extent.temporal.interval"),
+])
+def test_refresh_reports_a_malformed_pub_collection_and_carries_on(monkeypatch, sid, bad, defect):
+    import json
+
+    store = _pub_refresh_store(monkeypatch, {"DS-1": _pub_coll_doc("DS-1"),
+                                             sid: _pub_coll_doc(sid, **bad)})
+    problems = stac.refresh_catalog()
+
+    assert len(problems) == 1
+    assert f"malformed collection.json: ugs-publications/DS/{sid}: {defect}" in problems[0]
+    p = config.STAC_PREFIX
+    series = json.loads(store[f"{p}/ugs-publications/DS/items.json"])
+    assert [e["id"] for e in series["items"]] == ["DS-1"]
+    root = json.loads(store[f"{p}/items.json"])
+    assert [e["id"] for e in root["items"]] == ["DS-1"]
+
+
+def test_strict_refresh_raises_after_writing_when_a_pub_collection_is_malformed(monkeypatch):
+    store = _pub_refresh_store(monkeypatch, {"DS-1": _pub_coll_doc("DS-1"),
+                                             "DS-2": _pub_coll_doc("DS-2", id="")})
+    with pytest.raises(RuntimeError, match="malformed collection.json: ugs-publications/DS/DS-2"):
+        stac.refresh_catalog(strict=True)
+    assert f"{config.STAC_PREFIX}/catalog.json" in store
+    assert f"{config.STAC_PREFIX}/ugs-publications/DS/items.json" in store
+
+
 def test_build_catalog_series_filter():
     from unittest.mock import patch
 
@@ -455,10 +517,14 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._read_vector_manifests", return_value=({}, {}, {})), \
+         patch("ugs_warehouse.pubs.vectors.units_objects", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication",
+               return_value=({"_collection_path": "ugs-publications/DS/DS-1"}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.ingest._published_items", return_value={}), \
          patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.write_collection"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
@@ -495,11 +561,15 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._read_vector_manifests", return_value=({}, {}, {})), \
+         patch("ugs_warehouse.pubs.vectors.units_objects", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication",
+               return_value=({"_collection_path": "ugs-publications/DS/DS-1"}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.ingest._published_items", return_value={}), \
          patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.write_collection"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -520,13 +590,22 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          assert "WARNING" in err and "edition detection skipped" in err and "footprints missing" in err
 
 
-def test_vector_manifests_by_sid_reads_the_authoritative_split():
-    """_vector_manifests_by_sid() must read pubs/vectors.py's per-series `_manifest.json` — the
+def test_the_reduced_vector_manifest_carries_a_built_geopackage_only():
+    from ugs_warehouse.pubs.ingest import _vector_manifest
+
+    made = {"bytes": 5, "checksum": "1220ab", "version": 1, "inputs": "x"}
+    assert _vector_manifest("M-1", {"layers": [], "geopackage": made})["geopackage"] == made
+    assert "geopackage" not in _vector_manifest("M-1", {"layers": [], "geopackage": {"version": 1}})
+    assert "geopackage" not in _vector_manifest("M-1", {"layers": []})
+
+
+def test_read_vector_manifests_reads_the_authoritative_split():
+    """_read_vector_manifests()[:2] must read pubs/vectors.py's per-series `_manifest.json`, the
     AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     manifest = {"spatial": ["geo__ContactsAndFaults"], "tables": ["geo__DescriptionOfMapUnits"]}
     paths = [
@@ -544,13 +623,134 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
 
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=get_bytes):
-        out = _vector_manifests_by_sid()
+        out, failed = _read_vector_manifests()[:2]
 
-    assert out["M-100"] == manifest  # keyed by uppercased series_id, matching the other discovery maps
+    # keyed by uppercased series_id, matching the other discovery maps
+    assert out["M-100"] == {**manifest, "empty": [], "columns": {}, "relationships": [], "layers": {}}
     assert "DS-2" not in out
+    assert "DS-2" in failed and "FileNotFoundError" in failed["DS-2"]
 
 
-def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
+def test_read_vector_manifests_carries_each_tables_recorded_columns():
+    """A manifest's per-layer `columns` (written by pubs/vectors.py) reach build_item, so a
+    companion table's asset gets `table:columns` instead of none."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
+
+    cols = [{"name": "MapUnit", "type": "string"}]
+    manifest = {"spatial": [], "tables": ["geo__DescriptionOfMapUnits"],
+                "layers": [{"label": "geo__DescriptionOfMapUnits", "spatial": False, "rows": 3,
+                            "columns": cols}]}
+    path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
+
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
+        out, failed = _read_vector_manifests()[:2]
+
+    assert out["M-100"]["columns"] == {"geo__DescriptionOfMapUnits": cols}
+
+
+def test_read_vector_manifests_carries_each_layers_rows_and_bbox():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
+
+    manifest = {"spatial": ["geo__Faults"], "tables": [],
+                "layers": [{"label": "geo__Faults", "spatial": True, "rows": 12,
+                            "columns": [{"name": "geometry", "type": "geometry"}],
+                            "geometry_types": ["LineString"], "bbox": [-112.0, 40.0, -111.0, 41.0],
+                            "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]"}]}
+    path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
+        out, failed = _read_vector_manifests()[:2]
+
+    assert out["M-100"]["layers"] == {"geo__Faults": {
+        "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
+        "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
+        "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None, "style": None,
+        # A manifest written before sources were recorded gets one from the label.
+        "source": "geo", "source_file": None}}
+
+
+def test_read_vector_manifests_carries_each_layers_source_file_and_rejects_a_malformed_one():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
+
+    file = {"key": "appendix_a_excel", "title": "Appendix A - Excel", "path": "t.xlsx"}
+    docs = {
+        "M-100": {"spatial": [], "tables": ["t"], "layers": [
+            {"label": "t", "spatial": False, "source_file": file}]},
+        "M-101": {"spatial": [], "tables": ["t"], "layers": [
+            {"label": "t", "spatial": False, "source_file": {"key": "k"}}]}}
+    paths = {f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json": doc for sid, doc in docs.items()}
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=list(paths)), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes",
+               side_effect=lambda p: json.dumps(paths[p]).encode()):
+        out, failed = _read_vector_manifests()[:2]
+
+    assert out["M-100"]["layers"]["t"]["source_file"] == file
+    assert "M-101" not in out and "malformed source_file" in failed["M-101"]
+
+
+def test_read_vector_manifests_carries_relationships_and_each_layers_source():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
+
+    rel = {"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
+           "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}
+    good = {"spatial": ["geo__Polys"], "tables": ["geo__DMU"], "relationships": [rel],
+            "layers": [{"label": "geo__Polys", "spatial": True, "kind": "layer", "source": "Geo"},
+                       {"label": "geo__DMU", "spatial": False}]}
+    bad = {**good, "relationships": [{**rel, "destination_cols": []}]}
+    no_how = {**good, "relationships": [{k: v for k, v in rel.items() if k != "detected_by"}]}
+    no_confidence = {**good, "relationships": [{k: v for k, v in rel.items() if k != "confidence"}]}
+    bodies = {f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(good).encode(),
+              f"{vectors.VECTORS_PREFIX}/M-101/_manifest.json": json.dumps(bad).encode(),
+              f"{vectors.VECTORS_PREFIX}/M-102/_manifest.json": json.dumps(no_how).encode(),
+              f"{vectors.VECTORS_PREFIX}/M-103/_manifest.json": json.dumps(no_confidence).encode()}
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=list(bodies)), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
+        out, failed = _read_vector_manifests()[:2]
+
+    assert out["M-100"]["relationships"] == [rel]
+    layers = out["M-100"]["layers"]
+    assert layers["geo__Polys"]["source"] == "Geo"
+    assert layers["geo__DMU"]["source"] == "geo"  # not recorded: from the label
+    # A recorded kind is not carried: build_publication derives it from what it publishes.
+    assert "kind" not in layers["geo__Polys"]
+    # A malformed relationship fails its publication rather than publishing a broken join.
+    assert "M-101" not in out and "malformed relationship" in failed["M-101"]
+    # Without `detected_by` an inferred join would publish as declared; inferred needs a confidence.
+    assert {"M-102", "M-103"} <= set(failed) and not {"M-102", "M-103"} & set(out)
+
+
+def test_read_vector_manifests_carries_a_layers_pmtiles_only_when_built():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
+
+    manifest = {"spatial": ["a", "b"], "tables": [],
+                "layers": [{"label": "a", "spatial": True, "rows": 1, "pmtiles": True, "pmtiles_layer": "a"},
+                           {"label": "b", "spatial": True, "rows": 1, "pmtiles_layer": "b"}]}
+    path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
+        out, _ = _read_vector_manifests()[:2]
+
+    assert out["M-100"]["layers"]["a"]["pmtiles_layer"] == "a"
+    assert out["M-100"]["layers"]["b"]["pmtiles_layer"] is None
+
+
+def test_read_vector_manifests_skips_a_non_object_manifest(capsys):
     """A manifest that is valid JSON but not an object (`null`, a list, a bare string — a partial
     or corrupt write) must not crash discovery for every other pub. `.get()` on a non-dict raises
     AttributeError; that has to land inside the same try/except as the read, or one bad manifest
@@ -562,7 +762,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     good = {"spatial": ["geo__ContactsAndFaults"], "tables": []}
     bad_path = f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json"
@@ -574,57 +774,216 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
 
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
-        out = _vector_manifests_by_sid()  # must return, not raise
+        out, failed = _read_vector_manifests()[:2]  # must return, not raise
 
-    assert out["M-100"] == good  # unaffected by the sibling's bad manifest
-    assert "DS-9" not in out  # skipped, not crashed on
-    assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
+    assert out["M-100"] == {**good, "empty": [], "columns": {}, "relationships": [],
+                            "layers": {}}  # unaffected by the sibling's bad manifest
+    assert "DS-9" not in out  # not crashed on
+    assert bad_path in failed["DS-9"]  # reported to the caller
+    assert bad_path in capsys.readouterr().err  # and named on stderr
 
 
-def test_build_catalog_wires_vector_layers_and_companion_tables():
-    """ALL-5913 task 3: build_catalog must discover each pub's extracted vector layers + companion
-    tables (per pubs/vectors.py's manifest) and pass them into build_item — otherwise the assets
-    task 2 wired up in build_item never actually get attached to a real item."""
+def _build_catalog_patches(stack, manifests, pubs, written_items, written_colls, failed=None):
     from unittest.mock import patch
+
+    for target, kw in [
+        ("ugs_warehouse.pubs.source.read_pubs", {"return_value": pubs}),
+        ("ugs_warehouse.pubs.source.read_attachments", {"return_value": []}),
+        ("ugs_warehouse.pubs.ingest._ids_with_suffix", {"return_value": set()}),
+        ("ugs_warehouse.pubs.ingest._contents_by_sid", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._threed_classes_by_sid", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._overrides_by_sid", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._build_search_corpus", {}),
+        ("ugs_warehouse.pubs.ingest._unit_ids", {"return_value": {"DS-8"}}),
+        ("ugs_warehouse.pubs.ingest._mirrored_files", {"return_value": set()}),
+        ("ugs_warehouse.pubs.ingest._cog_headers", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._read_vector_manifests", {"return_value": (manifests, failed or {}, {})}),
+        ("ugs_warehouse.pubs.vectors.units_objects", {"return_value": {}}),
+        ("ugs_warehouse.pubs.editions.footprint_rows", {"return_value": []}),
+        ("ugs_warehouse.core.stac.prior_collection_field", {"return_value": None}),
+        ("ugs_warehouse.core.stac.prior_property", {"return_value": None}),
+        ("ugs_warehouse.core.stac.attach_renders", {}),
+        ("ugs_warehouse.core.styles.warm", {}),
+        ("ugs_warehouse.core.stac.write_item", {"side_effect": written_items.append}),
+        ("ugs_warehouse.core.stac.write_collection",
+         {"side_effect": lambda c, children: written_colls.append((c, children))}),
+        ("ugs_warehouse.core.stac.refresh_catalog", {}),
+    ]:
+        stack.enter_context(patch(target, **kw))
+
+
+def test_build_catalog_writes_a_collection_and_items_per_publication():
+    from contextlib import ExitStack
 
     from ugs_warehouse.pubs.ingest import build_catalog
 
-    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"],
-                          "tables": ["geo__DescriptionOfMapUnits"]}}
+    cols = [{"name": "MapUnit", "type": "string"}]
+    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults", "units"], "tables": ["geo__DescriptionOfMapUnits"],
+                          "columns": {"geo__DescriptionOfMapUnits": cols},
+                          "layers": {"geo__ContactsAndFaults": {"rows": 5, "bbox": [-112.0, 40.0, -111.0, 41.0],
+                                                                "proj_code": "EPSG:26912"}}}}
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, manifests, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}],
+                               written_items, written_colls)
+        assert build_catalog(skip_refresh=True) == 2
 
-    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
-         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
-         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._threed_classes_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
-         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
-         patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
-         patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.styles.warm"), \
-         patch("ugs_warehouse.core.stac.write_item"), \
-         patch("ugs_warehouse.core.stac.refresh_catalog"):
+    colls = {c["id"]: n for c, n in written_colls}
+    assert colls == {"DS-8": 4, "OFR-12": 0}  # OFR-12 has no data: a collection with no items
+    by_id = {it["id"]: it for it in written_items}
+    assert set(by_id) == {"DS-8__geo__ContactsAndFaults", "DS-8__geo__DescriptionOfMapUnits",
+                          "DS-8_units", "DS-8__units"}  # a `units` layer never meets the units item
+    assert by_id["DS-8__geo__ContactsAndFaults"]["properties"]["proj:code"] == "EPSG:26912"
+    assert by_id["DS-8__geo__DescriptionOfMapUnits"]["assets"]["data"]["table:columns"] == cols
 
-         mock_read.return_value = [
-             {"series_id": "DS-8"},
-             {"series_id": "OFR-12"},
-         ]
 
-         count = build_catalog(skip_refresh=True)
+def test_build_catalog_stamps_file_meta_on_the_collection_and_its_items():
+    from contextlib import ExitStack
+    from unittest.mock import patch
 
-         assert count == 2
-         by_sid = {c.args[0]["series_id"]: c.kwargs for c in mock_build.call_args_list}
-         assert by_sid["DS-8"]["vector_layers"] == ["geo__ContactsAndFaults"]
-         assert by_sid["DS-8"]["companion_tables"] == [
-             {"label": "geo__DescriptionOfMapUnits", "columns": None}]
-         # a series absent from the manifest map still gets empty lists, never None/KeyError.
-         assert by_sid["OFR-12"]["vector_layers"] == []
-         assert by_sid["OFR-12"]["companion_tables"] == []
+    from ugs_warehouse.core import gcs
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    manifests = {"DS-8": {"spatial": ["geo__Faults"], "tables": [], "layers": {}}}
+    cover, layer = identity.pub_cover_object("DS-8"), f"{vectors.VECTORS_PREFIX}/DS-8/geo__Faults.parquet"
+    index = {cover: gcs.FileMeta(4, "1220c0"), layer: gcs.FileMeta(6, "1220ff")}
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, manifests, [{"series_id": "DS-8"}], written_items, written_colls)
+        stack.enter_context(patch("ugs_warehouse.pubs.ingest._image_ids", return_value=(set(), {"DS-8"})))
+        stack.enter_context(patch("ugs_warehouse.pubs.ingest._file_meta_index", return_value=index))
+        assert build_catalog(skip_refresh=True) == 1
+
+    (coll, _), = written_colls
+    assert coll["assets"]["thumbnail"]["file:checksum"] == "1220c0"
+    assert stac.FILE_EXT in coll["stac_extensions"]
+    data = next(it for it in written_items if it["id"] == "DS-8__geo__Faults")["assets"]["data"]
+    assert (data["file:size"], data["file:checksum"]) == (6, "1220ff")
+
+
+def test_a_publication_with_an_unreadable_manifest_fails_and_keeps_its_items(monkeypatch):
+    from contextlib import ExitStack
+
+    from ugs_warehouse.core import config
+    from ugs_warehouse.pubs import ingest
+
+    base = f"{config.STAC_PREFIX}/ugs-publications/DS/DS-8"
+    live = {f"{base}/collection.json", f"{base}/DS-8__geo__Faults/DS-8__geo__Faults.json",
+            f"{base}/DS-8__geo__Units/DS-8__geo__Units.json"}
+    deleted: list[str] = []
+    monkeypatch.setattr(ingest.gcs, "delete", lambda p: (deleted.append(p), live.discard(p)))
+    monkeypatch.setattr(ingest.gcs, "list_paths", lambda root: sorted(p for p in live if p.startswith(root)))
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, {}, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}],
+                               written_items, written_colls,
+                               failed={"DS-8": "unreadable vector manifest x: ValueError: bad"})
+        with pytest.raises(RuntimeError, match="DS-8"):
+            ingest.build_catalog(skip_refresh=True)
+
+    assert deleted == [] and len(live) == 3  # nothing pruned
+    assert [c["id"] for c, _ in written_colls] == ["OFR-12"]  # DS-8 wrote nothing
+    assert not any(it["id"].startswith("DS-8") for it in written_items)
+
+
+def test_build_catalog_keeps_writing_after_one_publication_fails(capsys):
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import sink_stac
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    real = sink_stac.build_publication
+
+    def flaky(p, *a, **kw):
+        if p["series_id"] == "DS-8":
+            raise ValueError("boom")
+        return real(p, *a, **kw)
+
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, {}, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}],
+                               written_items, written_colls)
+        stack.enter_context(patch("ugs_warehouse.pubs.sink_stac.build_publication", side_effect=flaky))
+        with pytest.raises(RuntimeError, match="DS-8"):
+            build_catalog(skip_refresh=True)
+
+    assert [c["id"] for c, _ in written_colls] == ["OFR-12"]  # the healthy pub still landed
+    err = capsys.readouterr().err
+    assert "FAILED DS-8" in err and "boom" in err
+
+
+def test_build_catalog_prints_failed_pubs_before_the_refresh_reports_their_orphans(capsys):
+    """DS-8's items land but its collection write fails, so the strict refresh reports an orphan;
+    the FAILED line with the cause still prints, and the one error names both."""
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    from ugs_warehouse.core import stac as core_stac
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    real_refresh, real_write_item, real_write_coll = (
+        core_stac.refresh_catalog, core_stac.write_item, core_stac.write_collection)
+
+    def write_coll(c, children):
+        if c["id"] == "DS-8":
+            raise OSError("collection write refused")
+        return real_write_coll(c, children=children)
+
+    manifests = {"DS-8": {"spatial": ["geo__Faults"], "tables": [], "layers": {}}}
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, manifests, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}], [], [])
+        stack.enter_context(patch("ugs_warehouse.core.stac.write_item", real_write_item))
+        stack.enter_context(patch("ugs_warehouse.core.stac.write_collection", side_effect=write_coll))
+        stack.enter_context(patch("ugs_warehouse.core.stac.refresh_catalog", real_refresh))
+        with pytest.raises(RuntimeError) as exc:
+            build_catalog()
+
+    err = capsys.readouterr().err
+    assert "FAILED DS-8: OSError: collection write refused" in err
+    assert "DS-8" in str(exc.value)
+    assert "publication items with no collection.json: ugs-publications/DS/DS-8" in str(exc.value)
+
+
+def _catalog_run(pubs):
+    from contextlib import ExitStack
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    items, colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, {}, pubs, items, colls)
+        try:
+            n, err = build_catalog(skip_refresh=True), None
+        except RuntimeError as e:
+            n, err = None, e
+    return n, err, [c["id"] for c, _ in colls]
+
+
+def test_build_catalog_gives_a_doi_only_to_the_registered_publications():
+    from contextlib import ExitStack
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    items, colls = [], []
+    with ExitStack() as stack:  # the Crossref stub (conftest) lists only OFR-784DM
+        _build_catalog_patches(stack, {}, [{"series_id": "OFR-784DM"}, {"series_id": "MD-71"}], items, colls)
+        build_catalog(skip_refresh=True)
+    by_id = {c["id"]: c for c, _ in colls}
+    assert by_id["OFR-784DM"]["sci:doi"] == "10.34191/OFR-784DM"
+    assert "sci:doi" not in by_id["MD-71"]
+
+
+def test_build_catalog_writes_a_row_repeated_verbatim_once():
+    n, err, written = _catalog_run([{"series_id": "C-1"}, {"series_id": "C-1"}])
+    assert err is None and n == 1 and written == ["C-1"]
+
+
+def test_build_catalog_skips_only_the_pubs_that_share_a_collection_path_and_fails_the_run():
+    n, err, written = _catalog_run([{"series_id": "A B"}, {"series_id": "A-B"}, {"series_id": "C-1"}])
+    assert written == ["C-1"]  # the others still land
+    assert n is None and "2 publication(s) failed: ['A B', 'A-B']" in str(err)
 
 
 def test_list_series(capsys):
@@ -667,151 +1026,146 @@ def test_collection_doc_titles_its_item_links():
 def test_pub_keywords_are_a_list():
     """`keywords` is a list in STAC. The source hands over one `;`-separated blob."""
     raw = "Geology; Summit County; Maps\nGeology; Tooele, Utah; Maps"
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
-                                     "keywords": raw}, [])
+    coll, _ = _publication({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS", "keywords": raw})
 
     # Deduped, and a comma inside a heading stays inside it.
-    assert item["properties"]["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
+    assert coll["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
 
 
-def test_pub_item_omits_the_fields_the_source_left_empty():
-    """STAC requires a non-empty description, and an empty string says nothing an absent key does
-    not. A pub with no citation and no subjects must carry neither field."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
-                                     "keywords": "  ; \n", "full_citation": ""}, [])
+def test_pub_collection_omits_the_fields_the_source_left_empty():
+    """An empty string says nothing an absent key does not. A pub with no subjects must carry no
+    keywords, and one with no citation falls back to its title for the required description."""
+    coll, _ = _publication({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
+                            "keywords": "  ; \n", "full_citation": ""})
 
-    props = item["properties"]
-    for absent in ("description", "keywords", "ugs:scale", "ugs:author"):
-        assert absent not in props, absent
-    assert props["ugs:series"] == "DS"   # a value the source did give still lands
+    for absent in ("keywords", "ugs:scale", "ugs:author"):
+        assert absent not in coll, absent
+    assert coll["description"] == "Test Pub"
+    assert coll["ugs:series"] == "DS"   # a value the source did give still lands
 
 
-def test_pub_item_emits_edition_version_and_supersession_links():
+def test_pub_collection_emits_edition_version_and_supersession_links():
     edition = {
         "version": "2005", "deprecated": True,
         "predecessor_href": None,
         "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
-                          "ugs-publications/M/M-233/M-233.json",
+                          "ugs-publications/M/M-233/collection.json",
     }
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-159", "pub_name": "Old Ed", "series": "M", "pub_year": "1980"},
-            [], edition=edition,
-        )
-    assert item["properties"]["version"] == "2005"
-    assert item["properties"]["deprecated"] is True
-    assert stac.VERSION_EXT in item["stac_extensions"]
-    succ = [lnk for lnk in item["links"] if lnk["rel"] == "successor-version"]
-    assert succ and succ[0]["href"].endswith("/M-233/M-233.json")
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "predecessor-version"]
+    coll, _ = _publication({"series_id": "M-159", "pub_name": "Old Ed", "series": "M", "pub_year": "1980"},
+                           edition=edition)
+    assert coll["version"] == "2005"
+    assert coll["deprecated"] is True
+    assert stac.VERSION_EXT in coll["stac_extensions"]
+    succ = [lnk for lnk in coll["links"] if lnk["rel"] == "successor-version"]
+    assert succ and succ[0]["href"].endswith("/M-233/collection.json")
+    assert succ[0]["type"] == "application/json"
+    assert not [lnk for lnk in coll["links"] if lnk["rel"] == "predecessor-version"]
 
 
 def _build(p, **kw):
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        return pubs_sink.build_item(p, [], **kw)
+    return _publication(p, **kw)
+
+
+def _plate_links(coll, items):
+    """The plate's links: on its Item, or on the Collection when the plate is the only data file."""
+    plate = next((it for it in items if it["id"].endswith("_plate")), None)
+    return (plate or coll)["links"]
 
 
 def test_cog_map_links_to_its_portal_layer_mosaic():
     # The tier is the mosaic's identity, not pub metadata: a COG map carries no `ugs:scale_tier`,
-    # only its raw `ugs:scale`, and reaches its tier via a `rel:related` link to the mosaic.
-    item = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k")
-    assert "ugs:scale_tier" not in item["properties"]
-    assert item["properties"]["ugs:scale"] == "1:24,000"   # raw scale stays as per-item metadata
-    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    # only its raw `ugs:scale`, and reaches its tier via a `rel:related` link from its plate Item.
+    coll, items = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"},
+                         has_cog=True, mosaic_tier="24k")
+    assert "ugs:scale_tier" not in coll
+    assert coll["ugs:scale"] == "1:24,000"   # raw scale stays as per-publication metadata
+    rel = [lnk for lnk in _plate_links(coll, items) if lnk["rel"] == "related"]
     assert len(rel) == 1
     assert rel[0]["href"].endswith("/ugs-geologic-maps/geologic-maps-24k/geologic-maps-24k.json")
 
     # A 1:62,500 30' x 60' map is in the intermediate layer, whatever its scale says.
-    item = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
-                  has_cog=True, mosaic_tier="100k")
-    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    coll, items = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
+                         has_cog=True, mosaic_tier="100k")
+    rel = [lnk for lnk in _plate_links(coll, items) if lnk["rel"] == "related"]
     assert len(rel) == 1 and rel[0]["href"].endswith("/geologic-maps-100k/geologic-maps-100k.json")
     assert "intermediate-scale" in rel[0]["title"]
 
     # COG map in no tiered layer (irregular, or no footprint): no mosaic, so no member link.
-    item = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
-                  has_cog=True, mosaic_tier=None)
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    coll, items = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
+                         has_cog=True, mosaic_tier=None)
+    assert not [lnk for lnk in _plate_links(coll, items) if lnk["rel"] == "related"]
 
-    # non-COG pub: not stitched into any mosaic, so no member link.
-    item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
-                  has_cog=False, mosaic_tier="500k")
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    # non-COG pub: no plate Item, so nothing to stitch into a mosaic.
+    _, items = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
+                      has_cog=False, mosaic_tier="500k")
+    assert not items
 
 
 def test_deprecated_edition_drops_the_mosaic_related_link():
     """A deprecated edition (superseded per the quad edition graph, e.g. GQ-852 superseded by
     M-296DM) must NOT carry a `related` link into the mosaic — the `--editions current` default
     drops superseded editions before stitching, so the link would otherwise claim membership in a
-    mosaic whose own `derived_from` omits it (catalog self-contradiction, ALL-5954 final review)."""
-    item = _build({"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k", edition={"deprecated": True, "version": "1971"})
-    assert not [lnk for lnk in item["links"]
-               if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+    mosaic whose own `derived_from` omits it (catalog self-contradiction)."""
+    def mosaic_links(**kw):
+        coll, items = _build(**kw)
+        return [lnk for lnk in _plate_links(coll, items)
+                if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+
+    assert not mosaic_links(p={"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
+                            has_cog=True, mosaic_tier="24k",
+                            edition={"deprecated": True, "version": "1971"})
 
     # no edition info at all -> not known to be superseded -> still current -> keeps the link.
-    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k", edition=None)
-    rel = [lnk for lnk in item["links"]
-          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
-    assert len(rel) == 1
+    assert len(mosaic_links(p={"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                            has_cog=True, mosaic_tier="24k", edition=None)) == 1
 
     # explicitly current (not deprecated) -> keeps the link too.
-    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k", edition={"deprecated": False, "version": "2022"})
-    rel = [lnk for lnk in item["links"]
-          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
-    assert len(rel) == 1
+    assert len(mosaic_links(p={"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                            has_cog=True, mosaic_tier="24k",
+                            edition={"deprecated": False, "version": "2022"})) == 1
 
 
 def test_deprecated_edition_emits_a_latest_version_link():
-    """ALL-5954 Clinton review, FIX 3: a deprecated item must link forward to the CURRENT edition
-    (not just its immediate successor) via the Versioning Indicators `latest-version` rel — so a
-    reader landing on an old edition can jump straight to the newest one."""
+    """A deprecated publication must link forward to the CURRENT edition (not just its immediate
+    successor) via the Versioning Indicators `latest-version` rel, so a reader landing on an old
+    edition can jump straight to the newest one."""
     edition = {
         "version": "1971", "deprecated": True,
         "predecessor_href": None,
         "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
-                          "ugs-publications/OFR/OFR-677/OFR-677.json",
+                          "ugs-publications/OFR/OFR-677/collection.json",
         "latest_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
-                       "ugs-publications/M/M-296DM/M-296DM.json",
+                       "ugs-publications/M/M-296DM/collection.json",
     }
-    item = _build({"series_id": "GQ-852", "pub_name": "Old Ed", "series": "GQ", "pub_year": "1971"},
-                  edition=edition)
-    latest = [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+    coll, _ = _build({"series_id": "GQ-852", "pub_name": "Old Ed", "series": "GQ", "pub_year": "1971"},
+                     edition=edition)
+    latest = [lnk for lnk in coll["links"] if lnk["rel"] == "latest-version"]
     assert len(latest) == 1
-    assert latest[0]["href"].endswith("/M-296DM/M-296DM.json")
+    assert latest[0]["href"].endswith("/M-296DM/collection.json")
+    assert latest[0]["type"] == "application/json"
 
     # the current (latest) edition itself carries no latest-version link (no self-link).
-    item = _build({"series_id": "M-296DM", "pub_name": "New Ed", "series": "M", "pub_year": "2022"},
-                  edition={"version": "2022", "deprecated": False, "predecessor_href": None,
-                          "successor_href": None, "latest_href": None})
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+    coll, _ = _build({"series_id": "M-296DM", "pub_name": "New Ed", "series": "M", "pub_year": "2022"},
+                     edition={"version": "2022", "deprecated": False, "predecessor_href": None,
+                              "successor_href": None, "latest_href": None})
+    assert not [lnk for lnk in coll["links"] if lnk["rel"] == "latest-version"]
 
 
-def test_pub_item_id_is_safe_in_a_path():
-    """The id is a directory name and the tail of every link to the item, so a space in it made
-    the item's own self link, its collection's item link and the ISO href unresolvable."""
+def test_pub_collection_id_is_safe_in_a_path():
+    """The id is a directory name and the tail of every link to the collection, so a space in it
+    made the collection's own self link, and its item links unresolvable."""
     assert pubs_sink.item_id_for("Geologic map of Utah") == "Geologic-map-of-Utah"
     assert pubs_sink.item_id_for("557.92 UT1CO") == "557.92-UT1CO"
     # Already safe ids are untouched, trailing punctuation included: `~` and `-` are unreserved.
     assert pubs_sink.item_id_for("OF-70-234~2") == "OF-70-234~2"
     assert pubs_sink.item_id_for("PI-") == "PI-"
 
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "Geologic map of Utah", "series": "GEOLOGIC"}, [])
+    coll, _ = _publication({"series_id": "Geologic map of Utah", "series": "GEOLOGIC"})
 
-    assert item["id"] == "Geologic-map-of-Utah"
-    assert item["properties"]["ugs:series_id"] == "Geologic map of Utah"  # the source string survives
-    assert all(" " not in lk["href"] for lk in item["links"])
+    assert coll["id"] == "Geologic-map-of-Utah"
+    assert coll["ugs:series_id"] == "Geologic map of Utah"  # the source string survives
+    assert coll["_collection_path"].endswith("/Geologic-map-of-Utah")
+    assert all(" " not in lk["href"] for lk in coll["links"])
 
 
 def test_pub_href_drops_undefined_and_upgrades_ugspub_to_https():
@@ -852,78 +1206,35 @@ def test_cog_assets_keep_the_cloud_optimized_media_type():
     """`.tif` maps to image/tiff for the publisher's scans. A COG we produced sets its type on the
     asset directly, so the mapping must not reach it — the profile parameter is what a client reads
     to know it can range-request the file."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "M-100", "series": "M"}, [], has_cog=True)
+    _, items = _publication({"series_id": "M-100", "series": "M"}, has_cog=True, has_units=True)
 
-    assert item["assets"]["cog"]["type"] == pubs_sink.COG_MIME
-    assert "cloud-optimized" in item["assets"]["cog"]["type"]
-
-
-def test_pub_item_exposes_all_vector_layers_and_companion_tables():
-    """pubs/vectors.py extracts every GDB layer and GeMS companion table to Parquet on GCS —
-    ALL-5913 task 2 wants each one surfaced as its own STAC asset, not just the single hardcoded
-    `units` layer, so a client can discover and fetch any extracted layer/table by name."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-100", "series": "M"}, [],
-            vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
-            companion_tables=[{"label": "gems__DescriptionOfMapUnits",
-                               "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
-        )
-    a = item["assets"]
-    assert a["gems__ContactsAndFaults"]["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
-    assert a["gems__ContactsAndFaults"]["type"] == pubs_sink.PARQUET_MIME
-    assert a["gems__ContactsAndFaults"]["roles"] == ["data"]
-    assert "gems__MapUnitPolys" in a  # the 2nd vector_layers entry produced an asset too
-    assert a["gems__DescriptionOfMapUnits"]["href"].endswith(
-        "geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
-    assert a["gems__DescriptionOfMapUnits"]["type"] == pubs_sink.PARQUET_MIME
-    assert a["gems__DescriptionOfMapUnits"]["roles"] == ["data"]
-    assert a["gems__DescriptionOfMapUnits"]["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
-    assert pubs_sink.stac.TABLE_EXT in item["stac_extensions"]
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert plate["assets"]["cog"]["type"] == pubs_sink.COG_MIME
+    assert "cloud-optimized" in plate["assets"]["cog"]["type"]
 
 
-def test_vector_layer_label_colliding_with_a_reserved_key_keeps_both_assets(capsys):
-    """ALL-5913 final-review must-fix: a bare shapefile can produce a label equal to a reserved
-    asset key — `units.shp` -> `units` would otherwise silently overwrite the canonical `units`
-    GeoParquet asset (`assets[label] = ...` clobbers in place, no trace). Both must survive under
-    distinct keys, and the collision must be visible on stderr rather than a link just vanishing.
-    """
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-100", "series": "M"}, [],
-            has_units=True, vector_layers=["units"],
-        )
-    a = item["assets"]
-    # the canonical units GeoParquet asset is untouched
-    assert a["units"]["href"].endswith("geolmap/units/M-100/M-100.units.parquet")
-    assert a["units"]["title"] == "Geologic unit polygons (GeoParquet)"
-    # the extracted vector layer survives under a distinct key instead of being dropped
-    assert a["vector_units"]["href"].endswith("geolmap/vectors/M-100/units.parquet")
-    assert a["vector_units"]["type"] == pubs_sink.PARQUET_MIME
-    err = capsys.readouterr().err
-    assert "units" in err  # the collision was named on stderr, not silent
-
-
-def test_duplicate_vector_layer_labels_keep_both_assets(capsys):
-    """Two shapefiles sharing a basename (different sub-folders of the same GIS bundle) produce
-    the same extracted label twice. The second must not clobber the first — both assets survive
-    under distinct keys, even though (a vectors.py-side concern, out of scope here) they currently
-    point at the same object path."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-100", "series": "M"}, [],
-            vector_layers=["roads", "roads"],
-        )
-    a = item["assets"]
-    assert a["roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
-    assert a["vector_roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
-    err = capsys.readouterr().err
-    assert "roads" in err
+def test_pub_exposes_all_vector_layers_and_companion_tables_as_items():
+    """pubs/vectors.py extracts every GDB layer and GeMS companion table to Parquet on GCS; each
+    one is its own Item with a `data` asset, so a client can discover and fetch any of them."""
+    _, items = _publication(
+        {"series_id": "M-100", "series": "M"},
+        vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
+        companion_tables=[{"label": "gems__DescriptionOfMapUnits",
+                           "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
+    )
+    by_id = {it["id"]: it for it in items}
+    faults = by_id["M-100__gems__ContactsAndFaults"]["assets"]["data"]
+    assert faults["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
+    assert faults["type"] == pubs_sink.PARQUET_MIME
+    assert faults["roles"] == ["data"]
+    assert "M-100__gems__MapUnitPolys" in by_id  # the 2nd vector_layers entry produced an item too
+    dmu_item = by_id["M-100__gems__DescriptionOfMapUnits"]
+    dmu = dmu_item["assets"]["data"]
+    assert dmu["href"].endswith("geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
+    assert dmu["type"] == pubs_sink.PARQUET_MIME
+    assert dmu["roles"] == ["data"]
+    assert dmu["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
+    assert pubs_sink.stac.TABLE_EXT in dmu_item["stac_extensions"]
 
 
 def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):
@@ -950,25 +1261,6 @@ def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):
     assert coll["assets"]["thumbnail"]["roles"] == ["thumbnail"]
     # Named for the scene it came from, so nobody mistakes it for a rendering of the whole series.
     assert coll["assets"]["thumbnail"]["title"] == "Preview: Map fort_douglas_2024"
-
-
-def test_a_publication_series_borrows_its_newest_cover(monkeypatch):
-    """A series collection holds publications of one kind, so its newest cover can stand for it.
-    It gets no item mirror: that is for raster scenes."""
-    store = _mem_gcs(monkeypatch)
-    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
-    for iid, dt in (("M-100", "2001-01-01T00:00:00Z"), ("M-200", "2011-01-01T00:00:00Z")):
-        stac.write_item(stac.build_item(
-            item_id=iid, collection="M", collection_path="ugs-publications/M",
-            geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso=dt,
-            properties={"title": f"Map {iid}"},
-            assets={"thumbnail": {"href": f"https://x/{iid}.webp", "type": "image/webp",
-                                  "roles": ["thumbnail"]}}))
-    stac.refresh_catalog()
-
-    coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-publications/M/collection.json"])
-    assert coll["assets"]["thumbnail"] == {"href": "https://x/M-200.webp", "type": "image/webp",
-                                           "roles": ["thumbnail"], "title": "Preview: Map M-200"}
 
 
 def test_a_serving_topic_collection_borrows_no_thumbnail(monkeypatch):
@@ -1076,7 +1368,7 @@ def test_every_node_gets_a_readme_and_agents_file(monkeypatch):
     store = _mem_gcs(monkeypatch)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
     stac.write_item(stac.build_item(
-        item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+        item_id="DS-8", collection="DS", collection_path="ugs-rasters/DS",
         geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
         datetime_iso="2026-01-01T00:00:00Z", properties={"title": "A publication"},
         assets={"data": {"href": "https://x/a.parquet", "type": config.PARQUET_MIME,
@@ -1084,11 +1376,11 @@ def test_every_node_gets_a_readme_and_agents_file(monkeypatch):
     stac.refresh_catalog()
     p = config.STAC_PREFIX
 
-    for node in ("", "/ugs-publications", "/ugs-publications/DS"):
+    for node in ("", "/ugs-rasters", "/ugs-rasters/DS"):
         assert f"{p}{node}/README.md" in store, node
         assert f"{p}{node}/AGENTS.md" in store, node
 
-    coll = json.loads(store[f"{p}/ugs-publications/DS/collection.json"])
+    coll = json.loads(store[f"{p}/ugs-rasters/DS/collection.json"])
     rels = {lk["rel"]: lk for lk in coll["links"]}
     assert rels["describedby"]["href"] == "./README.md"
     assert rels["describedby"]["type"] == "text/markdown"
@@ -1152,6 +1444,74 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
     elsewhere = {"data": {"href": "https://example.com/x.parquet", "type": config.PARQUET_MIME}}
     assert feature_service.collection({"id": "a", "assets": elsewhere}) is None
     assert feature_service.collection({"id": "b", "assets": {}}) is None
+
+
+# --- proj and table extensions follow what the properties carry ----------------------------------
+
+def _item(properties):
+    return stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
+                           datetime_iso="2026-01-01T00:00:00Z", properties=properties, assets={})
+
+
+def _collection(fields):
+    return stac.build_collection(collection_id="c", collection_path="g/S/c", title="C", description="d",
+                                 extent={}, assets={}, item_titles={}, fields=fields)
+
+
+def test_an_item_declares_the_projection_extension_from_its_proj_properties():
+    assert stac.PROJ_EXT in _item({"proj:code": "EPSG:26912"})["stac_extensions"]
+    assert stac.PROJ_EXT in _item({"proj:wkt2": "PROJCRS[]"})["stac_extensions"]
+    assert "stac_extensions" not in _item({"title": "t"})
+
+
+def test_an_item_declares_the_table_extension_from_its_table_properties():
+    assert stac.TABLE_EXT in _item({"table:row_count": 3})["stac_extensions"]
+
+
+def test_an_item_declares_proj_and_table_from_what_its_assets_carry():
+    item = stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
+                           datetime_iso="2026-01-01T00:00:00Z", properties={},
+                           assets={"cog": {"href": "h", "proj:code": "EPSG:26912"},
+                                   "data": {"href": "d", "table:columns": [{"name": "a"}]}})
+    assert stac.PROJ_EXT in item["stac_extensions"] and stac.TABLE_EXT in item["stac_extensions"]
+
+
+def test_a_caller_declared_extension_is_not_repeated():
+    item = stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
+                           datetime_iso="2026-01-01T00:00:00Z", properties={"proj:code": "EPSG:4326"},
+                           assets={}, stac_extensions=[stac.PROJ_EXT], proj_epsg=4326)
+    assert item["stac_extensions"] == [stac.PROJ_EXT]
+
+
+def test_a_collection_declares_proj_and_table_extensions_from_its_fields():
+    exts = _collection({"proj:code": "EPSG:26912", "table:row_count": 3})["stac_extensions"]
+    assert stac.PROJ_EXT in exts and stac.TABLE_EXT in exts
+    exts = _collection({"title": "t"})["stac_extensions"]
+    assert stac.PROJ_EXT not in exts and stac.TABLE_EXT not in exts
+
+
+def test_dedupe_of_feed_rows_does_not_compare_every_pair():
+    from ugs_warehouse.pubs.ingest import _split_shared_collection_paths
+
+    compared = []
+
+    class Row(dict):
+        def __eq__(self, other):
+            compared.append(1)
+            return dict.__eq__(self, other)
+
+        __hash__ = None
+
+    rows = [Row(series_id=f"OFR-{i}") for i in range(200)]
+    kept, errors = _split_shared_collection_paths(rows)
+    assert len(kept) == 200 and errors == [] and len(compared) < 200
+
+
+def test_build_publication_requires_registered_dois():
+    from ugs_warehouse.pubs import sink_stac
+
+    with pytest.raises(TypeError, match="registered_dois"):
+        sink_stac.build_publication({"series_id": "OFR-1"}, [])
 
 
 @pytest.mark.parametrize("stac, expected", [("warehouse/stac", "warehouse/featureserv"),

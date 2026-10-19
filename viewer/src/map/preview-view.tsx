@@ -3,14 +3,14 @@
 // map portals in as usual — this is just a slim bar (title · Back · View on map) over the same Preview
 // the item-detail page and the Discover drawer render. Reached from the drawer's "Explore" action.
 import { Preview } from "@/catalog/asset-viewer";
-import type { StacDoc } from "@/stac";
+import { hasFootprint, type StacDoc } from "@/stac";
 
 export function PreviewView({ item, loading, onBack, onMap }: {
   item?: StacDoc; loading: boolean; onBack: () => void; onMap: () => void;
 }) {
   const p = item?.properties ?? {};
   const title = String(p.title ?? item?.id ?? "");
-  const hasGeom = Boolean(item?.geometry || item?.bbox);
+  const hasGeom = hasFootprint(item);
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-3 py-2">

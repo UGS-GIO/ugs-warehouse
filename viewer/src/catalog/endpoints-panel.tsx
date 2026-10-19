@@ -2,9 +2,9 @@
 // links (live services: OGC API Features, ArcGIS FeatureServer).
 import { useEffect, useRef, useState } from "react";
 
-import { serviceUrlOf } from "./catalog";
+import { featureEndpoints } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, featureServerUrl, isOverview, parquetAsset, featuresCollectionUrl, FEATURES_BASE, rendersOf, type StacDoc } from "@/stac";
+import { assetKind, featureServerUrl, FEATURES_BASE, isOverview, isServingTopic, parquetAsset, rendersOf, type StacDoc } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
 
@@ -67,11 +67,6 @@ export function AssetsPanel({ item }: { item: StacDoc }) {
 export function EndpointsPanel({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
   const pq = parquetAsset(item);
-  // What the catalog says beats what we can guess: the item's own `rel=service` link, else the
-  // id template — and only for items with a GeoParquet, which is exactly what featureserv binds.
-  // Raster and publication items have neither, so they get no row instead of a link to a
-  // collection that never existed (#85: featureserv is keyed by item id, not collection id).
-  const coll = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(id) : undefined);
   const renders = Object.keys(rendersOf(item)).sort();
   // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
   const { render: shown } = usePreviewMap();
@@ -86,11 +81,11 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   ) : undefined;
   type Row = { label: string; desc: string; url: string; pick?: React.ReactNode };
   const rows: Row[] = [];
-  if (coll) {
-    rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
-    rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
-  }
-  const fs = pq ? featureServerUrl(id, chosen) : undefined;
+  // Only an item with its own `rel=service` link is served (featureEndpoints).
+  rows.push(...featureEndpoints(item, FEATURES_BASE));
+  // The FeatureServer serves the serving-topics index's GeoParquet layers (isServingTopic). A
+  // publication layer has a GeoParquet too, but is not served, so it gets no row.
+  const fs = pq && isServingTopic(item) ? featureServerUrl(id, chosen) : undefined;
   if (fs) {
     rows.push({
       label: "ArcGIS feature layer",

@@ -1,0 +1,183 @@
+{
+ "layers": [
+  {
+   "label": "Owner",
+   "spatial": true,
+   "rows": 156,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "COAL",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "OWNER_",
+     "type": "integer"
+    },
+    {
+     "name": "OWNER_ID",
+     "type": "integer"
+    },
+    {
+     "name": "CODE",
+     "type": "string"
+    },
+    {
+     "name": "SYMBOL",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "RSPLS",
+   "spatial": true,
+   "rows": 2562,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "COAL",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "TRGRID_",
+     "type": "integer"
+    },
+    {
+     "name": "TRGRID_ID",
+     "type": "integer"
+    },
+    {
+     "name": "J1",
+     "type": "string"
+    },
+    {
+     "name": "J2",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR1",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR1",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR2",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR2",
+     "type": "integer"
+    },
+    {
+     "name": "MAJOR3",
+     "type": "integer"
+    },
+    {
+     "name": "MINOR3",
+     "type": "integer"
+    },
+    {
+     "name": "QUADRANT",
+     "type": "integer"
+    },
+    {
+     "name": "SURVEY",
+     "type": "string"
+    },
+    {
+     "name": "TR",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "state_coal_leases_3_6_06",
+   "spatial": true,
+   "rows": 15,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "COAL",
+   "columns": [
+    {
+     "name": "SHAPE_Leng",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    },
+    {
+     "name": "MIN_STYPE",
+     "type": "integer"
+    },
+    {
+     "name": "LEASE_BUS",
+     "type": "string"
+    },
+    {
+     "name": "CLASS",
+     "type": "string"
+    },
+    {
+     "name": "NBR",
+     "type": "number"
+    },
+    {
+     "name": "SUFIX",
+     "type": "string"
+    },
+    {
+     "name": "LEASE",
+     "type": "string"
+    },
+    {
+     "name": "MIN_TYPE_D",
+     "type": "number"
+    },
+    {
+     "name": "MIN_TYPE_A",
+     "type": "string"
+    },
+    {
+     "name": "BEGIN_DT",
+     "type": "datetime"
+    },
+    {
+     "name": "EXPIRE_DT",
+     "type": "datetime"
+    },
+    {
+     "name": "EXPIRE_YR",
+     "type": "string"
+    },
+    {
+     "name": "STATUS",
+     "type": "string"
+    },
+    {
+     "name": "OTHR",
+     "type": "integer"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

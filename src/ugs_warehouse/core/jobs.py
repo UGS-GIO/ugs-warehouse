@@ -8,18 +8,40 @@ from __future__ import annotations
 
 import os
 import sys
+import zlib
+from typing import TypeVar
+
+T = TypeVar("T")
 
 # The client's default is no timeout; a stalled call would hold the caller's task until its own
 # timeout and then fail it, after the layer was already published.
 RUN_TIMEOUT_SECONDS = 30
 
 
-def task_shard(items: list) -> tuple[list, int, int]:
-    """This Cloud Run task's disjoint stride of `items` (CLOUD_RUN_TASK_INDEX of _COUNT), with
-    (index, count). A single task gets them all."""
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
-    return (items[i::n] if n > 1 else items), i, n
+def task() -> tuple[int, int]:
+    """(index, count) of this Cloud Run task; (0, 1) outside a sharded job."""
+    return (int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")),
+            int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1")))
+
+
+def shard(items: list[T]) -> list[T]:
+    """This task's disjoint stride of `items` (`--tasks=N`). Every task must see the same ordered
+    list; a count of 1 returns it unchanged."""
+    i, n = task()
+    return items[i::n] if n > 1 else items
+
+
+def owns(key: str) -> bool:
+    """Whether this task owns `key` (`--tasks=N`), by a stable hash of the key alone. Unlike
+    `shard`, it never depends on list order or on state another task may change mid-run. Always
+    True for a count of 1."""
+    i, n = task()
+    return n <= 1 or zlib.crc32(key.upper().encode()) % n == i
+
+
+def task_shard(items: list[T]) -> tuple[list[T], int, int]:
+    """`shard(items)` with this task's (index, count)."""
+    return shard(items), *task()
 
 
 def run_job(name: str, args: list[str] | None = None, *, tasks: int | None = None,

@@ -29,7 +29,7 @@ the [viewer](viewer/), QGIS, STAC Browser, DuckDB, or OGC API Features through
 
 ```
 vector producer                         pubs producer
-  Pub/Sub {schema, topic}                 publications feed (Postgres) + GIS zips
+  Pub/Sub {schema, topic}                 publications feed (Postgres) + data zips, spreadsheets
    ↓ push → service/main.py                ↓ Cloud Run Job (sharded)
   source → transform (4326·h3·hilbert)    harvest zip→COG · map layers · covers · search
    ↓                                       ↓

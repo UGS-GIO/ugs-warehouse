@@ -2,6 +2,7 @@
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { validBbox } from "@/map/map-model";
 import { qk } from "@/query-keys";
 
 // Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
@@ -46,6 +47,63 @@ export const collKeyOf = (href?: string): string | undefined => {
 };
 export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
+// A doc's rel=self href: as written, or resolved against `base` when one is given.
+export const selfHrefOf = (d: StacDoc, base?: string): string | undefined => {
+  const self = d.links?.find((l) => l.rel === "self")?.href;
+  return self && base ? new URL(self, base).href : self;
+};
+
+const docName = (href: string) => href.split(/[?#]/)[0].split("/").pop() ?? "";
+export const isCatalogHref = (href: string) => docName(href) === "catalog.json";
+export const isCollectionHref = (href: string) => docName(href) === "collection.json";
+
+// The collection an index entry is listed under. An item's is collKeyOf; a publication Collection
+// (`<series>/<SID>/collection.json`) is listed under its series, one folder up, with idOf = SID.
+export const entryCollKeyOf = (href?: string): string | undefined => {
+  const key = collKeyOf(href);
+  if (!href || !key || !isCollectionHref(href)) return key;
+  return key.includes("/") ? parentKeyOf(key) : undefined;
+};
+
+// A catalog key one level up: `<series>/<SID>` -> `<series>`.
+export const parentKeyOf = (key: string): string => key.replace(/\/[^/]+$/, "");
+
+// An item's .json beside a collection.json: `<collection>/<id>/<id>.json`.
+export const itemHrefIn = (collHref: string, id: string) =>
+  collHref.replace(/collection\.json(\?.*)?$/, `${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
+
+// The publication SID in `c = <series>/<SID>` (an Item inside a publication), else undefined.
+export const pubSidIn = (seriesId: string, c: string): string | undefined => {
+  const sid = c.startsWith(`${seriesId}/`) ? c.slice(seriesId.length + 1) : "";
+  return sid && !sid.includes("/") ? sid : undefined;
+};
+
+// What `?c=&i=` names under a publication series (a catalog leaf): `c = <series>` is the
+// publication `<series>/<i>/collection.json`; `c = <series>/<SID>` is its Item `<SID>/<i>/<i>.json`.
+export const pubHrefFor = (series: { id: string; href: string }, c: string, i: string): string | undefined => {
+  if (!isCatalogHref(series.href)) return undefined;
+  const dir = series.href.replace(/catalog\.json(\?.*)?$/, "");
+  if (c === series.id) return `${dir}${encodeURIComponent(i)}/collection.json`;
+  const sid = pubSidIn(series.id, c);
+  return sid ? itemHrefIn(`${dir}${encodeURIComponent(sid)}/collection.json`, i) : undefined;
+};
+
+// A publication's layer or table as listed in the root index, tagged `ugs:in_publication` (the
+// publication id) and `ugs:publication_title`, the label; the title falls back to the id.
+export const pubOfEntry = (d: StacDoc | undefined): { id: string; title: string } | undefined => {
+  const p = d?.properties as Record<string, unknown> | undefined;
+  const id = p?.["ugs:in_publication"];
+  const title = p?.["ugs:publication_title"];
+  return typeof id === "string" && id ? { id, title: typeof title === "string" && title ? title : id } : undefined;
+};
+
+// A map-list label: the layer's title, then its publication's for context when it has one.
+export const layerLabel = (d: StacDoc | undefined, fallback: string): string => {
+  const title = String(d?.properties?.title ?? fallback);
+  const pub = pubOfEntry(d);
+  return pub ? `${title} · ${pub.title}` : title;
+};
+
 // In-app catalog route (?c=<collection key>&i=<item id>) for a STAC item .json href, reusing
 // collKeyOf so the `c` key matches how the catalog tree keys its collections. A foreign href (not
 // under our catalog root) has no in-app route, so it is returned unchanged as a direct link.
@@ -53,31 +111,44 @@ export const catalogItemHref = (stacHref: string): string => {
   const base = CATALOG_URL.replace(/[^/]*$/, "");
   let abs: string;
   try { abs = new URL(stacHref, base).href; } catch { return stacHref; }  // resolve a relative catalog link
-  const c = abs.startsWith(base) ? collKeyOf(abs) : undefined;            // foreign / off-catalog → passthrough
+  const c = abs.startsWith(base) ? entryCollKeyOf(abs) : undefined;       // foreign / off-catalog → passthrough
   return c ? `?c=${encodeURIComponent(c)}&i=${encodeURIComponent(idOf(abs))}` : stacHref;
 };
 
 export type Link = {
   rel: string;
   href: string;
+  type?: string;
   title?: string;
   "pmtiles:layers"?: string[];
   "ugs:item_count"?: number;
   "ugs:mappable_count"?: number;
+  "ugs:layer_kind"?: string;       // a publication's rel=item link: layer | table | supporting
+  "ugs:source_dataset"?: string;   // ... and the GIS dataset it came from, as a title
+  "ugs:source_key"?: string;       // ... and that dataset's raw name, which keys its group
+  "ugs:source_file"?: string;      // ... and the attachment it was extracted from ("GIS Data - Zip")
+  "ugs:geometry_kind"?: string;    // ... points | lines | polygons | mixed (spatial layers only)
+  "table:row_count"?: number;      // ... its feature or row count
 };
 // ugs:foreign_keys — a UGS-prefixed custom field (FK join detail has no STAC extension). This
 // resource's `fields` reference `reference.resource`'s (a serving-topic stem) `reference.fields`.
 // Value shape mirrors Frictionless Table Schema. Emitted by the warehouse from the schema registry.
 // `href` is optional: topics reingest on their own schedule, so both shapes coexist until all cycle.
+// `ugs:detected_by` says how a publication's key was found: "declared" in the GIS data, or
+// "inferred" from it, with `ugs:confidence` the match score out of 100 (column names and values).
 export type ForeignKey = {
   fields: string[];
   reference: { resource: string; href?: string; fields: string[] };
+  "ugs:detected_by"?: string;
+  "ugs:confidence"?: number;
 };
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
   description?: string;   // one-line usage hint (display / query / download) stamped by core/stac (#280)
   "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
+  "table:row_count"?: number;   // a related table's rows
+  "file:size"?: number;   // bytes, from the file extension
 };
 export type StacDoc = {
   id?: string;
@@ -101,11 +172,129 @@ export const itemLinks = (d: StacDoc | undefined, base: string): Link[] =>
 export const pmtilesLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "pmtiles");
 
-// Landing page for the publication (rel=via) + the cite-as DOI, where present.
+// Landing page for the publication (rel=via, or an HTML rel=alternate) + the cite-as DOI, where present.
 export const viaLink = (d: StacDoc | undefined): Link | undefined =>
-  (d?.links ?? []).find((l) => l.rel === "via");
+  (d?.links ?? []).find((l) => l.rel === "via")
+  ?? (d?.links ?? []).find((l) => l.rel === "alternate" && l.type === "text/html");
 export const citeLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "cite-as");
+
+// A document whose only extent is the statewide placeholder the producer writes when it has no
+// footprint (`ugs:footprint_source: "utah-bbox"`). Its geometry/bbox say nothing about where it is.
+export const isPlaceholderFootprint = (d: StacDoc | undefined): boolean =>
+  (d?.properties as Record<string, unknown> | undefined)?.["ugs:footprint_source"] === "utah-bbox";
+
+// A publication's table or supporting file: its geometry is the publication's area of interest, so
+// it is searchable but is not a place on the map.
+export const isNonMappableKind = (d: StacDoc | undefined): boolean => {
+  const kind = (d?.properties as Record<string, unknown> | undefined)?.["ugs:layer_kind"];
+  return kind === "table" || kind === "supporting";
+};
+
+// The one footprint check: whether a document has a real footprint to badge, draw or fly to. A
+// geometry or a valid lon/lat bbox; never the placeholder, a table or supporting file, nor a null
+// (aspatial) geometry.
+export const hasFootprint = (d: StacDoc | undefined): boolean =>
+  Boolean(d && !isPlaceholderFootprint(d) && !isNonMappableKind(d) && d.geometry !== null
+    && (d.geometry || validBbox(d.bbox)));
+
+// A publication Collection read as the item shape the detail page takes: its top-level metadata
+// becomes `properties`, its first extent box the `bbox` (unless that is the placeholder), and its
+// extent start the `datetime` unless it is flagged `ugs:date_unknown`. Type, assets and links stay;
+// any other doc passes through.
+const COLLECTION_SHAPE = new Set([
+  "type", "stac_version", "stac_extensions", "id", "links", "assets", "extent", "summaries",
+  "item_assets", "properties", "bbox", "geometry",
+]);
+export const collectionAsItem = (d: StacDoc): StacDoc => {
+  if (d.type !== "Collection") return d;
+  const raw = d as Record<string, unknown>;
+  const extent = raw.extent as
+    { spatial?: { bbox?: number[][] }; temporal?: { interval?: (string | null)[][] } } | undefined;
+  const props: Record<string, unknown> =
+    Object.fromEntries(Object.entries(raw).filter(([k]) => !COLLECTION_SHAPE.has(k)));
+  const start = extent?.temporal?.interval?.[0]?.[0];
+  if (start && !props["ugs:date_unknown"]) props.datetime = start;
+  // The placeholder extent is not a footprint, so it does not become the item's bbox.
+  const bbox = isPlaceholderFootprint({ properties: props }) ? undefined : extent?.spatial?.bbox?.[0];
+  const out = { ...d, bbox, properties: props };
+  // Same document, so the same URL to resolve its relative links against.
+  const from = fetchedFrom.get(d);
+  if (from) fetchedFrom.set(out, from);
+  return out;
+};
+
+// A Collection's Items (its layers and tables), from the titled rel=item links: no fetch per item.
+// Each carries the link's `ugs:layer_kind`, `ugs:source_dataset` (title) and `ugs:source_key` (raw
+// name) where the publication has them (its layers and tables do; the plate, units and fence do not).
+// `sourceFile` is the attachment it came from, `geometry` a plain word and `rows` its count.
+export type CollectionPart = { id: string; title: string; kind?: string; source?: string; sourceKey?: string;
+  sourceFile?: string; geometry?: string; rows?: number };
+
+// The quiet descriptor beside a part or related table: geometry (or "table") then a count, as
+// "polygons · 367 features" or "table · 41 rows". Empty when the link carries neither, so an older
+// catalog shows nothing rather than a bare "table".
+export const describeData = ({ geometry, table, rows }: { geometry?: string; table?: boolean; rows?: number }): string => {
+  const n = rows !== undefined && Number.isFinite(rows) ? rows : undefined;
+  if (!geometry && n === undefined) return "";
+  const word = geometry ?? (table ? "table" : undefined);
+  const noun = table || !geometry ? "row" : "feature";
+  const count = n === undefined ? undefined : `${n.toLocaleString("en-US")} ${noun}${n === 1 ? "" : "s"}`;
+  return [word, count].filter(Boolean).join(" · ");
+};
+// Whether a part's `ugs:layer_kind` is a non-spatial table (a table or a supporting table).
+export const isTableKind = (kind: string | undefined): boolean => kind === "table" || kind === "supporting";
+// A publication's all-layers GeoPackage, when the ingest found one (the `geopackage` Collection asset).
+export const geopackageAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const a = d?.assets?.geopackage;
+  return a?.type === "application/geopackage+sqlite3" ? a : undefined;
+};
+
+export const collectionParts = (d: StacDoc | undefined): CollectionPart[] =>
+  d?.type !== "Collection" ? [] : (d.links ?? []).filter((l) => l.rel === "item").map((l) => {
+    const id = idOf(l.href.split(/[?#]/)[0]);
+    const kind = l["ugs:layer_kind"];
+    const source = l["ugs:source_dataset"];
+    const sourceKey = l["ugs:source_key"];
+    const file = l["ugs:source_file"];
+    const geometry = l["ugs:geometry_kind"];
+    const rows = l["table:row_count"];
+    return { id, title: l.title ?? id,
+             ...(typeof file === "string" && file ? { sourceFile: file } : {}),
+             ...(typeof geometry === "string" && geometry ? { geometry } : {}),
+             ...(typeof rows === "number" ? { rows } : {}),
+             ...(typeof kind === "string" && kind ? { kind } : {}),
+             ...(typeof source === "string" && source ? { source } : {}),
+             ...(typeof sourceKey === "string" && sourceKey ? { sourceKey } : {}) };
+  });
+
+// A publication's map plate: the Item among its rel=item links whose id is `<pub id>_plate` (a
+// layer such as `<pub id>__geologic_plate` is not it), as an absolute URL (against `base`, else
+// the URL the Collection was fetched from). None for a report-only publication, or a single-file
+// one, whose plate COG already sits on the Collection.
+export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | undefined => {
+  if (d?.type !== "Collection" || cogAsset(d)) return undefined;
+  const from = base ?? fetchedFrom.get(d);
+  if (!from) return undefined;
+  try {
+    const plateId = `${d.id}_plate`;
+    return itemLinks(d, from).find((l) => idOf(l.href.split(/[?#]/)[0]) === plateId)?.href;
+  } catch { return undefined; }
+};
+
+/** The publication's plate Item (see plateHrefOf), fetched: `plate` is undefined while loading or
+ *  when there is none; `error` is set when the fetch failed, so the page can say so. */
+export function usePlate(d: StacDoc | undefined): { plate?: StacDoc; error?: unknown } {
+  const q = useStac(plateHrefOf(d));
+  return { plate: q.data, error: q.error ?? undefined };
+}
+
+// Whether the FeatureServer (geoservices/) serves this item. It serves the serving-topics index,
+// whose items the vector producer stamps with `ugs:dbt_schema`; a publication layer has a GeoParquet
+// and PMTiles of its own but is not in that index. The same items' tiles carry `feature_id` as
+// the feature id, which is what joins a clicked map feature to its table row.
+export const isServingTopic = (d: StacDoc | undefined): boolean =>
+  typeof (d?.properties as Record<string, unknown> | undefined)?.["ugs:dbt_schema"] === "string";
 
 // Registry-driven relationships (the warehouse emits these from raw.schema_registry):
 //  • related links — the FK graph (item ↔ related serving-topic item)
@@ -126,13 +315,42 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
 // carrying an FK back to this layer, flattened to the single-column equality we can run — the
 // related row's childField = the clicked feature's parentField value. Composite (multi-column) keys
 // are skipped: a partial join would return wrong rows, so surface nothing rather than bad data.
-export type RelatedJoin = { key: string; title: string; href: string; childField: string; parentField: string };
+// `reference` marks a reference table (isReferenceAsset); `inferred` an inferred key's confidence.
+export type RelatedJoin = {
+  key: string; title: string; href: string; childField: string; parentField: string; rows?: number;
+  reference?: boolean; inferred?: { confidence?: number };
+};
 export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
   relatedAssets(d).flatMap(({ key, asset }) =>
     (asset["ugs:foreign_keys"] ?? [])
       .filter((fk) => fk.fields.length === 1 && fk.reference.fields.length === 1)
       .map((fk) => ({ key, title: asset.title ?? key, href: asset.href,
-                      childField: fk.fields[0], parentField: fk.reference.fields[0] })));
+                      ...(typeof asset["table:row_count"] === "number" ? { rows: asset["table:row_count"] } : {}),
+                      childField: fk.fields[0], parentField: fk.reference.fields[0],
+                      ...(isReferenceAsset(asset) ? { reference: true } : {}),
+                      ...(inferredKey(fk) ? { inferred: inferredKey(fk) } : {}) })));
+
+// A reference table: a related table that most of a publication's layers point at (its data
+// sources, say), listed after the layer's own joins. The producer marks it with the `reference`
+// role, which survives into the compact index.
+export const isReferenceAsset = (a: Asset | undefined): boolean => Boolean(a?.roles?.includes("reference"));
+
+// Splits related tables into the layer's own and its reference tables, in order. `isRef` reads a
+// row's reference flag: the asset's role on the item page, the `reference` field on a join.
+export const partitionRelated = <T,>(rows: T[], isRef: (row: T) => boolean): { own: T[]; reference: T[] } => ({
+  own: rows.filter((r) => !isRef(r)),
+  reference: rows.filter(isRef),
+});
+
+// An inferred key (`ugs:detected_by: "inferred"`) and its confidence; undefined for a declared one.
+export const inferredKey = (fk: ForeignKey | undefined): { confidence?: number } | undefined =>
+  fk?.["ugs:detected_by"] === "inferred"
+    ? (typeof fk["ugs:confidence"] === "number" ? { confidence: fk["ugs:confidence"] } : {})
+    : undefined;
+export const inferredTitle = (inf: { confidence?: number }): string =>
+  inf.confidence !== undefined
+    ? `Inferred from the data, not declared in it: confidence ${inf.confidence} of 100 (column names and values match)`
+    : "Inferred from the data, not declared in it";
 
 // Per-asset usage hint (STAC `description`) — the warehouse's "display vs query vs download"
 // guidance, stamped in core/stac so one item says which asset/endpoint to use (#280). Returns only
@@ -159,15 +377,13 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
 };
 
 // OGC API Features endpoint base (the featureserv/ pygeoapi service). Set at build time via
-// VITE_FEATURES_BASE, or per-session via ?features=<url>. Empty → the link is hidden (no dead
-// link). A serving-topic's STAC item id == its featureserv collection id.
+// VITE_FEATURES_BASE, or per-session via ?features=<url>; it replaces the host of an item's own
+// `rel=service` link. Empty keeps the published host.
 export const FEATURES_BASE = (
   new URLSearchParams(LOC.search).get("features")
   || ((import.meta as { env?: Record<string, string> }).env?.VITE_FEATURES_BASE)
   || ""
 ).replace(/\/+$/, "");
-export const featuresCollectionUrl = (id: string): string | undefined =>
-  FEATURES_BASE ? `${FEATURES_BASE}/collections/${id}` : undefined;
 
 // ArcGIS FeatureServer (the geoservices service) for Map Viewer, Experience Builder and
 // StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a layer, one per render,
@@ -280,6 +496,9 @@ export const classificationColors = (d: StacDoc | undefined): Record<string, str
 // One entry of the STAC render extension (a named way to draw the layer).
 export type RenderBlock = {
   title?: string; assets?: string[]; style_url?: string; sprite?: string;
+  // The style is the viewer's own default look, generated for a publication layer: the layer is drawn
+  // by the viewer (its per-layer colour), not from the file.
+  generated?: boolean;
   legend?: { label: string; color: string }[];   // explicit legend for icon renders (no paint)
 };
 
@@ -289,12 +508,44 @@ export const rendersOf = (d?: StacDoc): Record<string, RenderBlock> =>
   (d?.properties as { "ugs:renders"?: Record<string, RenderBlock> } | undefined)?.["ugs:renders"] ?? {};
 
 // Default MapLibre GL style_url from the `ugs:renders` block (ugs-styles bridge), if bound.
-// Falls back to the first render. Undefined when the item carries no `ugs:renders`.
+// Falls back to the first render. Undefined when the item carries no `ugs:renders`, or when the
+// default render is a generated default look: the viewer then draws the layer itself.
 export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {
-  const renders = (d?.properties as { "ugs:renders"?: Record<string, { style_url?: string }> } | undefined)?.["ugs:renders"];
+  const renders = (d?.properties as { "ugs:renders"?: Record<string, RenderBlock> } | undefined)?.["ugs:renders"];
   if (!renders) return undefined;
-  return (renders.default ?? Object.values(renders)[0])?.style_url;
+  const block = renders.default ?? Object.values(renders)[0];
+  return block?.generated ? undefined : block?.style_url;
 };
+
+// A non-2xx response, keeping its status so a caller can tell "not there" from "failed".
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+export const isNotFound = (e: unknown): boolean => e instanceof HttpError && e.status === 404;
+
+// A catalog that publishes no `ugs-items-index` link: like a 404 index, an expected absence.
+export class NoIndexError extends Error {}
+export const isMissingIndex = (e: unknown): boolean => isNotFound(e) || e instanceof NoIndexError;
+
+// Rolls up the queries that turn `?c=&i=` into an href: whether any is still loading, and the first
+// real failure. An `optional` query (an items index) that 404s or has no index link is an expected
+// absence, not a failure.
+export const resolutionStatus = (qs: { isLoading: boolean; error?: unknown; optional?: boolean }[]) => {
+  const failed = qs.find((q) => q.error != null && !(q.optional && isMissingIndex(q.error)));
+  return { resolving: qs.some((q) => q.isLoading), error: failed?.error };
+};
+
+// Whether the selected `?i=` names nothing: its doc 404'd, or nothing resolved it to an href once
+// every source that could has finished (`resolving`) without any of them failing (`failed`). A
+// failed source means the answer is unknown, not "not found".
+export const itemMissing = (o: {
+  itemUrl?: string; itemHref?: string; error?: unknown; resolving: boolean; failed?: boolean;
+}): boolean =>
+  Boolean(o.itemUrl) && (isNotFound(o.error) || (!o.itemHref && !o.resolving && !o.failed));
 
 // The URL each fetched doc came from: static catalogs link relatively (`../collection.json`) and
 // often carry no `self`, so resolving a doc's links needs it.
@@ -302,7 +553,7 @@ const fetchedFrom = new WeakMap<object, string>();
 
 export async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
+  if (!r.ok) throw new HttpError(r.status, `${r.status} ${r.statusText} — ${url}`);
   const doc = await r.json() as StacDoc;
   if (doc && typeof doc === "object") fetchedFrom.set(doc, url);
   return doc;
@@ -326,9 +577,13 @@ export function collectionHrefOf(doc: StacDoc | undefined, base?: string): strin
   }
 }
 
-/** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. */
+/** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. A 404 is final, so it is
+ *  not retried. */
 export function useStac(url?: string) {
-  return useQuery({ ...stacDocQuery(url as string), enabled: Boolean(url) });
+  return useQuery({
+    ...stacDocQuery(url as string), enabled: Boolean(url),
+    retry: (count, e) => !isNotFound(e) && count < 1,
+  });
 }
 
 /** Fetch many STAC docs by URL in parallel (shares the ["stac", url] cache with
@@ -338,6 +593,7 @@ export function useDocs(urls: string[]) {
   return {
     docs: results.map((r, i) => ({ url: urls[i], data: r.data })),
     isLoading: results.some((r) => r.isLoading),
+    error: results.find((r) => r.error)?.error ?? undefined,
     loaded: results.filter((r) => r.data).length,
   };
 }

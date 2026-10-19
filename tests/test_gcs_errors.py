@@ -32,3 +32,50 @@ def test_a_failed_mirror_upload_raises(monkeypatch):
     monkeypatch.setattr(gcs, "upload", _unreachable)
     with pytest.raises(ConnectionError):
         item_mirror.write("ugs-serving-topics/hazards", [ITEM])
+
+
+def _fake_obs_delete(monkeypatch, missing=(), broken=()):
+    """obs.delete over a set of live paths: a batch deletes what it can, then raises its first
+    error, as obstore reports one error per call."""
+    live = {f"p/{i}" for i in range(5)} - set(missing)
+    calls: list = []
+
+    def delete(store, paths):
+        batch = [paths] if isinstance(paths, str) else list(paths)
+        calls.append(batch)
+        first = None
+        for p in batch:
+            if p in broken:
+                first = first or PermissionError(f"403 {p}")
+            elif p not in live:
+                first = first or FileNotFoundError(p)
+            else:
+                live.discard(p)
+        if first:
+            raise first
+
+    monkeypatch.setattr(gcs, "_store", lambda bucket=None: None)
+    monkeypatch.setattr(gcs.obs, "delete", delete)
+    return live, calls
+
+
+def test_delete_many_sends_batched_calls_and_ignores_missing_objects(monkeypatch):
+    live, calls = _fake_obs_delete(monkeypatch, missing={"p/1"})
+    monkeypatch.setattr(gcs, "DELETE_BATCH", 3)
+    gcs.delete_many([f"p/{i}" for i in range(5)])
+    assert live == set()
+    assert calls[0] == ["p/0", "p/1", "p/2"] and ["p/3", "p/4"] in calls
+
+
+def test_delete_many_raises_on_a_real_failure_even_behind_a_missing_object(monkeypatch):
+    # The batch's first error is the not-found; the 403 behind it must still surface.
+    live, _ = _fake_obs_delete(monkeypatch, missing={"p/0"}, broken={"p/3"})
+    with pytest.raises(RuntimeError, match=r"1 object\(s\) not deleted: \['p/3: PermissionError"):
+        gcs.delete_many([f"p/{i}" for i in range(5)])
+    assert live == {"p/3"}
+
+
+def test_delete_many_not_strict_ignores_failures_like_delete(monkeypatch):
+    live, _ = _fake_obs_delete(monkeypatch, broken={"p/2"})
+    gcs.delete_many([f"p/{i}" for i in range(5)], strict=False)
+    assert live == {"p/2"}

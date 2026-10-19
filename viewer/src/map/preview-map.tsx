@@ -2,6 +2,7 @@
 // wires the table shares with it. The maplibre half is `preview-map-gl.tsx`, loaded on first spec —
 // this module carries no map code, so the catalog and doc views never pay for one.
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import type { IdentifyResult } from "./identify";
 import { type FocusSel, type MapPick, nextPick } from "./map-model";
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { rendersOf } from "@/stac";
@@ -26,6 +27,10 @@ type Ctx = {
   selectedFeature: { props: Record<string, unknown>; fid: number | null; bbox?: FocusSel["bbox"] } | null;
   selectFeature: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
   clearSelection: () => void;
+  // A click on a plate or mosaic preview: the unit under it, or the scan-only notice.
+  identify: IdentifyResult | null;
+  setIdentify: (r: IdentifyResult | null) => void;
+  clearIdentify: () => void;
   // Set when the map finds a row's id on another record: the map and table are different versions.
   mapMismatch: boolean;
   // Which `ugs:renders` entry the "Symbolize by" picker is on, so the endpoints panel can hand out
@@ -58,6 +63,8 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
   const [sel, setSel] = usePerItem<Sel>(itemId, null);
+  const [identify, setIdentify] = usePerItem<IdentifyResult | null>(itemId, null);
+  const clearIdentify = useCallback(() => setIdentify(null), [setIdentify]);
   const [mapMismatch, setMapMismatch] = usePerItem(itemId, false);
   const reportMismatch = useCallback(() => setMapMismatch(true), [setMapMismatch]);
 
@@ -80,10 +87,11 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       setSpec, registerSlot, focus, setFocus, pick, onFeatureClick,
       featureRelated: sel?.related ?? null, openRelated, clearRelated,
       selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render, mapMismatch,
+      identify, setIdentify, clearIdentify,
     }),
     [
       setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, sel, openRelated, clearRelated,
-      selectFeature, clearSelection, render, mapMismatch,
+      selectFeature, clearSelection, render, mapMismatch, identify, setIdentify, clearIdentify,
     ],
   );
 
@@ -93,7 +101,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       {armed && (
         <Suspense fallback={null}>
           <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick} onMismatch={reportMismatch}
-            onFeatureSelect={selectFeature} onClearSelection={clearSelection} renders={renders} sel={render} onSel={setChosen} />
+            onFeatureSelect={selectFeature} onClearSelection={clearSelection} onIdentify={setIdentify} renders={renders} sel={render} onSel={setChosen} />
         </Suspense>
       )}
     </PreviewMapCtx.Provider>

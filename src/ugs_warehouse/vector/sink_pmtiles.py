@@ -47,10 +47,17 @@ TILE_OPTS = [
     # and silently drops features to fit the 500KB/tile, 200k-feature/tile defaults.
     "--no-tile-size-limit",
     "--no-feature-limit",
-    # NOTE: --use-attribute-for-id=feature_id is appended per-topic in _tile_and_upload — it takes
-    # the input's id attr, so it's NOT a fixed option. Always feature_id, never ugs_key: see
+    # NOTE: --use-attribute-for-id=feature_id is appended per-topic via run_tippecanoe, since it
+    # takes the input's id attr; it is NOT a fixed option. Always feature_id, never ugs_key: see
     # tiling_signature for why.
 ]
+
+
+# Extra flags for the unit polygons under the maps (pubs/unit_polys.py, pubs/identify.py): a small
+# unit polygon stays a polygon at every zoom instead of being folded into its neighbours, since a
+# click at any zoom must find the unit under it. TILE_OPTS already lift tippecanoe's per-tile
+# feature and size limits and its drop rate, so no polygon is dropped.
+IDENTIFY_OPTS = ["--no-tiny-polygon-reduction"]
 
 
 def tiling_signature(has_ugs_key: bool) -> str:
@@ -74,43 +81,50 @@ def tiling_signature(has_ugs_key: bool) -> str:
     return "|".join([f"v{PMTILES_BUILD_VERSION}", f"ugskey={int(has_ugs_key)}", *opts])
 
 
-def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
-    """COPY the transformed `view` to a GeoJSONSeq file (DuckDB streams it)."""
+def write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
+    """COPY `view` (its geometry column a DuckDB GEOMETRY in lon/lat) to a GeoJSONSeq file. DuckDB
+    streams the export; the pubs producer calls this too."""
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
-def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> gcs.FileMeta:
-    """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to the
-    input so callers control the temp dir. `id_attr` (always `feature_id`) is promoted to the native
-    MVT feature id so the viewer can join a clicked map feature to its GeoParquet table row — both
-    carry the same id; MapLibre exposes it as `feature.id`. `ugs_key`, when present, is NOT used as
-    the id here (see tiling_signature): `--use-attribute-for-id` would MOVE it out of `properties`,
-    and the viewer's ugs_key-keyed row-commenting reads it from the tile properties."""
+def run_tippecanoe(geojsonl: str, pmtiles: str, layer: str, *, id_attr: str | None = None,
+                   what: str | None = None, extra_opts: list[str] | None = None) -> None:
+    """tippecanoe over a GeoJSONSeq file into `pmtiles`, one tile layer named `layer`, with the fixed
+    TILE_OPTS + `extra_opts` + TIPPECANOE_OPTS. `id_attr` is promoted to the MVT feature id. Raises RuntimeError
+    carrying tippecanoe's stderr, naming `what` (default `layer`)."""
     if not shutil.which(TIPPECANOE_BIN):
         raise RuntimeError(
             f"{TIPPECANOE_BIN} not on PATH — install tippecanoe in the runtime image"
         )
-    pmtiles = os.path.join(os.path.dirname(geojsonl), f"{topic.stem}.pmtiles")
     cmd = [
         TIPPECANOE_BIN,
         "-o", pmtiles,
-        "-l", topic.stem,
+        "-l", layer,
         *TILE_OPTS,
-        f"--use-attribute-for-id={id_attr}",
+        *(extra_opts or []),
+        *([f"--use-attribute-for-id={id_attr}"] if id_attr else []),
         *EXTRA_OPTS,
         geojsonl,
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        # tippecanoe's stderr has the actual reason (bad geometry, id collisions, etc).
-        # check=True alone only gives a bare "exit status N" — fold the real message in so
-        # ingest.py's per-sink FAILED log (which prints str(e)) shows root cause, not just rc.
+        # check=True alone gives a bare "exit status N"; the stderr has the reason (bad geometry,
+        # id collisions, ...), so callers that log str(e) show the root cause.
         detail = (e.stderr or e.stdout or "").strip()
         raise RuntimeError(
-            f"tippecanoe exited {e.returncode} for {topic.fqn}"
+            f"tippecanoe exited {e.returncode} for {what or layer}"
             + (f":\n{detail}" if detail else "")
         ) from e
+
+
+def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> gcs.FileMeta:
+    """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to the
+    input so callers control the temp dir. `id_attr` (always `feature_id`) is promoted to the native
+    MVT feature id so the viewer can join a clicked map feature to its GeoParquet table row: both
+    carry the same id, and MapLibre exposes it as `feature.id`."""
+    pmtiles = os.path.join(os.path.dirname(geojsonl), f"{topic.stem}.pmtiles")
+    run_tippecanoe(geojsonl, pmtiles, topic.stem, id_attr=id_attr, what=topic.fqn)
     gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     # pmtiles is a "latest" pointer, overwritten each ingest -> revalidate via CDN.
     meta = gcs.upload(pmtiles, gcs_object, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
@@ -123,6 +137,6 @@ def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMe
     tippecanoe streams its input → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         geojsonl = os.path.join(tmp, f"{topic.stem}.geojsonl")
-        _write_geojsonl(con, view, geojsonl)
+        write_geojsonl(con, view, geojsonl)
         # MVT id is always feature_id (viewer map→table join); ugs_key rides along as a property.
         return _tile_and_upload(topic, geojsonl, introspect.FEATURE_ID)

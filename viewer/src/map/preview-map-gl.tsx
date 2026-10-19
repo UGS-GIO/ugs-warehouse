@@ -15,10 +15,12 @@ import { ensureCogProtocol } from "./cog";
 import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl } from "@/stac";
+import { type IdentifyResult, identifyAt } from "./identify";
+import { IdentifyLayer } from "./identify-layer";
+import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
+import { classificationEntries, defaultStyleUrl, pubOfEntry } from "@/stac";
 import { useLiveLegend, useStyleLayers } from "@/stac/styles";
-import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
+import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
 
@@ -26,16 +28,9 @@ ensurePmtilesProtocol();   // this module is lazy, so registration happens the f
 
 const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
-// Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
-// faux cartography. fill/line/circle all added so any geometry type shows.
-const NEUTRAL_LAYERS = [
-  { type: "fill", filter: GEOM_FILTER.fill,
-    paint: { "fill-color": "#6b7280", "fill-opacity": 0.15, "fill-outline-color": "#374151" } },
-  { type: "line", filter: GEOM_FILTER.line,
-    paint: { "line-color": "#374151", "line-width": 1.1 } },
-  { type: "circle", filter: GEOM_FILTER.point,
-    paint: { "circle-color": "#374151", "circle-radius": 3.5, "circle-opacity": 0.85 } },
-];
+// Neutral render used until (or without) a ugs-styles style: visible borders, not faux cartography.
+// The Map page's unstyled layers come from the same defaultVectorLayers (map-model).
+const NEUTRAL_LAYERS = previewDefaultLayers();
 
 // Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage. Idempotent.
 async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void> {
@@ -58,13 +53,14 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection, onIdentify }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
   onClearSelection?: () => void;
+  onIdentify?: (r: IdentifyResult | null) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -88,7 +84,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   // ---- vector-specific state (`renders`/`sel` are owned by the provider) ----
   const renderKeys = Object.keys(renders);
   const active = renders[sel];
-  const styleUrl = isVector && item ? (active?.style_url ?? defaultStyleUrl(item)) : undefined;
+  const styleUrl = isVector && item ? (active?.generated ? undefined : active?.style_url ?? defaultStyleUrl(item)) : undefined;
   const sprite = active?.sprite;
   const styleLayers = useStyleLayers(styleUrl);  // null while loading/error → NEUTRAL_LAYERS
   // Icon renders bake their colours into the sprite, so the legend can't be derived from the paint.
@@ -220,6 +216,16 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     [itemId, focusKey, mapLoaded]);
 
   const onMapClick = (e: MapLayerMouseEvent) => {
+    if (spec?.kind === "cog" || spec?.kind === "rasterpm") {
+      const slug = spec.kind === "cog" ? "cog" : "raster-mosaic";
+      const pubTitle = pubOfEntry(spec.item)?.title;
+      // Only a geologic map answers a click: one with unit data, or a publication's plate.
+      if (spec.unitsHref || pubTitle) {
+        onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
+          [{ slug, hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle }]));
+      }
+      return;
+    }
     if (!isVector) return;
     const f = pickFeature(e, layerIds);
     if (!f) { highlightFeature(null); onClearSelection?.(); return; }
@@ -228,7 +234,9 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
     // The tile's copy of the geometry, so a long line is cut at the tile edge; near enough to zoom to.
     onFeatureSelect?.(props, fid, turfBbox(f.geometry) as FocusSel["bbox"]);
-    if (fid != null) onFeatureClick(fid, props);
+    // The table only pages to the feature when tile ids are its feature_ids; otherwise the card
+    // above shows the tile's attributes and the table is left as it is.
+    if (fid != null && joinsRows(spec)) onFeatureClick(fid, props);
   };
 
   const cluster = (
@@ -324,6 +332,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
               <Layer id="raster-mosaic-layer" type="raster" />
             </Source>
           )}
+          {spec?.kind === "rasterpm" && spec.unitsHref && <IdentifyLayer slug="raster-mosaic" href={spec.unitsHref} />}
 
           {/* COG raster (once the cog:// protocol is registered) */}
           {spec?.kind === "cog" && cogReady && (
@@ -331,6 +340,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
               <Layer id="cog-raster" type="raster" />
             </Source>
           )}
+          {spec?.kind === "cog" && cogReady && spec.unitsHref && <IdentifyLayer slug="cog" href={spec.unitsHref} />}
 
           {/* Footprint outline */}
           {spec?.kind === "footprint" && (

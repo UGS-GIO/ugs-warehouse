@@ -1,0 +1,464 @@
+{
+ "layers": [
+  {
+   "label": "BRMBR_DE_Polygons_V04",
+   "spatial": true,
+   "rows": 116,
+   "geometry_types": [
+    "Polygon Z"
+   ],
+   "source": "randomForest__InputShapefiles.zip_unzipped__InputShapefiles__BRMBR_TrainingData_V04",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "TrainingData_V08",
+   "spatial": true,
+   "rows": 146,
+   "geometry_types": [
+    "Polygon Z"
+   ],
+   "source": "randomForest__InputShapefiles.zip_unzipped__InputShapefiles__BRMBR_TrainingData_V08",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "validationPoints_toTrainingData_2023_V09",
+   "spatial": true,
+   "rows": 114,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "randomForest__InputShapefiles.zip_unzipped__InputShapefiles__BRMBR_validationPointsToTrainingData_V09",
+   "columns": [
+    {
+     "name": "VegCommuni",
+     "type": "string"
+    },
+    {
+     "name": "SampleID",
+     "type": "string"
+    },
+    {
+     "name": "visited",
+     "type": "string"
+    },
+    {
+     "name": "surveyor",
+     "type": "string"
+    },
+    {
+     "name": "primaryCom",
+     "type": "string"
+    },
+    {
+     "name": "secondaryC",
+     "type": "string"
+    },
+    {
+     "name": "fourClasse",
+     "type": "integer"
+    },
+    {
+     "name": "moreClasse",
+     "type": "string"
+    },
+    {
+     "name": "currentWat",
+     "type": "string"
+    },
+    {
+     "name": "pastFloodi",
+     "type": "string"
+    },
+    {
+     "name": "notes",
+     "type": "string"
+    },
+    {
+     "name": "dateRevise",
+     "type": "datetime"
+    },
+    {
+     "name": "BUFF_DIST",
+     "type": "number"
+    },
+    {
+     "name": "ORIG_FID",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "BRR_priorityUnits",
+   "spatial": true,
+   "rows": 7,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "randomForest__InputShapefiles.zip_unzipped__InputShapefiles__BRR_priorityUnits",
+   "columns": [
+    {
+     "name": "RLGIS_ID",
+     "type": "integer"
+    },
+    {
+     "name": "Lit",
+     "type": "string"
+    },
+    {
+     "name": "OrgCode",
+     "type": "integer"
+    },
+    {
+     "name": "Cmplx_Name",
+     "type": "integer"
+    },
+    {
+     "name": "OrgName",
+     "type": "string"
+    },
+    {
+     "name": "Dvsn_Name",
+     "type": "integer"
+    },
+    {
+     "name": "Unit_Name",
+     "type": "integer"
+    },
+    {
+     "name": "Subunit_Na",
+     "type": "integer"
+    },
+    {
+     "name": "RSL_Type",
+     "type": "string"
+    },
+    {
+     "name": "StateAbbr",
+     "type": "string"
+    },
+    {
+     "name": "Region",
+     "type": "string"
+    },
+    {
+     "name": "Origin",
+     "type": "integer"
+    },
+    {
+     "name": "MU_Name",
+     "type": "string"
+    },
+    {
+     "name": "MU_SubUnit",
+     "type": "integer"
+    },
+    {
+     "name": "Acres",
+     "type": "number"
+    },
+    {
+     "name": "Comments",
+     "type": "integer"
+    },
+    {
+     "name": "created_us",
+     "type": "string"
+    },
+    {
+     "name": "created_da",
+     "type": "datetime"
+    },
+    {
+     "name": "last_edite",
+     "type": "string"
+    },
+    {
+     "name": "last_edi_1",
+     "type": "datetime"
+    },
+    {
+     "name": "GlobalID",
+     "type": "string"
+    },
+    {
+     "name": "Shape__Are",
+     "type": "number"
+    },
+    {
+     "name": "Shape__Len",
+     "type": "number"
+    },
+    {
+     "name": "hectares",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "BRMBR_mappingValidation__validationArea",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon Z"
+   ],
+   "source": "BRMBR_mappingValidation",
+   "columns": [
+    {
+     "name": "Buffer",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "BRMBR_mappingValidation__validationVegMapping",
+   "spatial": true,
+   "rows": 2122,
+   "geometry_types": [
+    "MultiPolygon Z"
+   ],
+   "source": "BRMBR_mappingValidation",
+   "columns": [
+    {
+     "name": "VegCommunity",
+     "type": "string"
+    },
+    {
+     "name": "acres",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "BearRiverVegetationMapping_20240222__BearRiverMapping_allNotes_20240222",
+   "spatial": true,
+   "rows": 4282,
+   "geometry_types": [
+    "MultiPolygon Z"
+   ],
+   "source": "BearRiverVegetationMapping_20240222",
+   "columns": [
+    {
+     "name": "VegCommunity",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "string"
+    },
+    {
+     "name": "Acres",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "BearRiverVegetationMapping_20240222__BearRiverMapping_Simple_20240222",
+   "spatial": true,
+   "rows": 4183,
+   "geometry_types": [
+    "MultiPolygon Z"
+   ],
+   "source": "BearRiverVegetationMapping_20240222",
+   "columns": [
+    {
+     "name": "VegCommunity",
+     "type": "string"
+    },
+    {
+     "name": "Acres",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "BearRiverVegetationMapping_20240222__BearRiverMapping_projectArea",
+   "spatial": true,
+   "rows": 7,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "BearRiverVegetationMapping_20240222",
+   "columns": [
+    {
+     "name": "RLGIS_ID",
+     "type": "string"
+    },
+    {
+     "name": "Lit",
+     "type": "string"
+    },
+    {
+     "name": "OrgCode",
+     "type": "integer"
+    },
+    {
+     "name": "Cmplx_Name",
+     "type": "string"
+    },
+    {
+     "name": "OrgName",
+     "type": "string"
+    },
+    {
+     "name": "Dvsn_Name",
+     "type": "string"
+    },
+    {
+     "name": "Unit_Name",
+     "type": "string"
+    },
+    {
+     "name": "Subunit_Na",
+     "type": "string"
+    },
+    {
+     "name": "RSL_Type",
+     "type": "string"
+    },
+    {
+     "name": "StateAbbr",
+     "type": "string"
+    },
+    {
+     "name": "Region",
+     "type": "string"
+    },
+    {
+     "name": "Origin",
+     "type": "string"
+    },
+    {
+     "name": "MU_Name",
+     "type": "string"
+    },
+    {
+     "name": "MU_SubUnit",
+     "type": "string"
+    },
+    {
+     "name": "Acres",
+     "type": "number"
+    },
+    {
+     "name": "Comments",
+     "type": "string"
+    },
+    {
+     "name": "created_us",
+     "type": "string"
+    },
+    {
+     "name": "created_da",
+     "type": "datetime"
+    },
+    {
+     "name": "last_edite",
+     "type": "string"
+    },
+    {
+     "name": "last_edi_1",
+     "type": "datetime"
+    },
+    {
+     "name": "GlobalID",
+     "type": "string"
+    },
+    {
+     "name": "Shape__Are",
+     "type": "number"
+    },
+    {
+     "name": "Shape__Len",
+     "type": "number"
+    },
+    {
+     "name": "hectares",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

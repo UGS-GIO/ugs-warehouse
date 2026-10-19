@@ -25,7 +25,6 @@ from .topics import Topic
 # title is that name prettified; nothing else is authored for it (see core.stac).
 CATALOG = stac.SERVING_TOPICS_CATALOG
 PARQUET_MIME = config.PARQUET_MIME
-PMTILES_MIME = config.PMTILES_MIME
 
 
 def collection_path(schema: str) -> str:
@@ -46,29 +45,9 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {view}").fetchone()[0])
 
 
-def _table_type(duck_type: str) -> str:
-    """DuckDB column type → STAC Table extension type string."""
-    t = duck_type.upper()
-    if t.startswith("GEOMETRY"):
-        return "geometry"
-    if "INT" in t or t == "HUGEINT":
-        return "integer"
-    if t in ("DOUBLE", "FLOAT", "REAL") or t.startswith("DECIMAL"):
-        return "number"
-    if t in ("BOOLEAN", "BOOL"):
-        return "boolean"
-    if t.startswith("TIMESTAMP"):
-        return "datetime"
-    if t == "DATE":
-        return "date"
-    if "CHAR" in t or t in ("VARCHAR", "TEXT", "STRING"):
-        return "string"
-    return duck_type.lower()
-
-
 def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
     """`table:columns` describing the GeoParquet — the real materialized columns + their types."""
-    return [{"name": r[0], "type": _table_type(str(r[1]))}
+    return [{"name": r[0], "type": stac.table_type(str(r[1]))}
             for r in con.execute(f"DESCRIBE {view}").fetchall()]
 
 
@@ -180,9 +159,7 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
 
     assets = {
         "data": data_asset,
-        "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
-                    "roles": ["visual"], "title": "PMTiles vector tiles",
-                    "description": stac.USAGE_PMTILES},
+        "pmtiles": stac.pmtiles_asset(pmtiles_url),
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
         # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
@@ -245,10 +222,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     props = _properties(topic, con, view, md, title, description, rc, content_hash)
     assets = _assets(topic, con, view, pmtiles_url, rel, file_meta)
 
-    # Table extension is in play iff any asset describes its columns.
     exts = [stac.WEB_MAP_LINKS_EXT]
-    if any("table:columns" in a for a in assets.values()):
-        exts.append(stac.TABLE_EXT)
 
     item = stac.build_item(
         item_id=topic.stem, collection=topic.schema,

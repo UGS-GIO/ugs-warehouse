@@ -10,8 +10,18 @@ Object prefixes for pub artifacts (all under one bucket, served via the CDN):
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import quote, unquote
+
+# Top-level catalog routing (UGS hosts third-party material it didn't author): the group names live
+# in core.stac, which lays the catalog out; re-exported for the pubs modules.
+from ..core.stac import (  # noqa: F401
+    EXTERNAL_COLLECTION,
+    MINING_DISTRICT_COLLECTION,
+    PUB_GROUPS,
+    PUBLICATIONS_COLLECTION,
+)
 
 # Object prefixes for the pubs producer (override via env). STAC items go to the shared
 # core.config.STAC_PREFIX (the one catalog); these are the pub *data* artifacts.
@@ -45,6 +55,10 @@ UGSPUB = "https://ugspub.nr.utah.gov/publications/"
 # /publications/ becomes the object path, so URL→object is a pure function and needs no index —
 # `ingest` can list this prefix once and know exactly which assets it holds a copy of (#120).
 PUB_FILES_PREFIX = os.environ.get("PUB_FILES_PREFIX", "pubs/files")
+
+# Snapshot of the DOIs Crossref lists for UGS (pubs/dois.py), beside the mirrored files so a
+# sandbox that moves PUB_FILES_PREFIX moves it too.
+PUB_DOI_REGISTRY_OBJECT = f"{os.path.dirname(PUB_FILES_PREFIX) or 'pubs'}/doi-registry.json"
 
 
 def pub_file_object(url: str) -> str | None:
@@ -80,12 +94,6 @@ def pub_search_object(series_id: str) -> str:
 def pub_fulltext_object(series_id: str) -> str:
     return f"{PUB_FULLTEXT_PREFIX}/{series_id.upper()}.txt"
 
-# Top-level catalog routing. UGS hosts third-party material it didn't author; split it into
-# sibling collections so the UGS geologic catalog stays clean (nothing dropped, just grouped).
-PUBLICATIONS_COLLECTION = "ugs-publications"             # UGS/UGMS-authored + USGS Utah maps
-MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series — archived 3rd-party mine files
-EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
-
 
 # Previews are WebP (#372). The harvest writes a map's catalog thumbnail and the sheet the 3D viewer
 # drapes next to its COG; the cover job writes a cover for every pub. The ingest finds them by these
@@ -101,6 +109,46 @@ PNG_COVER_SUFFIX = ".png"
 
 def pub_cover_object(series_id: str) -> str:
     return f"{PUB_THUMB_PREFIX}/{series_id.upper()}{COVER_SUFFIX}"
+
+
+def attachment_key(label: str | None) -> str:
+    """The Collection asset key of an attachment, from its label (`extra_data`): lowercase, runs of
+    other characters as `_`. The STAC Collection and the vectors manifest both use it, so a layer's
+    `source_file.key` names the asset its file is."""
+    return re.sub(r"[^a-z0-9]+", "_", (label or "file").strip().lower()).strip("_") or "file"
+
+
+# Collection asset keys that are not attachments: an attachment never takes one.
+FIXED_ASSET_KEYS = ("publication", "thumbnail", "overview")
+
+
+def attachment_labels(files: list[tuple[str, str | None]]) -> dict[str, str | None]:
+    """{url: label} with one label per URL: the smallest when the feed lists a URL under several, so
+    the key and the title come from the same row whatever order the feed returns."""
+    labels: dict[str, str | None] = {}
+    for url, label in files:
+        if url not in labels or (label or "") < (labels[url] or ""):
+            labels[url] = label
+    return labels
+
+
+def attachment_keys(files: list[tuple[str, str | None]]) -> dict[str, str]:
+    """{url: Collection asset key} for a publication's attachments, from `(url, label)` pairs. A
+    repeated URL has one key. Keys are numbered in (key, url) order, not feed order (the feed read
+    has no ORDER BY), so the vectors job and the STAC ingest agree: a key taken ignoring case, or
+    one of FIXED_ASSET_KEYS, gets `_2`, `_3`."""
+    labels = attachment_labels(files)
+    taken = {k.casefold() for k in FIXED_ASSET_KEYS}
+    out: dict[str, str] = {}
+    for url, base in sorted(((u, attachment_key(lb)) for u, lb in labels.items()),
+                            key=lambda t: (t[1], t[0])):
+        key, n = base, 1
+        while key.casefold() in taken:
+            n += 1
+            key = f"{base}_{n}"
+        taken.add(key.casefold())
+        out[url] = key
+    return out
 
 
 @dataclass(frozen=True)

@@ -161,6 +161,23 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     return renders, style_asset
 
 
+GENERATED_STYLE_MIME = "application/vnd.mapbox.style+json"  # serving-topic style assets stay application/json
+
+
+def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
+    """`(renders, style_asset)` for a publication layer's generated style file, the same shape as
+    `renders_for`. Empty when the doc has no `pmtiles` asset for it to draw. The block is marked
+    `generated`: the file is the viewer's own default look, so the viewer draws the layer in its
+    per-layer colour rather than the file's neutral one."""
+    if asset_keys and "pmtiles" not in asset_keys:
+        return {}, None
+    block = {"title": "Publication layer style", "assets": ["pmtiles"], "style_url": style_url,
+             "generated": True}
+    asset = {"href": style_url, "type": GENERATED_STYLE_MIME, "roles": ["style"],
+             "title": "MapLibre GL style (default look)"}
+    return {"default": block}, asset
+
+
 # ---------------------------------------------------------------- classification
 # Derive categorical classes (value/label + color) from the bound GL style fragment, so the catalog
 # carries machine-readable categories (classification extension) instead of clients reverse-

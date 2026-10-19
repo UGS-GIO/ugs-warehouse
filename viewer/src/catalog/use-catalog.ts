@@ -3,10 +3,7 @@ import { type CollectionSummary, type CoverRef, type ItemRef } from "@/catalog/b
 import { layerCollectionIds } from "@/catalog/catalog";
 import { type CatalogDoc } from "@/discover/search-index";
 import { CATALOG_URL, childLinks, collKeyOf, itemLinks, type StacDoc, thumbnailAsset, useDocs } from "@/stac";
-import { useIndexes } from "@/stac/items-index";
-
-export const itemHrefIn = (collHref: string, id: string) =>
-  collHref.replace(/collection\.json(\?.*)?$/, `${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
+import { indexItemRefs, useIndexes } from "@/stac/items-index";
 
 // ---- catalog tree (one level of nesting: root → sub-catalog → series collections) ----
 // Counts + titles ride on the child links (warehouse emits ugs:item_count), so the catalog page
@@ -34,12 +31,13 @@ export function useCatalogTree(catalog: StacDoc | undefined, collectionId: strin
   const leafColl = leafColls.find((c) => c.id === collectionId);
   // Cards for the current browse level: none at a leaf (items show); a sub-catalog's series; else root.
   const cards = leafColl ? [] : subCat ? seriesChildren.filter((c) => c.parentId === subCat.id) : rootChildren;
-  return { rootChildren, subCats, seriesChildren, leafColls, layerCollIds, subCat, leafColl, cards };
+  return { rootChildren, subCats, subDocs, seriesChildren, leafColls, layerCollIds, subCat, leafColl, cards };
 }
 
 // Each collection's items from its items.json. Graceful fallback: a collection whose items.json is
 // missing (pre-index catalog) fetches its collection.json for item links, then those items —
-// scoped, never a catalog-wide fan-out. `loadKey` says how much has loaded.
+// scoped, never a catalog-wide fan-out. `loadKey` says how much has loaded; `lookups` are the
+// queries an item href is resolved through, for telling "still loading" and "failed" from "not found".
 export function useIndexedItems(colls: { id: string; href: string }[]) {
   const idx = useIndexes(colls);
   const fbColls = colls.filter((_, i) => idx[i]?.missing);
@@ -48,13 +46,13 @@ export function useIndexedItems(colls: { id: string; href: string }[]) {
     itemLinks(fbCollDocs.docs[i]?.data, c.href).map((l) => ({ collId: c.id, href: l.href })));
   const fbDocs = useDocs(fallbackRefs.map((r) => r.href));
   const items: ItemRef[] = [
-    ...idx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
-      collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
-    }))),
+    ...idx.flatMap(indexItemRefs),
     ...fallbackRefs.map((r, i) => ({ ...r, data: fbDocs.docs[i]?.data })),
   ];
   return {
     items,
+    idx,
+    lookups: [fbCollDocs, { isLoading: fbDocs.isLoading }, ...idx.map((r) => ({ isLoading: r.isLoading }))],
     isLoading: idx.some((r) => r.isLoading) || fbDocs.isLoading,
     loadKey: idx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
       + `|fb:${fbDocs.docs.filter((d) => d?.data).length}`,
@@ -72,13 +70,13 @@ export function useCovers(coverColls: CollectionSummary[], cards: CollectionSumm
     const out: Record<string, CoverRef[]> = {};
     for (const r of coverIdx) {
       const date = (d: StacDoc) => String(d.properties?.datetime ?? "");
-      out[r.id] = (r.index?.items ?? [])
-        .map((d) => ({ d, th: thumbnailAsset(d) }))
+      out[r.id] = indexItemRefs(r)
+        .map(({ href, data: d }) => ({ href, d, th: thumbnailAsset(d) }))
         .filter((x) => x.th)
         .sort((a, b) => date(b.d).localeCompare(date(a.d)))
         .slice(0, 5)
-        .map(({ d, th }) => ({
-          href: itemHrefIn(r.href, String(d.id)), thumb: th!.href,
+        .map(({ href, d, th }) => ({
+          href, thumb: th!.href,
           title: String(d.properties?.title ?? d.id ?? ""),
           date: date(d),
         }));

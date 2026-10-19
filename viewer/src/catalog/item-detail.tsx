@@ -2,6 +2,7 @@
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
 import { type ReactNode, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
@@ -15,17 +16,24 @@ import { FieldsPanel, Preview } from "./asset-viewer";
 import { AssetsPanel, EndpointsPanel, listedAssets } from "./endpoints-panel";
 import { CubeStepsPanel, CubeStepsProvider } from "@/zarr/cube-steps-context";
 import { DownloadsPanel } from "./downloads-panel";
-import { aboutRows, bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel } from "./item-view";
+import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, groupPartsByFile, kindLabel, type MetaRow, type PartGroup, type PartSection,
+  recordCountLabel } from "./item-view";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
-import { type Asset, catalogItemHref, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  parquetAsset, pmtilesLink, relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { CiteMenu } from "./cite-menu";
+import { citationFields } from "./citation";
+import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, describeData, geopackageAsset, hasFootprint, inferredKey,
+  inferredTitle, isReferenceAsset, isTableKind, IS_REVIEW, partitionRelated, ownForeignKeys, parquetAsset, relatedAssets,
+  pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
+import { ReferenceTables } from "@/map/reference-tables";
 import { C, humanize } from "@/ui/ui";
+import { Breadcrumb, type Crumb } from "./breadcrumb";
+import { formatBytes } from "@/offline/opfs";
 import { Unavailable } from "@/offline/offline-notice";
 import { SaveLayerOffline } from "@/offline/save-layer-offline";
 
-function RelatedPanel({ item }: { item: StacDoc }) {
+export function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
   const tables = relatedAssets(item);
   const fks = ownForeignKeys(item);
@@ -52,7 +60,50 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const toggleTable = toggleIn(setOpenTables);
   const toggleGallery = toggleIn(setOpenGalleries);
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
-  if (!links.length && !tables.length && !fks.length) return null;
+  const { own: primary, reference: refs } = partitionRelated(tables, (t) => isReferenceAsset(t.asset));
+  // The layer's own outgoing keys, less those a primary related table below already shows (a
+  // publication's data asset carries both). A key to a collapsed reference table stays listed.
+  const ownKeys = fks.filter((fk) => !primary.some((t) => t.asset.href === fk.reference.href));
+  // A key's target by the title of this item's related table or link at the same href, else its
+  // resource id humanised.
+  const refLabel = (fk: ForeignKey) =>
+    (fk.reference.href && (tables.find((t) => t.asset.href === fk.reference.href)?.asset.title
+      ?? links.find((l) => l.href === fk.reference.href)?.title)) || humanize(fk.reference.resource);
+  const tableRow = ({ key, asset }: { key: string; asset: Asset }) => (
+    <li key={key}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{asset.title ?? key}</span>
+        <PartDescriptor text={describeData({ table: true, rows: asset["table:row_count"] })} />
+        <button className="text-primary hover:underline"
+          onClick={() => toggleTable(key)}>
+          {isOpen(key) ? "Hide" : "View"}
+        </button>
+        {isPhotos(key, asset) && (
+          <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
+            {openGalleries.has(key) ? "Hide gallery" : "Gallery"}
+          </button>
+        )}
+        <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
+        {asset["ugs:foreign_keys"]?.map((fk, i) => (
+          <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)<InferredMark fk={fk} /></span>
+        ))}
+      </div>
+      {/* View the related parquet in the same DuckDB-wasm explorer (paged, virtualized,
+          range-read: never the whole file). No geometry → a plain data table. */}
+      {isOpen(key) && (() => {
+        const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
+        const preset = featureRelated?.relatedKey === key && childField
+          ? { col: childField, kind: "exact" as const, value: featureRelated.value }
+          : undefined;
+        // Clearing the preset widens the table in place, so record it open BEFORE clearing
+        // the context: a table opened only by the click would otherwise close with it.
+        const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
+        return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
+      })()}
+      {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
+    </li>
+  );
+  if (!links.length && !tables.length && !ownKeys.length) return null;
   return (
     <section ref={sectionRef} className="mt-4 rounded-md border border-border p-3">
       <h3 className="text-sm font-semibold">Related</h3>
@@ -66,64 +117,47 @@ function RelatedPanel({ item }: { item: StacDoc }) {
           </ul>
         </div>
       )}
-      {fks.length > 0 && (
+      {ownKeys.length > 0 && (
         <div className="mt-2">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">This layer references</div>
           <ul className="mt-1 space-y-0.5 text-xs">
-            {fks.map((fk, i) => (
+            {ownKeys.map((fk, i) => (
               <li key={i}>
                 <code>{fk.fields.join(", ")}</code> →{" "}
                 {fk.reference.href
-                  ? <a href={fk.reference.href} className="font-medium text-primary hover:underline" download>{humanize(fk.reference.resource)}</a>
-                  : <span className="font-medium">{humanize(fk.reference.resource)}</span>}
+                  ? <a href={fk.reference.href} className="font-medium text-primary hover:underline" download>{refLabel(fk)}</a>
+                  : <span className="font-medium">{refLabel(fk)}</span>}
                 .<code>{fk.reference.fields.join(", ")}</code>
+                <InferredMark fk={fk} />
               </li>
             ))}
           </ul>
         </div>
       )}
-      {tables.length > 0 && (
+      {primary.length > 0 && (
         <div className="mt-2">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Related tables</div>
-          <ul className="mt-1 space-y-1 text-xs">
-            {tables.map(({ key, asset }) => (
-              <li key={key}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{asset.title ?? key}</span>
-                  <button className="text-primary hover:underline"
-                    onClick={() => toggleTable(key)}>
-                    {isOpen(key) ? "Hide" : "View"}
-                  </button>
-                  {isPhotos(key, asset) && (
-                    <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
-                      {openGalleries.has(key) ? "Hide gallery" : "Gallery"}
-                    </button>
-                  )}
-                  <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
-                  {asset["ugs:foreign_keys"]?.map((fk, i) => (
-                    <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
-                  ))}
-                </div>
-                {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
-                    range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {isOpen(key) && (() => {
-                  const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
-                  const preset = featureRelated?.relatedKey === key && childField
-                    ? { col: childField, kind: "exact" as const, value: featureRelated.value }
-                    : undefined;
-                  // Clearing the preset widens the table in place, so record it open BEFORE clearing
-                  // the context — a table opened only by the click would otherwise close with it.
-                  const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
-                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
-                })()}
-                {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
-              </li>
-            ))}
-          </ul>
+          <ul className="mt-1 space-y-1 text-xs">{primary.map(tableRow)}</ul>
         </div>
+      )}
+      {/* Reference tables (most of the publication's layers point at them) come after the layer's
+          own joins, collapsed unless they are all there is or one of them is open (refsOpen). */}
+      {refs.length > 0 && (
+        <ReferenceTables className="mt-2" titles={refs.map((t) => t.asset.title ?? t.key)}
+          defaultOpen={!primary.length || refs.some((t) => isOpen(t.key))}>
+          {() => <ul className="mt-1 space-y-1 text-xs">{refs.map(tableRow)}</ul>}
+        </ReferenceTables>
       )}
     </section>
   );
+}
+
+// "inferred", subtly, on a key the producer inferred from the data; nothing on a declared one.
+function InferredMark({ fk }: { fk: ForeignKey | undefined }) {
+  const inf = inferredKey(fk);
+  return inf
+    ? <span title={inferredTitle(inf)} className="ml-1.5 cursor-help text-[10px] italic text-muted-foreground">inferred</span>
+    : null;
 }
 
 // "In this issue" — the Survey Notes table of contents (warehouse parses it from the PDF). Each
@@ -150,6 +184,117 @@ function IssueContents({ item }: { item: StacDoc }) {
         })}
       </ol>
     </section>
+  );
+}
+
+// A same-view link to another catalog entry (keeps the view and its other search keys). `terrain`
+// is cleared because the 3D toggle belongs to the item it was set on; a newly opened one starts 2D.
+function EntryLink({ c, i, className, children }: { c: string; i: string; className?: string; children: ReactNode }) {
+  return (
+    <Link to="." search={(prev) => ({ ...prev, c, i, terrain: undefined })} className={className}>
+      {children}
+    </Link>
+  );
+}
+
+// One file with every layer and table of the publication, each layer in its own CRS. Only when the
+// publication has one (a very large one is not packaged).
+export function GeopackageLink({ item }: { item: StacDoc }) {
+  const gpkg = geopackageAsset(item);
+  if (!gpkg) return null;
+  const size = gpkg["file:size"];
+  return (
+    <a className={C.chip} href={gpkg.href} download>
+      Download all data (GeoPackage{size ? `, ${formatBytes(size)}` : ""})
+    </a>
+  );
+}
+
+// The publication's data: the all-layers download (also on a single-file publication, which has no
+// parts) above its layers and tables.
+export function PublicationData({ item, collectionId }: { item: StacDoc; collectionId: string }) {
+  return (
+    <>
+      {geopackageAsset(item) && <div><GeopackageLink item={item} /></div>}
+      <PublicationParts item={item} collectionId={collectionId} />
+    </>
+  );
+}
+
+// The geometry · count line beside a part or related table; nothing when the catalog has no data for it.
+function PartDescriptor({ text }: { text: string }) {
+  return text ? <span className="ml-2 text-xs text-muted-foreground">{text}</span> : null;
+}
+
+// A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
+// at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
+// Grouped by groupParts (item-view.ts); groups are native <details>, so they open without state.
+export function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId: string }) {
+  const parts = collectionParts(item);
+  if (!parts.length || !collectionId || !item.id) return null;
+  const c = `${collectionId}/${item.id}`;
+  const list = (ps: CollectionPart[]) => (
+    <ul className="mt-1 divide-y divide-border text-sm">
+      {ps.map((p) => (
+        <li key={p.id} className="py-1">
+          <EntryLink c={c} i={p.id} className="text-primary no-underline hover:underline">{p.title} ›</EntryLink>
+          <PartDescriptor text={describeData({ geometry: p.geometry, table: isTableKind(p.kind), rows: p.rows })} />
+        </li>
+      ))}
+    </ul>
+  );
+  const group = (g: PartGroup, i: number) => g.label
+    ? (
+      <details key={g.label} open={!g.collapsed} className="mt-1.5">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {g.label} <span className="font-normal normal-case">· {g.parts.length}</span>
+        </summary>
+        {list(g.parts)}
+      </details>
+    )
+    : <div key={i}>{list(g.parts)}</div>;
+  const section = (s: PartSection, i: number) => s.label
+    ? (
+      <details key={s.label} open={!s.collapsed} className="mt-2 border-t border-border pt-2">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
+          {s.label} <span className="text-xs text-muted-foreground">· {s.count}</span>
+        </summary>
+        <div className="pl-3">{s.groups.map(group)}</div>
+      </details>
+    )
+    : <div key={i}>{s.groups.map(group)}</div>;
+  return (
+    <section className="mt-4 rounded-md border border-border bg-card p-3">
+      <h3 className="text-sm font-semibold">Layers and tables</h3>
+      {groupPartsByFile(parts).map((f, fi) => f.label
+        ? (
+          <details key={f.label} open={!f.collapsed} className="mt-2 border-t border-border pt-2">
+            <summary className="cursor-pointer text-sm font-semibold text-foreground">
+              {f.label} <span className="text-xs font-normal text-muted-foreground">· {f.count}</span>
+            </summary>
+            <div className="pl-3">{f.sections.map(section)}</div>
+          </details>
+        )
+        : <div key={fi}>{f.sections.map(section)}</div>)}
+    </section>
+  );
+}
+
+// On a publication page, "Add to map" for its plate, as on the plate's own page. Nothing for a
+// report-only or single-file publication (no plate Item), or while the plate loads.
+export function PlateAddToMap({ item }: { item: StacDoc }) {
+  const { plate } = usePlate(item);
+  return plate?.id ? <AddToMapButton large layerId={String(plate.id)} doc={plate} /> : null;
+}
+
+export type PartOf = { title: string; c: string; i: string };
+
+function PartOfLine({ partOf }: { partOf?: PartOf }) {
+  if (!partOf) return null;
+  return (
+    <p className="mt-1 text-sm text-muted-foreground">
+      Part of <EntryLink c={partOf.c} i={partOf.i} className="text-primary hover:underline">{partOf.title}</EntryLink>
+    </p>
   );
 }
 
@@ -239,12 +384,26 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, raw, error, missing, partOf, crumbs, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
+  raw?: StacDoc;                   // the doc as published, for the JSON panel (item may be normalised)
   error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
+  missing?: string;                // an id this catalog does not have: say so instead of loading
+  partOf?: PartOf;                 // the publication an Item belongs to
+  crumbs?: Crumb[];  // a full trail, replacing `collection / id`
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
+  if (missing) {
+    return (
+      <div role="status" className="space-y-2 text-sm">
+        <p className="text-foreground">Not found: <code>{missing}</code> is not in this catalog.</p>
+        <button type="button" onClick={onBack} className="text-primary hover:underline">
+          ‹ Back to {collectionId ? collectionLabel(collectionId) : "the catalog"}
+        </button>
+      </div>
+    );
+  }
   if (!item) {
     return error
       ? <Unavailable what="this item" error={error}
@@ -252,16 +411,12 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
       : <em className={C.muted}>Loading…</em>;
   }
   const p = item.properties ?? {};
-  const hasGeom = Boolean(item.geometry || item.bbox);
+  const hasGeom = hasFootprint(item);
   const via = viaLink(item);
   const cite = citeLink(item);
 
-  const crumb = (
-    <div className="mb-1.5 text-xs">
-      <span className={C.crumb} onClick={onBack}>{collectionId}</span>
-      <span className={C.muted}> / {item.id}</span>
-    </div>
-  );
+  const crumb = <Breadcrumb className="mb-1.5 text-xs"
+    crumbs={crumbs ?? [{ label: collectionId, onClick: onBack }, { label: String(item.id ?? "") }]} />;
 
   // The item-view getters read an ItemRef; build a lightweight one over the resolved doc.
   const it: ItemRef = { collId: collectionId, href: "", data: item };
@@ -280,6 +435,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0 max-w-3xl">
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
+          <PartOfLine partOf={partOf} />
           <p className="mt-1.5 text-sm text-muted-foreground">
             {facts.join(" · ")}
             {IS_REVIEW && item.id && <> <ReviewBadge itemId={String(item.id)} /></>}
@@ -291,10 +447,12 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
           {page && listedAssets(item).length > 0 && <a href="#downloads" className={`${PRIMARY} lg:hidden`}>Download</a>}
           {hasGeom && <button onClick={onMap} className={SECONDARY}>View on map</button>}
           <AddToMapButton large />
+          <PlateAddToMap item={item} />
           <SaveLayerOffline item={item} className={SECONDARY} />
           {onExplore && <button onClick={onExplore} className={SECONDARY}>Explore ⤢</button>}
           {via && <a href={via.href} target="_blank" rel="noopener" className={SECONDARY}>{via.title ?? "Publication page"} ↗</a>}
           {cite && <a href={cite.href} target="_blank" rel="noopener" className={SECONDARY}>Cite (DOI) ↗</a>}
+          {cite && <CiteMenu fields={citationFields(p, String(item.id ?? ""))} className={SECONDARY} />}
         </div>
       </div>
       {/* Same grid as the map below, so the description wraps at the map's width. */}
@@ -321,6 +479,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
           <div className="min-w-0 space-y-6 lg:col-span-2">
             <Preview item={item} />
             <IssueContents item={item} />
+            <PublicationData item={item} collectionId={collectionId} />
             {!fieldsUnderMap && <FieldsPanel item={item} />}
             <RelatedPanel item={item} />
             {IS_REVIEW && <CatalogReview item={item} />}
@@ -333,7 +492,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
               <DownloadsPanel key={String(item.id)} item={item} />
             </div>
             <EndpointsPanel item={item} />
-            <StacJson item={item} title={`${item.id} — STAC JSON`} />
+            <StacJson item={raw ?? item} title={`${item.id} — STAC JSON`} />
           </aside>
         </div>
         </CubeStepsProvider>
@@ -347,6 +506,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
       {head}
       <Preview item={item} />
       <IssueContents item={item} />
+      <PublicationData item={item} collectionId={collectionId} />
       {atAGlance}
       {IS_REVIEW && <CatalogReview item={item} />}
     </div>

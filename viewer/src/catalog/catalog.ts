@@ -1,4 +1,5 @@
 // Pure catalog-tree helpers (no browser globals, so unit-testable in node).
+import { idOf, layerLabel, parentKeyOf, pubOfEntry, type StacDoc } from "@/stac";
 
 // Sub-catalogs whose children are map-layer collections rather than publication series. Vector
 // serving topics split into one collection per dbt mart schema, so their layers are nested a level
@@ -14,6 +15,59 @@ export const layerCollectionIds = (
   ...rootChildren.filter((c) => c.kind === "collection").map((c) => c.id),
   ...nestedChildren.filter((c) => c.parentId && LAYER_CATALOG_IDS.has(c.parentId)).map((c) => c.id),
 ];
+
+// One breadcrumb: `to` is where it navigates (`{}` = the catalog root), absent on the current page.
+export type TrailCrumb = { label: string; to?: { c?: string; i?: string; keepSeries?: boolean } };
+type TrailNode = { id: string; title?: string; parentId?: string };
+
+// Catalog [ / sub-catalog ] [ / series ] [ / publication ] [ / item ]. `leaf` is the open collection,
+// or the series of the publication `pub` an open Item sits in. `itemTitle` labels the last crumb
+// in place of the item id.
+export const catalogTrail = (o: {
+  collectionId?: string; itemUrl?: string; subCat?: TrailNode; subCats: TrailNode[]; leaf?: TrailNode;
+  pub?: { sid: string; title?: string }; itemTitle?: string;
+}): TrailCrumb[] => {
+  const { collectionId, itemUrl, subCat, subCats, leaf, pub, itemTitle } = o;
+  const crumbs: TrailCrumb[] = [{ label: "Catalog", to: collectionId || itemUrl ? {} : undefined }];
+  if (subCat) crumbs.push({ label: subCat.title ?? subCat.id, to: itemUrl ? { c: subCat.id } : undefined });
+  const parent = leaf?.parentId ? subCats.find((s) => s.id === leaf.parentId) : undefined;
+  if (parent) crumbs.push({ label: parent.title ?? parent.id, to: { c: parent.id } });
+  if (leaf) crumbs.push({ label: leaf.title ?? leaf.id, to: itemUrl ? { c: leaf.id, keepSeries: true } : undefined });
+  if (leaf && pub) crumbs.push({ label: pub.title ?? pub.sid, to: { c: leaf.id, i: pub.sid } });
+  if (itemUrl) crumbs.push({ label: itemTitle || itemUrl });
+  return crumbs;
+};
+
+// Where a crumb navigates from `view`. A publication crumb (it names an item, `i`) opens in place, so
+// the Discover drawer stays a drawer; a series, group or root crumb is a browse page, which only the
+// Catalog view shows.
+export const crumbNav = <V extends string>(to: NonNullable<TrailCrumb["to"]>, view: V, seriesSel?: string[]):
+  { view: V | "catalog"; c?: string; i?: string; s?: string[] } =>
+  ({ view: to.i ? view : "catalog", c: to.c, i: to.i, s: to.keepSeries ? seriesSel : undefined });
+
+// Where Back goes from an item page: an Item inside a publication returns to the publication,
+// anything else to its collection's list with the series filter kept.
+export const itemBackTarget = (o: {
+  partOf?: { c: string; i: string }; collectionUrl?: string; seriesSel?: string[];
+}): { c?: string; i?: string; s?: string[] } =>
+  o.partOf ? { c: o.partOf.c, i: o.partOf.i } : { c: o.collectionUrl, s: o.seriesSel };
+
+// Map layer-list rows over the loaded items: those that draw, data layers first, then by group and
+// title. A publication's layer (tagged in the root index) files under its series and names its
+// publication in the title.
+export const layerRowsOf = (
+  items: { collId: string; href: string; data?: StacDoc }[],
+  o: { draws: (d?: StacDoc) => boolean; isLayer: (r: { collId: string; data?: StacDoc }) => boolean;
+       collTitle: (id: string) => string },
+): { id: string; href: string; title: string; group: string; layer: boolean }[] => items
+  .filter((r) => o.draws(r.data))
+  .map((r) => {
+    const id = idOf(r.href);
+    const groupId = pubOfEntry(r.data) ? parentKeyOf(r.collId) : r.collId;
+    return { id, href: r.href, title: layerLabel(r.data, id), group: o.collTitle(groupId), layer: o.isLayer(r) };
+  })
+  .sort((a, b) => Number(b.layer) - Number(a.layer)
+                  || a.group.localeCompare(b.group) || a.title.localeCompare(b.title));
 
 /** An item's OWN OGC API Features endpoint, read from its `rel=service` link.
  *
@@ -32,6 +86,20 @@ export const serviceUrlOf = (
   const href = (item?.links ?? []).find((l) => l.rel === "service")?.href;
   if (!href) return undefined;
   return base ? href.replace(/^https?:\/\/[^/]+/, base) : href;
+};
+
+/** The OGC API Features rows for an item: only when it carries its own `rel=service` link. That
+ * link is the producer saying featureserv serves it (serving-topic layers); a publication layer
+ * has a GeoParquet too but is not served, so no URL is built from its id. */
+export const featureEndpoints = (
+  item: { links?: { rel: string; href: string }[] } | undefined,
+  base = "",
+): { label: string; desc: string; url: string }[] => {
+  const coll = serviceUrlOf(item, base);
+  return coll ? [
+    { label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll },
+    { label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` },
+  ] : [];
 };
 
 // Both lists are named, so an unknown root shows as "other" rather than defaulting to a publication.

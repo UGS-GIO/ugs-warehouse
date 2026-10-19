@@ -1,0 +1,61 @@
+{
+  "type": "Collection",
+  "stac_version": "1.1.0",
+  "stac_extensions": [
+    "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+    "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+    "https://stac-extensions.github.io/file/v2.1.0/schema.json"
+  ],
+  "id": "C-140",
+  "title": "Utah Mining 2025 - Metals, Industrial Minerals, Uranium, and Coal",
+  "description": "Rupke, A., Mills, S.E., Berg, M.D.V., Christensen, N., and Boden, T., 2026, Utah Mining 2025 - Metals, Industrial Minerals, Uranium, and Coal: UGS C-140, https://doi.org/10.34191/C-140.",
+  "license": "CC-BY-4.0",
+  "providers": [
+    {
+      "name": "Utah Geological Survey",
+      "roles": [
+        "producer",
+        "processor",
+        "licensor",
+        "host"
+      ],
+      "url": "https://geology.utah.gov"
+    }
+  ],
+  "extent": {
+    "spatial": {
+      "bbox": [
+        [
+          -114.1,
+          36.9,
+          -108.9,
+          42.1
+        ]
+      ]
+    },
+    "temporal": {
+      "interval": [
+        [
+          "2026-01-01T00:00:00Z",
+          "2026-01-01T00:00:00Z"
+        ]
+      ]
+    }
+  },
+  "ugs:series_id": "C-140",
+  "ugs:pub_type": "Circular",
+  "ugs:series": "Circular",
+  "ugs:author": "Andrew Rupke, Stephanie E. Mills, Michael D. Vanden Berg, Noah Christensen,; Taylor Boden",
+  "ugs:topic": "mineral-energy",
+  "ugs:topic_category": "geoscientificInformation",
+  "ugs:footprint_source": "utah-bbox",
+  "keywords": [
+    "annualreport",
+    "coal",
+    "emppub",
+    "indminerals",
+    "metals"
+  ],
+  "sci:doi": "10.34191/C-140",
+  "sci:citation": "Rupke, A., Mills, S.E., Berg, M.D.V., Christensen, N., and Boden, T., 2026, Utah Mining 2025 - Metals, Industrial Minerals, Uranium, and Coal: UGS C-140, https://doi.org/10.34191/C-140."
+}

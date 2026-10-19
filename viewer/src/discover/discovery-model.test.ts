@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
-  effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
+  discoverable, effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, parseDiscovery,
   sortItems, typeOf,
 } from "./discovery-model";
+import { hasFootprint } from "@/stac";
+import { rootIndexItems } from "@/stac/items-index";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
 const item = (collId: string, id: string, props: Record<string, unknown> = {}, bbox?: number[]): ItemRef =>
@@ -47,10 +49,14 @@ describe("extractFacets", () => {
   });
 });
 
-describe("hasGeometry / typeOf", () => {
+describe("hasFootprint / typeOf", () => {
   it("reads a valid bbox as geometry, rejects a missing one", () => {
-    expect(hasGeometry(items[0])).toBe(true);
-    expect(hasGeometry(items[3])).toBe(false);
+    expect(hasFootprint(items[0].data)).toBe(true);
+    expect(hasFootprint(items[3].data)).toBe(false);
+  });
+  it("keeps a table that has a geometry off the map count", () => {
+    const table = { bbox: [-112, 40, -111, 41], properties: { "ugs:layer_kind": "table" } };
+    expect(hasFootprint(table)).toBe(false);
   });
   it("prefers pub_type, falling back to topic then series", () => {
     expect(typeOf(items[2])).toBe("Geologic Map");
@@ -170,6 +176,48 @@ describe("category & format facets", () => {
       .toEqual(["qf"]);
     expect(ids(applyFacets(withAssets, { collections: [], types: [], formats: ["PDF"], geometry: "all" })))
       .toEqual(["GQ-1"]);
+  });
+});
+
+// A migrated series lists one root-index entry per publication Collection; the facets read it like
+// an item, with the collection facet at the series.
+describe("publication Collection entries", () => {
+  const entry: ItemRef = rootIndexItems({ items: [{
+    id: "OFR-9", bbox: [-112, 40, -111, 41],
+    properties: { title: "Geologic map of somewhere", datetime: "2020-01-01T00:00:00Z", "ugs:series_id": "OFR-9",
+                  "ugs:series": "OFR", "ugs:pub_type": "Open-File Report", "ugs:item_count": 2 },
+    assets: { publication: { href: "https://x/ofr-9.pdf", type: "application/pdf" },
+              thumbnail: { href: "https://x/ofr-9.webp", type: "image/webp", roles: ["thumbnail"] } },
+    links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/collection.json" }],
+  }] })[0];
+  const pubs = [entry, item("ugs-publications/OFR", "OFR-1", { "ugs:pub_type": "Open-File Report", title: "Old layout" })];
+
+  it("facets a publication at its series, as a PDF publication of its type", () => {
+    const f = extractFacets(pubs);
+    expect(f.collections.map((c) => [c.key, c.label, c.n])).toEqual([["ugs-publications/OFR", "OFR", 2]]);
+    expect(f.types.map((t) => [t.key, t.n])).toEqual([["Open-File Report", 2]]);
+    expect(f.categories.map((c) => c.key)).toEqual(["publications"]);
+    expect(f.formats.map((x) => x.key)).toEqual(["PDF"]);
+  });
+
+  it("leaves the publication's tagged layers and tables out of cards and facets", () => {
+    const layer: ItemRef = rootIndexItems({ items: [{
+      id: "OFR-9__flows", bbox: [-112, 40, -111, 41],
+      properties: { title: "Debris Flow Paths", "ugs:series_id": "OFR-9", "ugs:in_publication": "OFR-9",
+                    "ugs:publication_title": "Geologic map of somewhere" },
+      assets: { cog: { href: "https://x/f.cog.tif", type: "image/tiff; application=geotiff; profile=cloud-optimized" } },
+      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9__flows/OFR-9__flows.json" }],
+    }] })[0];
+    const shown = discoverable([...pubs, layer]);
+    expect(shown.map((it) => it.data!.id)).toEqual(["OFR-9", "OFR-1"]);
+    const f = extractFacets(shown);
+    expect(f.collections.map((c) => [c.key, c.n])).toEqual([["ugs-publications/OFR", 2]]);
+    expect(f.formats.map((x) => x.key)).toEqual(["PDF"]);
+  });
+
+  it("keeps a publication when its series or format is selected", () => {
+    const sel = { collections: ["ugs-publications/OFR"], types: [], formats: ["PDF"], geometry: "all" as const };
+    expect(applyFacets(pubs, sel).map((it) => it.data!.id)).toEqual(["OFR-9"]);
   });
 });
 

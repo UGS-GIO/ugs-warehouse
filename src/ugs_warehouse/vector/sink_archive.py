@@ -19,7 +19,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..core import config, gcs
+from ..core import config, gcs, stac
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
@@ -59,7 +59,7 @@ def archive_signature() -> str:
     fingerprint, as the tiling signature is, so a change in HOW a topic is written rebuilds it once
     even when its data has not changed."""
     return "|".join(str(v) for v in (
-        f"a{ARCHIVE_BUILD_VERSION}", GEOPARQUET_VERSION, TARGET_ROW_GROUP_BYTES, ROW_GROUP_MIN,
+        f"{stac.ARCHIVE_SIGNATURE_PREFIX}{ARCHIVE_BUILD_VERSION}", GEOPARQUET_VERSION, TARGET_ROW_GROUP_BYTES, ROW_GROUP_MIN,
         ROW_GROUP_MAX, PAGE_BYTES, PAGE_ROWS, *OVERVIEW_TOLERANCES, OVERVIEW_MIN_BYTES,
         OVERVIEW_MIN_SHRINK))
 

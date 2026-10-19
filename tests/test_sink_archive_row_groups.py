@@ -212,3 +212,14 @@ def test_archive_signature_follows_the_writer_settings(monkeypatch) -> None:
     monkeypatch.undo()
     monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001,))
     assert sink_archive.archive_signature() != before
+
+
+def test_thumbnail_hash_ignores_the_archive_signature() -> None:
+    """An archive writer change rebuilds the data but draws the same map, so no thumbnail re-renders."""
+    from ugs_warehouse.vector import thumbs
+
+    item = lambda h: {"properties": {"ugs:content_hash": h}}  # noqa: E731
+    base = "3:42:v1|ugskey=0|-zg"
+    same = thumbs._thumb_hash(item(base), [])
+    assert thumbs._thumb_hash(item(f"{base}:{sink_archive.archive_signature()}"), []) == same
+    assert thumbs._thumb_hash(item("3:43:v1|ugskey=0|-zg"), []) != same

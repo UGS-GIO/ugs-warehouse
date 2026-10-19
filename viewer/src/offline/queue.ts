@@ -51,7 +51,7 @@ export const snapshot = () => jobs;
 export const onSettled = (fn: (job: Job) => void) => { settled.add(fn); };
 
 // An area save is keyed by its size too, so saving a second area of the same layer is its own job.
-export const keyOf = (s: JobSpec) =>
+const keyOf = (s: JobSpec) =>
   s.kind === "file" ? `file:${s.url}` : s.kind === "engine" ? "engine" : `${s.kind}:${s.plan.url}:${s.bytes}`;
 
 /** "41%", or a count when the job has no byte total. */

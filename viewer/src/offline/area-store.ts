@@ -79,7 +79,6 @@ const stored = new Set<string>();
 // Read from disk on the protocol's first request rather than at startup: a map that mounts first
 // would otherwise ask for tiles before the set is filled and miss a saved area when offline.
 let loaded: Promise<unknown> | null = null;
-export const hasArea = (url: string) => stored.has(url);
 export const markStored = (url: string) => { stored.add(url); };
 
 export type StoredArea = { url: string; tiles: number; bytes: number; version?: string; bboxes: Bbox[]; savedAt?: number };

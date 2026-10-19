@@ -82,6 +82,9 @@ export const whenReady = (): Promise<void> => (state.ready ? Promise.resolve() :
 
 export const useOffline = (): OfflineState => useSyncExternalStore(subscribe, snapshot, snapshot);
 
+/** Every save waiting, running or failed, from the device's download queue (offline/queue.ts). */
+export const useJobs = (): queue.Job[] => useSyncExternalStore(queue.subscribe, queue.snapshot, queue.snapshot);
+
 // ---- changes, each followed by a re-read ----
 
 export async function removeFiles(urls: string[]): Promise<void> {

@@ -12,7 +12,7 @@ const ATTRIBUTION = '<a href="https://protomaps.com" target="_blank">Protomaps</
 export type Flavor = "light" | "white";
 
 /** basemap:// picks saved archives first (offline/basemap-protocol.ts); the main map uses it. */
-export const ROUTED: SourceSpecification = { type: "vector", tiles: ["basemap://{z}/{x}/{y}"], minzoom: 0, maxzoom: 14 };
+const ROUTED: SourceSpecification = { type: "vector", tiles: ["basemap://{z}/{x}/{y}"], minzoom: 0, maxzoom: 14 };
 /** The statewide file straight off the CDN, for maps that never go offline (previews). */
 export const DIRECT: SourceSpecification = { type: "vector", url: `pmtiles://${stateUrl()}` };
 

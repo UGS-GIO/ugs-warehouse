@@ -8,8 +8,7 @@ import { ENGINE_BYTES } from "./engine";
 import { jobProgress } from "./queue";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
-import { removeFiles, useOffline } from "./store";
-import { useJobs } from "./use-offline";
+import { removeFiles, useJobs, useOffline } from "./store";
 
 const CLASS = "inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 

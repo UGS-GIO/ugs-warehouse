@@ -103,6 +103,37 @@ def _style_url(entry: dict) -> str:
     return f"{config.STYLES_CDN_BASE}/{str(entry.get('path') or '').lstrip('/')}"
 
 
+def _cdn_url(entry: dict, key: str) -> str:
+    """CDN URL for an optional manifest path field, or "" when the entry has none."""
+    rel = str(entry.get(key) or "").lstrip("/")
+    return f"{config.STYLES_CDN_BASE}/{rel}" if rel else ""
+
+
+_RASTER_KEYS = ("colormap_name", "colormap", "rescale", "nodata")
+# sprite: icon renders' pre-baked sprite sheet, map.addSprite()d before the symbol layer.
+# glyphs: label renders' glyph template; without it MapLibre draws no text at all.
+# esri_url: the same render as an Esri renderer, for the FeatureServer (geoparquet-featureserver).
+_VECTOR_URL_KEYS = (("sprite", "sprite"), ("glyphs", "glyphs"), ("esri", "esri_url"))
+# legend: explicit legend (icon renders have no derivable paint color). field: the attribute the
+# render symbolizes, so the viewer wires legend/filter without re-parsing the GL expression.
+_VECTOR_PASS_KEYS = ("legend", "field")
+
+
+def _render_block(entry: dict, render: str, kind: str, assets: list) -> dict:
+    """One `renders` entry: colormap fields for raster, GL style + sidecar URLs for vector."""
+    block: dict = {"title": entry.get("title") or render, "assets": assets}
+    if kind == "raster":
+        block.update({k: entry[k] for k in _RASTER_KEYS if entry.get(k) is not None})
+        return block
+    block["style_url"] = _style_url(entry)
+    for key, out in _VECTOR_URL_KEYS:
+        url = _cdn_url(entry, key)
+        if url:
+            block[out] = url
+    block.update({k: entry[k] for k in _VECTOR_PASS_KEYS if entry.get(k)})
+    return block
+
+
 def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     """`(renders, style_asset)` for an item.
 
@@ -120,39 +151,12 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
         assets = list(entry.get("assets") or (["cog"] if kind == "raster" else ["pmtiles"]))
         if asset_keys and not (set(assets) & asset_keys):
             continue  # the targeted asset isn't on this item — skip
-        block: dict = {"title": entry.get("title") or render, "assets": assets}
-        if kind == "raster":
-            for k in ("colormap_name", "colormap", "rescale", "nodata"):
-                if entry.get(k) is not None:
-                    block[k] = entry[k]
-        else:
-            url = _style_url(entry)
-            block["style_url"] = url
-            # Icon renders (e.g. UCRC wells by box type) carry a pre-baked pie-wedge sprite sheet;
-            # the viewer map.addSprite()s this base URL before applying the symbol layer.
-            sprite = str(entry.get("sprite") or "").lstrip("/")
-            if sprite:
-                block["sprite"] = f"{config.STYLES_CDN_BASE}/{sprite}"
-            # Label renders carry the glyph template; without it MapLibre draws no text at all.
-            glyphs = str(entry.get("glyphs") or "").lstrip("/")
-            if glyphs:
-                block["glyphs"] = f"{config.STYLES_CDN_BASE}/{glyphs}"
-            # The same render as an Esri renderer, for the FeatureServer (geoservices/README.md).
-            esri = str(entry.get("esri") or "").lstrip("/")
-            if esri:
-                block["esri_url"] = f"{config.STYLES_CDN_BASE}/{esri}"
-            # Explicit legend (icon renders have no derivable paint color) — pass through verbatim.
-            if entry.get("legend"):
-                block["legend"] = entry["legend"]
-            # The attribute this render symbolizes — lets the viewer wire the legend/filter to a
-            # field without re-parsing the GL expression. Pass through verbatim when declared.
-            if entry.get("field"):
-                block["field"] = entry["field"]
-            if render == "default" and style_asset is None:
-                style_asset = {
-                    "href": url, "type": "application/json", "roles": ["style"],
-                    "title": "MapLibre GL style (default render)",
-                }
+        block = _render_block(entry, render, kind, assets)
+        if kind != "raster" and render == "default" and style_asset is None:
+            style_asset = {
+                "href": block["style_url"], "type": "application/json", "roles": ["style"],
+                "title": "MapLibre GL style (default render)",
+            }
         renders[render] = block
     return renders, style_asset
 
@@ -224,21 +228,50 @@ def _comparison(f) -> tuple[str, object] | None:
     return None
 
 
+def _eq_label(f: list) -> str | None:
+    a, b = f[1], f[2]
+    lit = a if not isinstance(a, list) else b if not isinstance(b, list) else None
+    return None if lit is None else str(lit)
+
+
+def _in_label(f: list) -> str | None:
+    needle = f[1]
+    if not isinstance(needle, list):
+        return str(needle)
+    vals = [v for v in f[2:] if not isinstance(v, list)]
+    return ", ".join(map(str, vals)) if vals else None
+
+
+def _bool_label(f: list) -> str | None:
+    """Label for an all/any filter: an equality subfilter's label, else its folded bounds."""
+    # Equality-shaped subfilters win, so an enumerated class keeps its plain value label.
+    for sub in f[1:]:
+        if isinstance(sub, list) and sub and sub[0] not in _CMP_SYMBOL:
+            r = _label_from_filter(sub)
+            if r:
+                return r
+    # Otherwise fold the comparisons: a lower+upper pair is one bin ("0.2 – 0.4"), a lone
+    # bound is the open-ended first/last class.
+    bounds = [c for c in (_comparison(sub) for sub in f[1:]) if c]
+    lo = next((v for o, v in bounds if o in (">=", ">")), None)
+    hi = next((v for o, v in bounds if o in ("<", "<=")), None)
+    if lo is not None and hi is not None:
+        return f"{lo} – {hi}"
+    if bounds:
+        o, v = bounds[0]
+        return f"{_CMP_SYMBOL[o]} {v}"
+    return None
+
+
 def _label_from_filter(f) -> str | None:
     """Category label from a layer filter: ==, in, match, comparisons, any/all (recurses)."""
     if not isinstance(f, list) or not f:
         return None
     op = f[0]
     if op == "==" and len(f) >= 3:
-        a, b = f[1], f[2]
-        lit = a if not isinstance(a, list) else b if not isinstance(b, list) else None
-        return None if lit is None else str(lit)
+        return _eq_label(f)
     if op == "in" and len(f) >= 2:
-        needle = f[1]
-        if not isinstance(needle, list):
-            return str(needle)
-        vals = [v for v in f[2:] if not isinstance(v, list)]
-        return ", ".join(map(str, vals)) if vals else None
+        return _in_label(f)
     if op == "match" and len(f) >= 3:
         vals = f[2]
         return ", ".join(map(str, vals)) if isinstance(vals, list) else str(vals)
@@ -246,22 +279,7 @@ def _label_from_filter(f) -> str | None:
         cmp = _comparison(f)
         return None if cmp is None else f"{_CMP_SYMBOL[cmp[0]]} {cmp[1]}"
     if op in ("all", "any"):
-        # Equality-shaped subfilters win, so an enumerated class keeps its plain value label.
-        for sub in f[1:]:
-            if isinstance(sub, list) and sub and sub[0] not in _CMP_SYMBOL:
-                r = _label_from_filter(sub)
-                if r:
-                    return r
-        # Otherwise fold the comparisons: a lower+upper pair is one bin ("0.2 – 0.4"), a lone
-        # bound is the open-ended first/last class.
-        bounds = [c for c in (_comparison(sub) for sub in f[1:]) if c]
-        lo = next((v for o, v in bounds if o in (">=", ">")), None)
-        hi = next((v for o, v in bounds if o in ("<", "<=")), None)
-        if lo is not None and hi is not None:
-            return f"{lo} – {hi}"
-        if bounds:
-            o, v = bounds[0]
-            return f"{_CMP_SYMBOL[o]} {v}"
+        return _bool_label(f)
     return None
 
 

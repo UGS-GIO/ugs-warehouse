@@ -68,7 +68,7 @@ function useColormapTexture(device: Device | null) {
 
 /** Opening a cube, as one query definition: the overlay draws from it and the layer list reads its
  *  status from the same cache entry, so neither opens the store twice. */
-export const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
+const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
   queryKey: qk.zarrSource(s.href, s.variable),
   queryFn: async () => {
     const src = await openZarr(s.href, s.variable);

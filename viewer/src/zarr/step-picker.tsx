@@ -92,7 +92,7 @@ function StretchSliders({ stretch, rescale, onPick }: {
   );
 }
 
-export function StepPickers({ stepDims, selection, onChange }: {
+function StepPickers({ stepDims, selection, onChange }: {
   stepDims: Record<string, CubeStep[]>;
   selection: Record<string, number>;
   onChange: (dim: string, index: number) => void;

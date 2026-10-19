@@ -1,7 +1,6 @@
 // The download queue as a list: what is saving, what is waiting, what failed and why.
-import { useOffline } from "./store";
+import { useJobs, useOffline } from "./store";
 import * as store from "./store";
-import { useJobs } from "./use-offline";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import { type Job, jobProgress } from "./queue";

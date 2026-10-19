@@ -61,7 +61,7 @@ comments can still read it. The durable-identity surfaces are the DuckLake merge
 **Open decision (blocks the id-flip — #174 / ALL-5715):** whether `ugs_key` becomes the *surfaced*
 id on viewer/OGC (and Esri). Blocked on an **unmeasured** assumption — that the deployed Esri
 *feature* layer uses a 32-bit OBJECTID a 53-bit `ugs_key` overflows. The ceiling is written nowhere
-in code, and has not been measured against the FeatureServer (`geoservices/`), which serves
+in code, and has not been measured against the FeatureServer (geoparquet-featureserver), which serves
 `feature_id` as the OBJECTID. **Resolve by measurement, not assumption.** tippecanoe
 caveat: `--use-attribute-for-id` *moves* the attribute out of tile `properties`, so a column can't be
 both the MVT id and a readable property.

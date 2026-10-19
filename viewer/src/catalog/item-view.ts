@@ -8,7 +8,7 @@ import type { ItemRef } from "./browse";
 import { GEOM_NAMES } from "@/data/columns";
 import {
   type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, KIND_RANK,
-  parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, type TableColumn, zarrAsset,
+  parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -357,6 +357,3 @@ const ABOUT_DEFS: MetaDef[] = [
   { key: "ugs:topic_category", label: "Topic" },
 ];
 export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);
-
-// Re-export the column-schema type so item-detail's schema table can import one thing from here.
-export type { TableColumn };

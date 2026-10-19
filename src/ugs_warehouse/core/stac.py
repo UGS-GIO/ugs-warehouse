@@ -877,7 +877,7 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
 # place on the map. The index leaves their bbox out and the viewer keeps them off the map.
 NON_MAPPABLE_KINDS = ("table", "supporting")
 # The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
-# The overview's tolerance is how the FeatureServer (geoservices/) picks it for small scales.
+# The FeatureServer (geoparquet-featureserver) picks an overview by this tolerance at small scales.
 INDEX_ASSET_KEYS = ("href", "type", "roles", "title", "ugs:simplify_tolerance")
 # The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
 # topic's data or tiling does. Read by the ingest's skip check and the thumbnail job's content hash,

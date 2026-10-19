@@ -173,8 +173,8 @@ ArcGIS Pro 3.2 or later is recommended.
 
 ### Vector layers with UGS symbology (toolbox)
 
-The UGS Warehouse toolbox adds layers and geologic map rasters by theme or search, with the web
-viewer's colors and legend and the catalog's metadata.
+The UGS Warehouse toolbox adds layers and geologic map rasters by theme or search, with the same
+UGS symbology as the feature layers below and the catalog's metadata.
 It streams the layer's GeoParquet from the CDN (Pro 3.5 or later) or copies it to a file
 geodatabase (any version).
 

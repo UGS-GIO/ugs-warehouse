@@ -1,7 +1,7 @@
 """The ArcGIS Pro toolbox: catalog parsing in `ugs_catalog`, and the `.pyt` against a fake arcpy.
 
 Hermetic: no network, no Pro. The fake arcpy records what the toolbox asks of the map, which is
-the part a Windows test cannot show quickly: which field it styles by, and with what colors.
+the part a Windows test cannot show quickly: which renderer it hands Pro, and for which field.
 """
 from __future__ import annotations
 
@@ -39,19 +39,11 @@ ROOT = {"items": [  # the root index: one CDN COG, one scan on the legacy host, 
      "assets": {"data": {"href": HREF_PLACEHOLDER}}},
 ]}
 
-PER_LAYER = {"layers": [  # one layer per value, as the hazards_qfaults style is written
-    {"type": "line", "filter": ["==", ["downcase", ["to-string", ["get", "qffhazardunit"]]], "u150wcqff"],
-     "paint": {"line-color": "#e60000"}},
-    {"type": "line", "filter": ["==", ["downcase", ["to-string", ["get", "qffhazardunit"]]], "u15kwcqff"],
-     "paint": {"line-color": "#E69800"}},
-]}
-LOOKUP = {"layers": [  # a color looked up from a literal table, as most hazard styles are written
-    {"type": "fill", "paint": {"fill-color": ["coalesce", ["get", ["coalesce", ["get", "aafhazardunit"], ""],
-                                                           ["literal", {"Haaf": "#ff0000", "Maaf": "#0070ff"}]], "#BDBDBD"]}},
-    {"type": "line", "paint": {"line-color": "#6e6e6e"}},
-]}
-MATCH = {"layers": [{"type": "circle", "paint": {"circle-color": [
-    "match", ["downcase", ["to-string", ["get", "primsource"]]], "coal", "#000000", ["wind", "solar"], "#a6cee3", "#999"]}}]}
+DRAWING = {"renderer": {  # the shape of a ugs-styles Esri renderer
+    "type": "uniqueValue", "field1": "qffhazardunit", "uniqueValueGroups": [{"classes": [
+        {"label": "<150 years", "values": [["u150wcqff"]], "symbol": {
+            "type": "CIMSymbolReference", "symbol": {"type": "CIMLineSymbol", "symbolLayers": [
+                {"type": "CIMSolidStroke", "enable": True, "width": 1.5, "color": [230, 0, 0, 255]}]}}}]}]}}
 
 
 def test_layers_sort_by_theme_and_round_trip_their_pick_list_entry():
@@ -80,49 +72,27 @@ def test_metadata_takes_the_catalog_fields_and_the_collection_license():
     assert cat.metadata({"title": "x"}) == {"title": "x"}  # nothing invented for what is absent
 
 
-def test_one_layer_per_value_takes_the_legend_labels_in_order():
-    legend = [{"label": "<150 years"}, {"label": "<15,000 years"}]
-    assert cat.classes(PER_LAYER, legend) == ("qffhazardunit", [
-        ("u150wcqff", "<150 years", (230, 0, 0)), ("u15kwcqff", "<15,000 years", (230, 152, 0))])
+def test_drawing_info_reads_the_default_renders_esri_url(monkeypatch):
+    monkeypatch.setattr(cat, "get_json", lambda url: {"url": url})
+    esri = "https://maps-assets.geology.utah.gov/styles/esri/x/by-purpose.json"
+    item = {"properties": {"ugs:renders": {"by-purpose": {"esri_url": esri, "style_url": "gl"}}}}
+    assert cat.drawing_info(item) == {"url": esri}  # no default: the first render
+    assert cat.drawing_info({"properties": {"ugs:renders": {"default": {"style_url": "gl"}}}}) is None
+    assert cat.drawing_info({"properties": {}}) is None
 
 
-def test_a_lookup_table_pairs_legend_labels_by_color():
-    legend = [{"label": "High", "color": "#ff0000"}, {"label": "Moderate", "color": "#0070FF"}]
-    assert cat.classes(LOOKUP, legend) == ("aafhazardunit", [
-        ("Haaf", "High", (255, 0, 0)), ("Maaf", "Moderate", (0, 112, 255))])
-
-
-def test_a_match_reads_through_downcase_and_expands_value_lists():
-    field, got = cat.classes(MATCH)
-    assert field == "primsource"
-    assert [v for v, _, _ in got] == ["coal", "wind", "solar"]
-
-
-def test_a_one_color_style_is_not_categorical_but_has_a_color():
-    style = {"layers": [{"type": "fill", "paint": {"fill-color": "#0056B3"}}]}
-    assert cat.classes(style) is None
-    assert cat.single_color(style) == (0, 86, 179)
+def test_match_fields_takes_the_layers_casing_and_names_what_is_missing():
+    got, missing = cat.match_fields(DRAWING, ["OBJECTID", "QffHazardUnit"])
+    assert got["renderer"]["field1"] == "QffHazardUnit" and not missing
+    assert DRAWING["renderer"]["field1"] == "qffhazardunit"  # the fetched JSON is not changed
+    assert cat.match_fields(DRAWING, ["OBJECTID"])[1] == ["qffhazardunit"]
+    arcade = {"renderer": {"type": "uniqueValue", "valueExpression": "$feature.x"}}
+    assert cat.match_fields(arcade, []) == (arcade, [])
 
 
 def _asset(data: bytes) -> dict:
     return {"href": "https://example/x.parquet", "file:size": len(data),
             "file:checksum": "1220" + hashlib.sha256(data).hexdigest()}
-
-
-def test_a_filtered_first_layer_has_no_single_color():
-    style = {"layers": [  # enmin_ccus_geochemistry: one circle layer per datatype, one an `in` filter
-        {"type": "circle", "filter": ["==", ["get", "datatype"], "core analysis"],
-         "paint": {"circle-color": "#7B1FA2"}},
-        {"type": "circle", "filter": ["in", "average", ["get", "datatype"]],
-         "paint": {"circle-color": "#AB47BC"}}]}
-    assert cat.classes(style) is None
-    assert cat.single_color(style) is None
-
-
-def test_a_geometry_type_filter_still_gives_a_single_color():
-    style = {"layers": [{"type": "fill", "filter": ["==", "$type", "Polygon"],
-                         "paint": {"fill-color": "#0056b3"}}]}
-    assert cat.single_color(style) == (0, 86, 179)
 
 
 def test_download_verifies_and_reuses_a_matching_copy(monkeypatch, tmp_path):
@@ -158,7 +128,7 @@ def test_download_verifies_and_reuses_a_matching_copy(monkeypatch, tmp_path):
 HREF = "https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet"
 STYLED_ITEM = {"assets": {"data": {"href": HREF, "file:size": 3}}, "properties": {
     "title": "Quaternary Faults", "ugs:renders": {
-    "default": {"style_url": "style", "legend": [{"label": "<150 years"}, {"label": "<15,000 years"}]}}}}
+    "default": {"esri_url": "esri", "style_url": "gl"}}}}
 
 
 class FakeParameter:
@@ -182,27 +152,15 @@ class FakeParameter:
 
 
 class FakeLayer:
-    def __init__(self, path, field_values, broken=False):
+    def __init__(self, path, broken=False):
         self.path, self.name, self.isBroken = path, "", broken
         self.dataSource = path
-        self._field_values = field_values
         self.metadata = types.SimpleNamespace(isReadOnly=False, saved=False)
         self.metadata.save = lambda: setattr(self.metadata, "saved", True)
-        self.symbology = types.SimpleNamespace(renderer=None, updateRenderer=self._update)
+        self.layer_json = None
 
-    def _update(self, kind):
-        entries = [types.SimpleNamespace(values=[[v]], label=v,
-                                         symbol=types.SimpleNamespace(color=None))
-                   for v in self._field_values]
-        entries.append(types.SimpleNamespace(values=[], label="<all other values>",
-                                             symbol=types.SimpleNamespace(color=None)))
-        self.added_all = False
-        self.symbology.renderer = types.SimpleNamespace(
-            type=kind, fields=[], groups=[types.SimpleNamespace(items=entries)],
-            symbol=types.SimpleNamespace(color=None), addAllValues=self._add_all)
-
-    def _add_all(self):
-        self.added_all = True
+    def updateLayerFromJSON(self, text):
+        self.layer_json = json.loads(text)
 
 
 class FakeExecuteError(Exception):
@@ -220,8 +178,7 @@ class FakeArcpy(types.SimpleNamespace):
         arcpy = self
 
         def add(path):
-            lyr = FakeLayer(path, ["U150WCQFF", "u15kwcqff", "other"],  # upper case, as stored
-                            broken=any(f"/{p.lower()}_" in path for p in arcpy.broken))
+            lyr = FakeLayer(path, broken=any(f"/{p.lower()}_" in path for p in arcpy.broken))
             lyr.isRasterLayer = path.endswith(".tif")
             arcpy.added.append(lyr)
             return lyr
@@ -284,7 +241,7 @@ def _load(monkeypatch, arcpy):
     listed, scans = cat.layers(INDEX), cat.rasters(ROOT)  # mod.cat is this module: list, then stub
     monkeypatch.setattr(mod.cat, "layers", lambda index=None: listed)
     monkeypatch.setattr(mod.cat, "rasters", lambda index=None: scans)
-    monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else STYLED_ITEM)
+    monkeypatch.setattr(mod.cat, "get_json", lambda url: DRAWING if url == "esri" else STYLED_ITEM)
     monkeypatch.setattr(mod.cat, "google_credentials", lambda: None)  # not signed in unless a test says
     mod._cache.clear()
     mod._cache["stale"] = None  # no GitHub check unless a test asks for one
@@ -364,13 +321,18 @@ def test_streams_with_a_google_sign_in_and_styles_like_the_viewer(monkeypatch, t
     assert lyr.path.endswith(".acs/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet")
     assert lyr.name == "Quaternary Faults" and "  Opened online. (GOOGLE)" in log
     assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
-    r = lyr.symbology.renderer
-    assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
-    assert lyr.added_all
-    got = {e.values[0][0]: (e.label, e.symbol.color) for e in r.groups[0].items if e.values}
-    assert got["U150WCQFF"] == ("<150 years", {"RGB": [230, 0, 0, 100]})
-    assert got["u15kwcqff"] == ("<15,000 years", {"RGB": [230, 152, 0, 100]})
-    assert got["other"] == ("other", None)  # a value the style does not name keeps Pro's default
+    renderer = lyr.layer_json["layerDefinition"]["drawingInfo"]["renderer"]
+    assert renderer == {**DRAWING["renderer"], "field1": "QffHazardUnit"}  # the layer's own casing
+
+
+def test_a_layer_without_the_renderers_field_keeps_the_default_and_warns(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    _signed_in(monkeypatch, mod, tmp_path)
+    arcpy.ListFields = lambda lyr: []
+    log = _run(mod, tmp_path)
+    assert arcpy.added[0].layer_json is None
+    assert "  Couldn't apply UGS colors (no 'qffhazardunit' field)." in log
 
 
 def test_the_sign_in_path_reaches_pro_with_forward_slashes(monkeypatch, tmp_path):
@@ -393,7 +355,7 @@ def test_checking_a_streamed_layer_never_counts_its_rows(monkeypatch, tmp_path):
         raise AssertionError("GetCount makes Pro cache the whole file")
 
     arcpy.management.GetCount = count
-    lyr = FakeLayer("x.acs/warehouse/geoparquet/big/big.parquet", [])
+    lyr = FakeLayer("x.acs/warehouse/geoparquet/big/big.parquet")
     assert mod._unusable(arcpy.mp.ArcGISProject("CURRENT").activeMap, lyr) is None
     lyr.isBroken = True
     assert mod._unusable(arcpy.mp.ArcGISProject("CURRENT").activeMap, lyr) == "the layer is broken"
@@ -813,7 +775,7 @@ def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, 
     acs = cat.connection_name("WEB", "maps-assets.geology.utah.gov", "geolmap")
     assert lyr.path == f"{tmp_path}/{acs}.acs/cogs/M-180.cog.tif"
     assert arcpy.connections == [("WEB", "geolmap", {"end_point": "maps-assets.geology.utah.gov"})]
-    assert lyr.symbology.renderer is None
+    assert lyr.layer_json is None
     assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"
 
 
@@ -911,7 +873,7 @@ def test_a_theme_collection_is_read_once_per_session(monkeypatch, tmp_path):
 
     def get_json(url):
         urls.append(url)
-        return PER_LAYER if url == "style" else STYLED_ITEM
+        return DRAWING if url == "esri" else STYLED_ITEM
 
     monkeypatch.setattr(mod.cat, "get_json", get_json)
     _run(mod, tmp_path)

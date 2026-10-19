@@ -1,4 +1,4 @@
-"""UGS Warehouse toolbox for ArcGIS Pro: add warehouse vector layers, styled like the web viewer.
+"""UGS Warehouse toolbox for ArcGIS Pro: add warehouse vector layers, with the UGS symbology.
 
 Keep this file and `ugs_catalog.py` in the same folder. See README.md.
 """
@@ -362,43 +362,17 @@ def _apply_metadata(lyr, fields: dict[str, str], messages) -> None:
 
 
 def _apply_style(lyr, item: dict, messages) -> None:
-    """A renderer from the layer's GL style: same field, colors and legend labels."""
-    renders = (item.get("properties") or {}).get("ugs:renders") or {}
-    render = renders.get("default") or next(iter(renders.values()), None) or {}
-    if not render.get("style_url"):
+    """The layer's ugs-styles Esri renderer, the one its FeatureServer draws with. Pro converts
+    the web map layer definition to its own renderer, as it does for a printed web map."""
+    drawing = cat.drawing_info(item)
+    if drawing is None:
+        messages.addMessage("  Shown with ArcGIS's default symbol (no UGS colors for this one).")
         return
-    style = cat.get_json(render["style_url"])
-    found = cat.classes(style, render.get("legend"))
-    if not found:
-        rgb = cat.single_color(style)
-        if rgb and hasattr(lyr.symbology, "renderer"):
-            sym = lyr.symbology
-            sym.updateRenderer("SimpleRenderer")
-            sym.renderer.symbol.color = {"RGB": [*rgb, 100]}
-            lyr.symbology = sym
-        else:
-            messages.addMessage("  Shown with ArcGIS's default symbol (no UGS colors for this one).")
+    drawing, missing = cat.match_fields(drawing, [f.name for f in arcpy.ListFields(lyr)])
+    if missing:
+        messages.addWarningMessage(f"  Couldn't apply UGS colors (no '{', '.join(missing)}' field).")
         return
-    field, classes = found
-    names = {f.name.lower(): f.name for f in arcpy.ListFields(lyr)}
-    if field.lower() not in names or not hasattr(lyr.symbology, "renderer"):
-        messages.addWarningMessage(f"  Couldn't apply UGS colors (no '{field}' field).")
-        return
-    lookup = {str(v).lower(): (label, rgb) for v, label, rgb in classes}
-    sym = lyr.symbology
-    sym.updateRenderer("UniqueValueRenderer")
-    sym.renderer.fields = [names[field.lower()]]
-    if hasattr(sym.renderer, "addAllValues"):
-        sym.renderer.addAllValues()
-    for group in sym.renderer.groups:
-        for entry in group.items:
-            if not (entry.values and entry.values[0]):  # the "all other values" entry
-                continue
-            match = lookup.get(str(entry.values[0][0]).lower())
-            if match:
-                entry.label = match[0]
-                entry.symbol.color = {"RGB": [*match[1], 100]}
-    lyr.symbology = sym
+    lyr.updateLayerFromJSON(json.dumps({"layerDefinition": {"drawingInfo": drawing}}))
 
 
 def _collection(url: str, messages) -> dict | None:

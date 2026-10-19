@@ -197,134 +197,27 @@ def metadata(props: dict, collection: dict | None = None, source: str = "") -> d
     }.items() if v}
 
 
-def _rgb(color: str) -> tuple[int, int, int] | None:
-    c = color.strip().lstrip("#") if isinstance(color, str) else ""
-    if len(c) == 3:
-        c = "".join(ch * 2 for ch in c)
-    try:
-        return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)) if len(c) == 6 else None
-    except ValueError:
-        return None
+def drawing_info(item: dict) -> dict | None:
+    """The ugs-styles Esri `drawingInfo` of the item's default render, the one its FeatureServer
+    draws with, or None when it has none."""
+    renders = (item.get("properties") or {}).get("ugs:renders") or {}
+    render = renders.get("default") or next(iter(renders.values()), None) or {}
+    return get_json(render["esri_url"]) if render.get("esri_url") else None
 
 
-def _field(expr) -> str | None:
-    """The field a GL value expression reads, through `downcase`, `to-string` and a `coalesce`
-    default: `["downcase", ["coalesce", ["get", "f"], ""]]` -> "f"."""
-    while isinstance(expr, list) and expr:
-        if expr[0] == "get" and len(expr) == 2 and isinstance(expr[1], str):
-            return expr[1]
-        if expr[0] in ("downcase", "to-string", "to-number", "coalesce") and len(expr) > 1:
-            expr = expr[1]
-            continue
-        return None
-    return None
-
-
-def _field_value(expr) -> tuple[str, object] | None:
-    """(field, value) from a GL filter that keeps one value of one field, else None.
-
-    Matches `["==", <get>, v]`, with the `get` optionally wrapped (`downcase`, `to-string`), and
-    `["all", ["has", f], ["==", ...]]`.
-    """
-    if not isinstance(expr, list) or not expr:
-        return None
-    if expr[0] == "all":
-        found = [fv for e in expr[1:] if (fv := _field_value(e))]
-        return found[0] if len(found) == 1 else None
-    if expr[0] != "==" or len(expr) != 3:
-        return None
-    field = _field(expr[1])
-    return (field, expr[2]) if field else None
-
-
-def _paint_color(layer: dict):
-    paint = layer.get("paint") or {}
-    for key in ("fill-color", "line-color", "circle-color"):
-        if key in paint:
-            return paint[key]
-    return None
-
-
-def classes(style: dict, legend: list[dict] | None = None):
-    """(field, [(value, label, rgb)]) for a categorical GL style, or None for anything else.
-
-    Two shapes cover the warehouse styles: one layer per value (a filter per layer), or one layer
-    whose color is a `match` on a field. Labels come from the item's legend when it lines up.
-    """
-    gl = [lyr for lyr in style.get("layers") or [] if lyr.get("type") in ("fill", "line", "circle")]
-    labels = [e.get("label") for e in legend or []]
-    out: list[tuple[object, str, tuple[int, int, int]]] = []
-    field = None
-    per_layer = [(_field_value(lyr.get("filter")), _rgb(_paint_color(lyr) or "")) for lyr in gl]
-    if per_layer and all(fv and rgb for fv, rgb in per_layer):
-        fields = {fv[0] for fv, _ in per_layer}
-        if len(fields) == 1:
-            field = fields.pop()
-            seen = set()
-            for i, (fv, rgb) in enumerate(per_layer):
-                if fv[1] in seen:  # a second layer for the same value (a casing, a halo)
-                    continue
-                seen.add(fv[1])
-                label = labels[i] if len(labels) == len(per_layer) and labels[i] else str(fv[1])
-                out.append((fv[1], label, rgb))
-            return field, out
-    for lyr in gl:
-        found = _expression_classes(_paint_color(lyr))
-        if found:
-            field, pairs = found
-            by_color: dict[tuple, list[str]] = {}
-            for e in legend or []:
-                if (rgb := _rgb(e.get("color") or "")) and e.get("label"):
-                    by_color.setdefault(rgb, []).append(e["label"])
-            used = [rgb for _, rgb in pairs]
-            for v, rgb in pairs:  # a legend label pairs with a class only when its color is unique
-                label = by_color.get(rgb, [None])[0] if len(by_color.get(rgb, [])) == 1 \
-                    and used.count(rgb) == 1 else None
-                out.append((v, label or str(v), rgb))
-            return field, out
-    return None
-
-
-def _expression_classes(color) -> tuple[str, list[tuple[object, tuple]]] | None:
-    """(field, [(value, rgb)]) from a `match` or a `coalesce`/`get`/`literal` lookup color."""
-    if not isinstance(color, list) or not color:
-        return None
-    if color[0] == "match" and len(color) >= 5 and (field := _field(color[1])):
-        pairs = []
-        for i in range(2, len(color) - 2, 2):
-            values = color[i] if isinstance(color[i], list) else [color[i]]
-            if rgb := _rgb(color[i + 1]) if isinstance(color[i + 1], str) else None:
-                pairs.extend((v, rgb) for v in values)
-        return (field, pairs) if pairs else None
-    # ["coalesce", ["get", <key>, ["literal", {value: color}]], default]
-    if color[0] == "coalesce" and len(color) >= 2 and isinstance(color[1], list) \
-            and color[1][:1] == ["get"] and len(color[1]) == 3:
-        lookup = color[1][2]
-        table = lookup[1] if isinstance(lookup, list) and lookup[:1] == ["literal"] else None
-        if (field := _field(color[1][1])) and isinstance(table, dict):
-            pairs = [(v, rgb) for v, c in table.items() if (rgb := _rgb(c) if isinstance(c, str) else None)]
-            return (field, pairs) if pairs else None
-    return None
-
-
-def single_color(style: dict) -> tuple[int, int, int] | None:
-    """The color of a one-color style (its first fill, line or circle layer), else None.
-
-    A first layer filtered on an attribute draws only some features, so its color would misstate
-    the rest; a filter on geometry type alone still draws every feature of the layer's kind.
-    """
-    for lyr in style.get("layers") or []:
-        if lyr.get("type") in ("fill", "line", "circle"):
-            color = _paint_color(lyr)
-            subset = lyr.get("filter") and not _geometry_type_only(lyr["filter"])
-            return _rgb(color) if isinstance(color, str) and not subset else None
-    return None
-
-
-def _geometry_type_only(expr) -> bool:
-    """True for `["==", "$type", "Polygon"]` or `["==", ["geometry-type"], "Polygon"]`."""
-    return (isinstance(expr, list) and len(expr) == 3 and expr[0] in ("==", "!=")
-            and (expr[1] == "$type" or expr[1] == ["geometry-type"]))
+def match_fields(drawing: dict, fields: list[str]) -> tuple[dict, list[str]]:
+    """`drawing` with its renderer's field1..field3 in the layer's own casing, and the ones the
+    layer lacks. An Arcade `valueExpression` reads fields case-insensitively and is left as is."""
+    renderer = dict(drawing.get("renderer") or {})
+    names = {f.lower(): f for f in fields}
+    missing = []
+    for key in ("field1", "field2", "field3"):
+        if want := renderer.get(key):
+            if want.lower() in names:
+                renderer[key] = names[want.lower()]
+            else:
+                missing.append(want)
+    return {**drawing, "renderer": renderer}, missing
 
 
 def verify(path: str, size: int | None, checksum: str | None) -> bool:

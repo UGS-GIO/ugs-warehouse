@@ -1,7 +1,7 @@
 # UGS Warehouse toolbox for ArcGIS Pro
 
-Adds warehouse layers to the active map: vector layers styled with the web viewer's colors and
-legend, and geologic map rasters.
+Adds warehouse layers to the active map: vector layers drawn with the same UGS symbology as the
+FeatureServer, and geologic map rasters.
 
 ## Install
 
@@ -26,8 +26,9 @@ Open **UGS Warehouse → Add Warehouse Layer**:
   - **Copy to a file geodatabase**: any Pro version. Downloads the GeoParquet (checked against the
     catalog's size and checksum) and writes a feature class to `UGS Warehouse.gdb` in the working
     folder, for offline work or editing.
-- **Style like the web viewer**: categories, colors and legend labels from the layer's style. A
-  layer with no style, or a style with no simple equivalent, keeps Pro's default symbol.
+- **Use UGS map colors**: the layer's Esri renderer from ugs-styles, the one its FeatureServer
+  draws with. A layer with no renderer, or without the field the renderer reads, keeps Pro's
+  default symbol.
 
 A raster (a COG) opens through the bucket with your sign-in, then through Esri's generic HTTP
 connection to the CDN; Pro reads only the part in view. A copy writes each layer in the CRS its
@@ -62,6 +63,13 @@ Afterwards, right-click the toolbox and choose **Refresh**: Pro reads a `.pyt` o
 When GitHub has a newer version, **Add Warehouse Layer** says so at the top of its dialog. It
 checks once per Pro session and stays quiet when GitHub cannot be reached.
 
+## How styling works
+
+The toolbox and the FeatureServer read one renderer: the ugs-styles file at the render's
+`esri_url`, a web map `drawingInfo`. The toolbox passes it to `Layer.updateLayerFromJSON`, so Pro
+converts it to its own renderer the way it does for a printed web map, CIM symbols and Arcade
+expressions included. Nothing is converted in this toolbox.
+
 ## How streaming works
 
 ArcGIS Pro opens Parquet only through a cloud storage connection (Amazon S3, Azure, Google), not
@@ -92,14 +100,14 @@ A catalog change to any of these can break the toolbox; check here first.
 |---|---|
 | `warehouse/stac/ugs-serving-topics/items.json` | `items[].id`; `properties.title`, `ugs:dbt_schema`, `keywords` |
 | `warehouse/stac/items.json` (root) | `items[].id`; `assets.cog.href` on the CDN; `properties.title`, `ugs:series_id`, `ugs:author`, `ugs:scale`, `keywords` |
-| Item `ugs-serving-topics/<schema>/<id>/<id>.json` | `assets.data.href`, `file:size`, `file:checksum`; `properties.title`, `description`, `keywords`, `ugs:point_of_contact`, `ugs:renders.default.style_url` and `.legend` |
+| Item `ugs-serving-topics/<schema>/<id>/<id>.json` | `assets.data.href`, `file:size`, `file:checksum`; `properties.title`, `description`, `keywords`, `ugs:point_of_contact`, `ugs:renders.default.esri_url` (else the first render's) |
 | `ugs-serving-topics/<schema>/collection.json` | `license`, the `rel: license` link, `providers[].name` |
 | The GeoParquet | the `geo` metadata's `primary_column` and `geometry_types`; WKB geometry |
-| The MapLibre style | `fill`/`line`/`circle` layers: `filter`, and `fill-color`/`line-color`/`circle-color` |
+| The Esri renderer | a `drawingInfo` object: `renderer`, and its `field1`..`field3` |
 | Layout | data under `https://maps-assets.geology.utah.gov/warehouse/`, COGs under `/geolmap/` |
 
 ## Code
 
-`ugs_catalog.py` reads the STAC catalog and the layer's MapLibre style and converts types;
+`ugs_catalog.py` reads the STAC catalog and the layer's Esri renderer and converts types;
 `UGSWarehouse.pyt` does the map work. Both are tested off Windows in `tests/test_arcgis_pro.py`,
 against a fake arcpy.

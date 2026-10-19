@@ -38,7 +38,7 @@ import ugs_catalog as cat  # noqa: E402
 
 SMALL = "hazards_qfaults"  # 4.4 MB, one row group, 3D lines, a nested bbox column
 BIG = "wetlands_wetlandsoutline"  # 1.9 GB, 105 row groups
-# Layers the tool runs on: lines, polygons, points, a `date` column, a style with an `in` filter,
+# Layers the tool runs on: lines (an Arcade renderer), polygons, points, a `date` column,
 # and the RASTERS below.
 PICKS = ("hazards_qfaults", "hazards_alluvialfan", "enmin_powerplants", "enmin_oilgasfields_ogm",
          "enmin_ccus_geochemistry")

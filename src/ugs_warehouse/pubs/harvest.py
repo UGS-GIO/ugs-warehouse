@@ -31,7 +31,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from ..core import config, gcs
+from ..core import config, gcs, jobs
 from . import geoparquet, identity, webp
 
 FOOTPRINTS = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
@@ -1140,10 +1140,8 @@ def main() -> int:
     # takes a disjoint stride via CLOUD_RUN_TASK_INDEX/COUNT, so N containers harvest ~1/N each in
     # parallel (dodges the per-task timeout on a big backfill). Default (1 task) = whole list — a
     # NO-OP, so single-pub / steady-state runs are unchanged. `--limit` then applies per shard.
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    sids, i, n = jobs.task_shard(sids)
     if n > 1:
-        sids = sids[i::n]
         hlog(f"shard {i + 1}/{n}: {len(sids)} publications", step="shard")
 
     if args.limit:

@@ -29,7 +29,7 @@ import time
 import traceback
 import urllib.request
 
-from ..core import config, gcs, stac
+from ..core import config, gcs, jobs, stac
 from ..pubs.harvest import _series_ctx, hlog, outcome_category
 
 CATALOG = stac.SERVING_TOPICS_CATALOG  # items nest one level under it, per mart schema
@@ -447,10 +447,8 @@ def _select_paths(item_ids: list[str], limit: int | None) -> list[str]:
         paths = [p for p in paths if _stem(p) in want]
     hlog(f"{len(paths)} topics", step="startup")
 
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    paths, i, n = jobs.task_shard(paths)
     if n > 1:
-        paths = paths[i::n]
         hlog(f"shard {i + 1}/{n}: {len(paths)} topics", step="shard")
     if limit:
         paths = paths[:limit]

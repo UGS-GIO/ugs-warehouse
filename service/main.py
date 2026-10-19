@@ -27,7 +27,7 @@ import os
 
 from fastapi import FastAPI, HTTPException, Request
 
-from ugs_warehouse.core import logs
+from ugs_warehouse.core import jobs, logs
 from ugs_warehouse.raster.consume import consume as consume_raster
 from ugs_warehouse.vector.ingest import ingest_topic
 from ugs_warehouse.vector.topics import MART_SCHEMAS, from_pubsub
@@ -45,18 +45,11 @@ INGEST_INLINE = os.environ.get("INGEST_INLINE", "0") == "1"
 
 def _start_ingest_job(topic_fqn: str) -> str:
     """Start the ingest job for one topic. Returns the execution name."""
-    from google.cloud import run_v2
-
     if not INGEST_JOB_PROJECT:
         raise RuntimeError("INGEST_JOB_PROJECT is unset — cannot address the ingest job")
-    client = run_v2.JobsClient()
     # Args REPLACE the job's configured `--all`; the entrypoint execs `python -m <module> "$@"`.
-    override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=["--topic", topic_fqn])
-    op = client.run_job(request=run_v2.RunJobRequest(
-        name=f"projects/{INGEST_JOB_PROJECT}/locations/{INGEST_JOB_REGION}/jobs/{INGEST_JOB}",
-        overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1),
-    ))
-    return (op.metadata.name if op.metadata else "") or "(started)"
+    name = f"projects/{INGEST_JOB_PROJECT}/locations/{INGEST_JOB_REGION}/jobs/{INGEST_JOB}"
+    return jobs.run_job(name, ["--topic", topic_fqn], tasks=1) or "(started)"
 
 
 def _decode(envelope: dict) -> dict:

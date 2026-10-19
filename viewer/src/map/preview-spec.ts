@@ -29,7 +29,7 @@ export function vectorSpecOf(item: StacDoc): PreviewSpec {
 // Whether a clicked tile feature's id names its table row (see `rowIds`).
 export const joinsRows = (s: PreviewSpec): boolean => s?.kind === "vector" && s.rowIds === true;
 
-export const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
+const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
   const [w, s, e, n] = b;
   return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] };
 };

@@ -12,7 +12,7 @@ import { hasFootprint, pubOfEntry } from "@/stac";
 
 // The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
 // the discovery-facing names so this module's API and the view stay unchanged.
-export { collectionLabel, docIdOf, typeOf };
+export { docIdOf, typeOf };
 export const discoveryTitle = title;
 
 // Discover shows one card per publication, so it leaves out the publication layers and tables the

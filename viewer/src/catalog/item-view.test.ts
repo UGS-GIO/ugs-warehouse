@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
-  dateOf, fmtDate, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
+  dateOf, fmtDate, formatBadgeAssets, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
   assetEntries, groupParts, groupPartsByFile, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
@@ -183,6 +183,22 @@ describe("the publication's asset tabs", () => {
     expect(plateEntry(undefined)).toBeUndefined();
     expect(plateEntry({ type: "Feature", id: "x_plate", assets: {} })).toBeUndefined();
     expect(assetEntries(pubAssets).map((e) => e.key)).toEqual(["publication", "gis_data_zip"]);
+  });
+});
+
+describe("overview parquets stay out of the asset lists", () => {
+  const overview = { href: "x_overview_1.parquet", type: "application/vnd.apache.parquet", roles: ["ugs:overview"] };
+  const data = { href: "x.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
+  const doc = { type: "Feature", id: "x", assets: { data, overview_1: overview } } as unknown as StacDoc;
+
+  it("are not an asset tab", () => {
+    expect(assetEntries(doc).map((e) => e.key)).toEqual(["data"]);
+  });
+
+  it("are not a format chip or facet", () => {
+    const ref = { collId: "c", id: "x", data: doc } as unknown as ItemRef;
+    expect(formatBadgeAssets(ref).map(([k]) => k)).toEqual(["data"]);
+    expect(formatsOf({ ...ref, data: { ...doc, assets: { overview_1: overview } } } as unknown as ItemRef)).toEqual([]);
   });
 });
 

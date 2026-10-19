@@ -1,7 +1,7 @@
 # ArcGIS FeatureServer over the serving-topics GeoParquet, built from a pinned release of
 # github.com/UGS-GIO/geoparquet-featureserver. No build context: `docker build - < Dockerfile.geoservices`
 FROM golang:1.26 AS build
-ARG FEATURESERVER_VERSION=v0.1.0
+ARG FEATURESERVER_VERSION=v0.2.7
 RUN CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags="-s -w" \
     github.com/UGS-GIO/geoparquet-featureserver@${FEATURESERVER_VERSION}
 

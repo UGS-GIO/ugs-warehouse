@@ -2,7 +2,7 @@
 // notice. Styled like the feature card; announced politely and dismissed with Escape or the close button.
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { rootIndexItems, useRootIndex } from "@/stac";
+import { rootIndexItems, useRootIndex } from "@/stac/items-index";
 import { type IdentifyResult, type PubContext, pubContext } from "./identify";
 
 const CLAMP_AT = 160;

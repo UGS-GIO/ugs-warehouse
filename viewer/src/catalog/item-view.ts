@@ -79,8 +79,6 @@ export const isSpatialData = (d: StacDoc | undefined): boolean => {
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
 export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
 
-
-
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {
   const n = propsOf(it)["ugs:row_count"];

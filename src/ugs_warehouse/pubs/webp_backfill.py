@@ -83,8 +83,7 @@ def main() -> int:
 
     # Sharded by source PNG, so a plate's two images come from one download, and over every PNG
     # rather than what's left, so a shard's share doesn't shift as the others finish.
-    srcs = jobs.shard(sorted(targets))
-    srcs = [s for s in srcs if s in todo]
+    srcs = [s for s in jobs.task_shard(sorted(targets))[0] if s in todo]
     print(f"[webp] {len(srcs)} PNG(s) → {sum(len(todo[s]) for s in srcs)} WebP(s)"
           + ("" if args.apply else " (dry run; --apply writes them)"))
     if not args.apply:

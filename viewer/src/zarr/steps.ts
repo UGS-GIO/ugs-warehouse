@@ -1,5 +1,5 @@
 // The picker logic, kept out of the component file so Fast Refresh can reload it.
-import type { CubeStep } from "@/stac";
+import type { CubeStep } from "@/stac/datacube";
 
 export const FIELDS = ["year", "month", "day"] as const;
 export type Field = (typeof FIELDS)[number];

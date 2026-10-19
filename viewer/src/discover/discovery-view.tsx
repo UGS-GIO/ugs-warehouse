@@ -25,7 +25,7 @@ import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, searchCatalog } from "./search-index";
-import { hasFootprint, type StacDoc } from "@/stac";
+import { hasFootprint, idOf, type StacDoc } from "@/stac";
 import type { Crumb } from "@/catalog/breadcrumb";
 import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -48,7 +48,6 @@ const PAGE = 48; // cards per "Show more" step (reference parity)
 const DRAWER_KEY = "ugsw.discoverDrawerW";
 const DRAWER = { initial: 560, min: 360, max: 1100 };
 
-const idOf = (href: string) => href.split("/").slice(-2)[0];
 // Escape a value for a [data-href="…"] selector (scroll a map-hovered card into view).
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 

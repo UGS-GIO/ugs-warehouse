@@ -4,8 +4,9 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Router
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { toLayer } from "@/app";
-import { type Asset, rootIndexItems, type StacDoc } from "@/stac";
+import { toLayer } from "@/map/to-layer";
+import { type Asset, type StacDoc } from "@/stac";
+import { rootIndexItems } from "@/stac/items-index";
 import { descriptionsPdfOf, identifyAt, identifyClick, type IdentifyTarget, pubContext, topUnit, unitsHrefOf } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
 import { orderedSublayerIds } from "./map-model";

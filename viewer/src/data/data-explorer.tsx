@@ -10,7 +10,7 @@ import { usePerItem } from "@/lib/use-per-item";
 import { CommentsPanel } from "@/review/comments-panel";
 import { buildFilters } from "./build-filters";
 import type { ColFilter } from "./download";
-import { PAGE_SIZES } from "./paging";
+import { PAGE_SIZE_ITEMS, PAGE_SIZES } from "./paging";
 import { HeaderCells, RowCells } from "./table";
 import type { FocusSel, MapPick } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
@@ -430,8 +430,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
               if (v === "all") setShowAll(true);
               else { setShowAll(false); setPageSize(Number(v)); }
             }}
-            items={[...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })),
-                    { value: "all", label: "All" }]} />
+            items={PAGE_SIZE_ITEMS} />
         </label>
         <label className="flex items-center gap-1 text-muted-foreground">
           Go to

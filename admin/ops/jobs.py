@@ -9,17 +9,9 @@ Auth: Application Default Credentials. In prod the Cloud Run service account nee
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from django.conf import settings
-
-
-def series_code(sid: str) -> str:
-    """Viewer collection id for a pub = its alpha series prefix (OFR-593 → OFR). Matches the
-    warehouse's sink_stac.series_code so deep-links resolve to the right nested collection."""
-    m = re.match(r"[A-Za-z]+", (sid or "").strip())
-    return m.group(0).upper() if m else "OTHER"
 
 
 @dataclass(frozen=True)
@@ -135,6 +127,17 @@ def _job_path(job: Job) -> str:
     return f"projects/{settings.GCP_PROJECT}/locations/{settings.GCP_REGION}/jobs/{job.name}"
 
 
+def _start(job: Job, message: str, args: list[str] | None = None, *, tasks: int | None = None,
+           env: dict[str, str] | None = None) -> dict:
+    """Start `job`; `args` replace its configured ones. {ok, message, execution} or the error."""
+    try:
+        from ugs_warehouse.core.jobs import run_job
+        execution = run_job(_job_path(job), args, tasks=tasks, env=env)
+        return {"ok": True, "message": message, "execution": execution.split("/")[-1] or "(started)"}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
 def _logging_client():
     """Cloud Logging client (lazy import — keeps the module importable without GCP libs/creds)."""
     import google.cloud.logging as gcloud_logging
@@ -163,17 +166,7 @@ def run(key: str) -> dict:
     shards = f" ×{job.tasks} shards" if job.tasks else ""
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name}{shards}", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        req = run_v2.RunJobRequest(name=_job_path(job))
-        if job.tasks:
-            req.overrides = run_v2.RunJobRequest.Overrides(task_count=job.tasks)
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
-        return {"ok": True, "message": f"started {job.name}{shards}", "execution": exec_name}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"started {job.name}{shards}", tasks=job.tasks)
 
 
 # The ingest job is deployed with command=cloudrun_entrypoint.sh, args=[--all]; the entrypoint
@@ -191,18 +184,7 @@ def run_ingest(force: bool = False) -> dict:
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} --all --force",
                 "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=INGEST_FORCE_ARGS)
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override]))
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
-        return {"ok": True, "message": f"started {job.name} --all --force", "execution": exec_name}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"started {job.name} --all --force", INGEST_FORCE_ARGS)
 
 
 # A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
@@ -225,26 +207,12 @@ def run_mode(key: str, mode: str) -> dict:
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
                 "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args)
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
-        return {"ok": True, "message": f"started {job.name} {' '.join(args)}", "execution": exec_name}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"started {job.name} {' '.join(args)}", args, tasks=1)
 
 
 # The retire job shares the ingest image + entrypoint (`python -m $RUN_MODULE "$@"`), so the topic
 # arrives as CLI args. `--yes` skips the CLI's own typed confirmation, which the console has already
 # taken from the operator — see views.retire_execute, which re-checks it server-side.
-RETIRE_MODULE = "ugs_warehouse.vector.retire"
-
-
 def retire_args(topic: str, *, dry_run: bool, purge_overrides: bool = False) -> list[str]:
     args = ["--topic", topic, "--dry-run"] if dry_run else ["--topic", topic, "--yes"]
     if purge_overrides and not dry_run:
@@ -271,19 +239,8 @@ def run_retire(topic: str, *, dry_run: bool, purge_overrides: bool = False,
     what = f"{job.name} {' '.join(args)}"
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {what}", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        env = [run_v2.EnvVar(name="RETIRE_REQUESTED_BY", value=requested_by)] if requested_by else []
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args, env=env)
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or ""
-        return {"ok": True, "message": f"started {what}", "execution": exec_name.split("/")[-1]}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    env = {"RETIRE_REQUESTED_BY": requested_by} if requested_by else None
+    return _start(job, f"started {what}", args, tasks=1, env=env)
 
 
 MOSAIC_MODULE = "ugs_warehouse.pubs.geolmap_mosaics"
@@ -298,18 +255,8 @@ def rebuild_mosaic(tier: str) -> dict:
         return {"ok": False, "message": f"unknown mosaic tier {tier!r}"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would rebuild the {tier} mosaic", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
-            args=["-m", MOSAIC_MODULE, "--scale", tier])
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        client.run_job(request=req)
-        return {"ok": True, "message": f"rebuilding the {tier} mosaic"}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"rebuilding the {tier} mosaic", ["-m", MOSAIC_MODULE, "--scale", tier],
+                  tasks=1)
 
 
 def recent(key: str, limit: int = 5) -> list[dict]:
@@ -344,6 +291,15 @@ def recent(key: str, limit: int = 5) -> list[dict]:
         return []
 
 
+def log_line(e, **fields) -> dict:
+    """One Cloud Logging entry as a tail row: time, severity and text, plus `fields`."""
+    p = e.payload
+    text = p if isinstance(p, str) else (p.get("message") or p.get("msg") or str(p)) \
+        if isinstance(p, dict) else str(p)
+    return {"time": e.timestamp.isoformat() if e.timestamp else "",
+            "severity": (e.severity or "DEFAULT"), **fields, "text": (text or "").rstrip()}
+
+
 def logs(key: str, limit: int = 80, execution: str = "") -> dict:
     """Recent Cloud Logging lines for a job (near-live; newest fetched, returned chronological).
 
@@ -367,18 +323,11 @@ def logs(key: str, limit: int = 80, execution: str = "") -> dict:
         lines = []
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):
-            p = e.payload
-            text = p if isinstance(p, str) else (p.get("message") or p.get("msg") or str(p)) \
-                if isinstance(p, dict) else str(p)
             labels = e.labels or {}
-            lines.append({
-                "time": e.timestamp.isoformat() if e.timestamp else "",
-                "severity": (e.severity or "DEFAULT"),
-                "task": labels.get("run.googleapis.com/task_index", ""),
-                "execution": labels.get("run.googleapis.com/execution_name", "").split("/")[-1],
-                "category": (p.get("category", "") if isinstance(p, dict) else ""),
-                "text": (text or "").rstrip(),
-            })
+            lines.append(log_line(
+                e, task=labels.get("run.googleapis.com/task_index", ""),
+                execution=labels.get("run.googleapis.com/execution_name", "").split("/")[-1],
+                category=e.payload.get("category", "") if isinstance(e.payload, dict) else ""))
         lines.reverse()  # oldest → newest, like a tail
         # latest_execution = the newest run → the template draws a "run started here" divider at it.
         return {"ok": True, "lines": lines,
@@ -463,18 +412,8 @@ def reharvest_one(series_id: str) -> dict:
         return {"ok": False, "message": "no series id"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would re-harvest {sid} --force", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
-            args=["-m", "ugs_warehouse.pubs.harvest", sid, "--force"])
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        client.run_job(request=req)
-        return {"ok": True, "message": f"re-harvesting {sid} (--force)"}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"re-harvesting {sid} (--force)",
+                  ["-m", "ugs_warehouse.pubs.harvest", sid, "--force"], tasks=1)
 
 
 def reharvest_many(series_ids: list[str]) -> dict:
@@ -486,19 +425,9 @@ def reharvest_many(series_ids: list[str]) -> dict:
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "dry_run": True,
                 "message": f"DRY-RUN: would re-harvest {len(sids)} pub(s) --force"}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
-            args=["-m", "ugs_warehouse.pubs.harvest", *sids, "--force"])
-        req = run_v2.RunJobRequest(
-            name=_job_path(JOBS["harvest"]),
-            overrides=run_v2.RunJobRequest.Overrides(
-                container_overrides=[override], task_count=min(5, len(sids))))
-        client.run_job(request=req)
-        return {"ok": True, "message": f"re-harvesting {len(sids)} pub(s) (--force, {min(5, len(sids))} shards)"}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    shards = min(5, len(sids))
+    return _start(JOBS["harvest"], f"re-harvesting {len(sids)} pub(s) (--force, {shards} shards)",
+                  ["-m", "ugs_warehouse.pubs.harvest", *sids, "--force"], tasks=shards)
 
 
 def attention_pubs(limit: int = 200) -> dict:
@@ -511,6 +440,7 @@ def attention_pubs(limit: int = 200) -> dict:
         client = _logging_client()
         flt = (f'resource.type="cloud_run_job" resource.labels.job_name="{HARVEST_JOB}" '
                f'jsonPayload.category="attention"')
+        from ugs_warehouse.pubs.sink_stac import series_code
         seen: dict[str, dict] = {}
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):

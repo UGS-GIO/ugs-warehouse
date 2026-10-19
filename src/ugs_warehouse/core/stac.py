@@ -883,6 +883,8 @@ INDEX_ASSET_KEYS = ("href", "type", "roles", "title", "ugs:simplify_tolerance")
 # topic's data or tiling does. Read by the ingest's skip check and the thumbnail job's content hash,
 # so a rename must change both.
 CONTENT_HASH_PROP = "ugs:content_hash"
+# Starts the archive writer's part of the content hash, which thumbnails leave out.
+ARCHIVE_SIGNATURE_PREFIX = "archive-v"
 
 
 # `ugs:footprint_source` value the pubs producer writes when a document has no footprint and its

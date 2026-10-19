@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.11.3](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.2...v1.11.3) (2026-10-19)
+
+
+### Performance Improvements
+
+* **archive:** write overviews by vertex count instead of geometry bytes ([#619](https://github.com/UGS-GIO/ugs-warehouse/issues/619)) ([1e0a42f](https://github.com/UGS-GIO/ugs-warehouse/commit/1e0a42fc45d4bb46aafcebf5c1bc496992fbe9cd))
+
+## [1.11.2](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.1...v1.11.2) (2026-10-19)
+
+
+### Performance Improvements
+
+* **pubs:** write publication GeoParquet with a page index and small pages ([#610](https://github.com/UGS-GIO/ugs-warehouse/issues/610)) ([daf954a](https://github.com/UGS-GIO/ugs-warehouse/commit/daf954a7eab8b16abe6017c8bb9babcaf0c5e752))
+
+## [1.11.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.0...v1.11.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **ingest:** fold the archive writer settings into the fingerprint so a layout change rebuilds ([#608](https://github.com/UGS-GIO/ugs-warehouse/issues/608)) ([c5a7714](https://github.com/UGS-GIO/ugs-warehouse/commit/c5a77144be782ea4f1f221593d177a42ee52f19a))
+
 ## [1.11.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.10.0...v1.11.0) (2026-10-19)
 
 

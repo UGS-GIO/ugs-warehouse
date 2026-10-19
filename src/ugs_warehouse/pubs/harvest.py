@@ -1223,9 +1223,8 @@ def main() -> int:
     # takes a disjoint stride via CLOUD_RUN_TASK_INDEX/COUNT, so N containers harvest ~1/N each in
     # parallel (dodges the per-task timeout on a big backfill). Default (1 task) = whole list — a
     # NO-OP, so single-pub / steady-state runs are unchanged. `--limit` then applies per shard.
-    i, n = jobs.task()
+    sids, i, n = jobs.task_shard(sids)
     if n > 1:
-        sids = jobs.shard(sids)
         hlog(f"shard {i + 1}/{n}: {len(sids)} publications", step="shard")
 
     if args.limit:

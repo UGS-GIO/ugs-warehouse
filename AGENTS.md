@@ -50,7 +50,7 @@ Do not write code that a dependency or a helper in this repo already provides. B
 - COGs: `rio-cogeo`, `rasterio`. GDAL CLIs read COGs in place over `/vsigs/`; do not download them first.
 - Object storage: `obstore` through `core/gcs.py`. One `obs.delete(store, paths)` call deletes a batch.
 - Stdlib first: `mimetypes`, `xml.etree`. For sizes, `pydantic.ByteSize` (already a dependency).
-- Viewer: react-query for data loading, minisearch, hyparquet, duckdb-wasm, `pmtiles`, `@turf/bbox`. Reuse the helpers in `viewer/src/stac.ts`, `viewer/src/map/map-model.ts` and `viewer/src/data/columns.ts`.
+- Viewer: react-query for data loading, minisearch, hyparquet, duckdb-wasm, `pmtiles`, `@turf/bbox`. Reuse the helpers in `viewer/src/stac.ts` (and `viewer/src/stac/`), `viewer/src/map/map-model.ts` and `viewer/src/data/columns.ts`.
 
 Check these projects before you build something new: [portolan-sdi](https://github.com/portolan-sdi), [developmentseed](https://github.com/developmentseed), [stac-utils](https://github.com/stac-utils), [geoparquet-io](https://github.com/geoparquet/geoparquet-io). Agent skills for Portolan: [portolan-skills](https://github.com/portolan-sdi/portolan-skills).
 
@@ -85,4 +85,5 @@ GCS auth is ADC: `gcloud auth application-default login` locally, the service ac
 - dbt convention: the geometry column is `geom`; `_current` is the table suffix.
 - A change touching the `_current` contract is coordinated with dataELT's owner; neighbor repos (`dataELT`, `ugs-ingest`, `ugs-map-viewer`) are read-only from here.
 - **Don't commit plans, specs, or handoff notes.** Design and progress go in the PR description or the Jira ticket; git history keeps them. Docs in `docs/` describe the system as it is and change in the same PR as the code they describe. A lasting decision gets a line in the relevant doc, not a new file.
+- A dependency bump that changes a deployed service (e.g. `FEATURESERVER_VERSION`) must use the `fix(deps):` prefix so release-please opens a release. `chore(deps)` does not trigger a release.
 - Querying the publications corpus with the `pubs-duckdb` MCP: `docs/QUERYING_PUBS.md`.

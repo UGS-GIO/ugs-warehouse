@@ -5,7 +5,7 @@ import * as opfs from "./opfs";
 import * as queue from "./queue";
 import { type Job, jobProgress } from "./queue";
 
-const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
+export const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
 
 export function Downloads() {
   const jobs = useJobs();

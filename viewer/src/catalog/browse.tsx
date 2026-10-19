@@ -13,7 +13,12 @@ import { AssetChips } from "./asset-viewer";
 import { itemBackTarget, rootGroupOf } from "./catalog";
 import { createComment } from "@/review/comments";
 import { ItemDetail } from "./item-detail";
-import { author, collectionLabel, county, dateOf, fmtDate, scale, series, title, typeOf, year } from "./item-view";
+// The generic item getters live in item-view.ts (the one source of truth, shared with the discovery
+// core), aliased so this module reads gTitle/gSeries/gType/….
+import {
+  author as gAuthor, collectionLabel, county as gCounty, dateOf as gDate, fmtDate, propsOf as props,
+  scale as gScale, series as gSeries, title as gTitle, typeOf as gType, year as gYear,
+} from "./item-view";
 import { PageHero } from "@/shell/page-hero";
 import { T } from "@/shell/page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "@/data/paging";
@@ -44,28 +49,14 @@ const ROOT_GROUPS = [
   { group: "other", heading: "Everything else" },
 ] as const;
 
-
-
 const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs:author"];
 
-
-const props = (it: ItemRef) => it.data?.properties ?? {};
 // Survey Notes volume (warehouse ugs:volume, from SNT-{vol}-{issue}) → group issues under it.
 const gVol = (it: ItemRef): number | null => {
   const v = props(it)["ugs:volume"];
   return typeof v === "number" ? v : null;
 };
-// The generic item getters live in item-view.ts (the one source of truth, shared with the discovery
-// core). Thin local aliases keep the rest of this module reading gTitle/gSeries/gType/… unchanged.
-const gSeries = series;
 const gColl = (it: ItemRef) => collectionLabel(it.collId);
-const gTitle = title;
-const gDate = dateOf;
-const gYear = year;
-const gType = typeOf;
-const gScale = scale;
-const gAuthor = author;
-const gCounty = county;
 // Bin a free-text publication scale into a tier (matches the raster-mosaic tiers). "" = unknown.
 const scaleTierOf = (it: ItemRef): string => {
   const s = gScale(it).replace(/,/g, "").toLowerCase();
@@ -116,10 +107,23 @@ function buildFacets(items: ItemRef[], extract: (it: ItemRef) => string, label?:
   return [...m.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
 }
 
-
-
-
-// Client-side export — only for items with a GeoParquet asset (serving topics).
+// One facet's chip row; hidden when there is nothing to choose between. Only the series chips
+// carry a label, as their tooltip.
+function FacetChips({ label, facets, isOn, onPick, active, onClear }: {
+  label: string; facets: ReturnType<typeof buildFacets>; isOn: (k: string) => boolean;
+  onPick: (k: string) => void; active: boolean; onClear: () => void;
+}) {
+  if (facets.length <= 1) return null;
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+      <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
+      {facets.map(([k, { n, label: tip }]) => (
+        <span key={k} className={toggle(isOn(k))} title={tip || undefined} onClick={() => onPick(k)}>{k} · {n}</span>
+      ))}
+      {active && <span className="cursor-pointer text-xs text-primary" onClick={onClear}>clear</span>}
+    </div>
+  );
+}
 
 // ---- collection cards ----
 // The warehouse emits a placeholder "UGS warehouse — {id}." description; hide it as noise.
@@ -416,6 +420,9 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
     getPaginationRowModel: getPaginationRowModel(),
   });
   const pageRows = table.getRowModel().rows.map((r) => r.original);
+  const pager = rows.length > PAGE_SIZES[0] && (
+    <Pager table={table} size={pageSize} onSize={(sz) => { setPageSize(sz); setPageIndex(0); }} />
+  );
 
   return (
     <>
@@ -450,62 +457,18 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
       </div>
 
-      {topicFacets.length > 1 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Topic</span>
-          {topicFacets.map(([t, { n }]) => (
-            <span key={t} className={toggle(tsel.has(t))} onClick={() => toggleTopic(t)}>{t} · {n}</span>
-          ))}
-          {tsel.size > 0 && (
-            <span className="cursor-pointer text-xs text-primary" onClick={() => setTopics([])}>clear</span>
-          )}
-        </div>
-      )}
-
-      {countyFacets.length > 1 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">County</span>
-          {countyFacets.map(([c, { n }]) => (
-            <span key={c} className={toggle(csel.has(c))} onClick={() => toggleCounty(c)}>{c} · {n}</span>
-          ))}
-          {csel.size > 0 && (
-            <span className="cursor-pointer text-xs text-primary" onClick={() => setCounties([])}>clear</span>
-          )}
-        </div>
-      )}
-
-      {scaleFacets.length > 1 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Scale</span>
-          {scaleFacets.map(([t, { n }]) => (
-            <span key={t} className={toggle(scaleTier === t)}
-              onClick={() => setScaleTier(scaleTier === t ? null : t)}>{t} · {n}</span>
-          ))}
-          {scaleTier && (
-            <span className="cursor-pointer text-xs text-primary" onClick={() => setScaleTier(null)}>clear</span>
-          )}
-        </div>
-      )}
-
-      {facets.length > 1 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Series</span>
-          {facets.map(([code, { n, label }]) => (
-            <span key={code} className={toggle(sel.has(code))} title={label}
-              onClick={() => toggleCode(code)}>{code} · {n}</span>
-          ))}
-          {sel.size > 0 && (
-            <span className="cursor-pointer text-xs text-primary" onClick={() => onSeries([])}>clear</span>
-          )}
-        </div>
-      )}
+      <FacetChips label="Topic" facets={topicFacets} isOn={(t) => tsel.has(t)} onPick={toggleTopic}
+        active={tsel.size > 0} onClear={() => setTopics([])} />
+      <FacetChips label="County" facets={countyFacets} isOn={(c) => csel.has(c)} onPick={toggleCounty}
+        active={csel.size > 0} onClear={() => setCounties([])} />
+      <FacetChips label="Scale" facets={scaleFacets} isOn={(t) => scaleTier === t}
+        onPick={(t) => setScaleTier(scaleTier === t ? null : t)} active={!!scaleTier} onClear={() => setScaleTier(null)} />
+      <FacetChips label="Series" facets={facets} isOn={(c) => sel.has(c)} onPick={toggleCode}
+        active={sel.size > 0} onClear={() => onSeries([])} />
 
       {/* Top and bottom: bottom is where you land after scrolling, top is how you change size
           without scrolling back down. */}
-      {rows.length > PAGE_SIZES[0] && (
-        <Pager table={table} size={pageSize}
-          onSize={(s) => { setPageSize(s); setPageIndex(0); }} />
-      )}
+      {pager}
 
       {rows.length === 0 ? (
         <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
@@ -534,26 +497,11 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
           render={(it) => <CardItem key={it.href} it={it} showCollection={showCollection} onOpen={onOpen} />} />
       )}
 
-      {rows.length > PAGE_SIZES[0] && (
-        <Pager table={table} size={pageSize}
-          onSize={(s) => { setPageSize(s); setPageIndex(0); }} />
-      )}
+      {pager}
     </>
   );
 }
 
-// Schema panel from the STAC Table extension (`table:columns`). The dataset's fields + types
-// straight from the catalog — no parquet read. Hidden pre-reingest (extension not emitted yet).
-
-
-// All the ways out to the data: the OGC API Features service (= the modern WFS — REST + GeoJSON,
-// served by featureserv), plus the raw artifacts (GeoParquet, PMTiles, DuckLake). Replaces the
-// lone "OGC API" link that dumped users on a featureserv page with no hint of the other endpoints.
-
-// ---- item detail ----
-// A related item's STAC .json href → a viewer deep-link (?c=<collection>&i=<id>).
-
-// Registry-driven relationships (FK graph): related layers, this layer's references, related tables.
 // One collection's items. Exported for the render tests.
 export function CollectionItems({ items, itemsLoading, noIndex, breadcrumb, series, onOpenItem, onSeries }: {
   items: ItemRef[];

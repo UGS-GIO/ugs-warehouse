@@ -21,7 +21,8 @@ const ctx = vi.hoisted(() => ({
 }));
 vi.mock("@/app", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/app")>();
-  ctx.drawsAsLayer = (d: unknown) => real.toLayer({ collId: "", href: "layer/probe", data: d as StacDoc }) !== null;
+  const { drawsAsLayer } = await import("@/map/to-layer");
+  ctx.drawsAsLayer = (d: unknown) => drawsAsLayer(d as StacDoc);
   return { ...real, useViewCtx: () => ctx };
 });
 

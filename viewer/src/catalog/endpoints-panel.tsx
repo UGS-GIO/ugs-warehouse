@@ -11,7 +11,7 @@ import { UiSelect } from "@/ui/select";
 /** `…/thing.parquet?x=1` → `parquet` */
 const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
 
-function CopyBtn({ text }: { text: string }) {
+export function CopyBtn({ text, className = "px-1.5 py-0.5 text-sm" }: { text: string; className?: string }) {
   const [done, setDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);  // clear a pending reset on unmount
@@ -23,7 +23,7 @@ function CopyBtn({ text }: { text: string }) {
         clearTimeout(timer.current);
         timer.current = setTimeout(() => setDone(false), 1200);
       }}
-      className="rounded border border-border bg-card px-1.5 py-0.5 text-sm text-foreground hover:border-primary">
+      className={`rounded border border-border bg-card ${className} text-foreground hover:border-primary`}>
       {done ? "copied" : "copy"}
     </button>
   );

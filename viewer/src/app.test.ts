@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { toLayer } from "./app";
-import { rootIndexItems } from "./stac";
+import { toLayer } from "./map/to-layer";
+import { rootIndexItems } from "./stac/items-index";
 import { layerRowsOf } from "./catalog/catalog";
 import { colorForId, mapDefaultLayers } from "./map/map-model";
 

@@ -5,7 +5,8 @@ import {
   discoverable, effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, parseDiscovery,
   sortItems, typeOf,
 } from "./discovery-model";
-import { hasFootprint, rootIndexItems } from "@/stac";
+import { hasFootprint } from "@/stac";
+import { rootIndexItems } from "@/stac/items-index";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
 const item = (collId: string, id: string, props: Record<string, unknown> = {}, bbox?: number[]): ItemRef =>

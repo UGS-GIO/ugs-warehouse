@@ -6,6 +6,13 @@ from django.views.decorators.http import require_POST
 from . import builds, contents, jobs, overrides, services, stac
 
 
+def _job_result(request, key, result):
+    return render(request, "ops/_job_result.html", {
+        "key": key, "job": jobs.JOBS.get(key), "result": result,
+        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
+    })
+
+
 @admin_required
 def dashboard(request):
     # Lean shell — the tabs (Run/Watch/Data) load their own content, so the slow STAC/GCS reads only
@@ -34,10 +41,7 @@ def tab_data(request):
 @require_POST
 def cancel(request, key):
     result = jobs.cancel(request.POST.get("execution", ""))
-    return render(request, "ops/_job_result.html", {
-        "key": key, "job": jobs.JOBS.get(key), "result": result,
-        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
-    })
+    return _job_result(request, key, result)
 
 
 @admin_required
@@ -53,10 +57,7 @@ def rebuild_mosaic(request, tier):
     """Regenerate one scale tier's raster mosaic. Reuses the standard job-result partial so the
     tier buttons report into the same #result-mosaics slot as the all-tiers Run button."""
     result = jobs.rebuild_mosaic(tier)
-    return render(request, "ops/_job_result.html", {
-        "key": "mosaics", "job": jobs.JOBS.get("mosaics"), "result": result,
-        "recent": jobs.recent("mosaics"), "console_url": jobs.console_logs_url("mosaics"),
-    })
+    return _job_result(request, "mosaics", result)
 
 
 @admin_required
@@ -64,10 +65,7 @@ def rebuild_mosaic(request, tier):
 def run_mode(request, key, mode):
     """Run a job's variant (jobs.MODE_ARGS). Reports into the same result slot as its Run button."""
     result = jobs.run_mode(key, mode)
-    return render(request, "ops/_job_result.html", {
-        "key": key, "job": jobs.JOBS.get(key), "result": result,
-        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
-    })
+    return _job_result(request, key, result)
 
 
 @admin_required
@@ -148,10 +146,7 @@ def trigger(request, key):
         result = jobs.run_ingest(force=True)
     else:
         result = jobs.run(key)
-    return render(request, "ops/_job_result.html", {
-        "key": key, "job": jobs.JOBS.get(key), "result": result,
-        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
-    })
+    return _job_result(request, key, result)
 
 
 @admin_required

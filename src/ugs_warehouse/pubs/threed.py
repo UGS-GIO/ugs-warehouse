@@ -381,14 +381,8 @@ def _threed_sources() -> list[tuple[str, str, str]]:
 def run_all(force: bool = False, limit: int | None = None) -> int:
     """Convert every 3D-eligible pub whose artifacts aren't already present (skip-existing). Sharded via
     CLOUD_RUN_TASK_INDEX/COUNT — the pubs "harvest" of 3D, run before pubs-ingest binds the assets."""
-    import os
-
-    from ..core import gcs
-    srcs = _threed_sources()
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
-    if n > 1:
-        srcs = srcs[i::n]
+    from ..core import gcs, jobs
+    srcs, i, n = jobs.task_shard(_threed_sources())
     if limit:
         srcs = srcs[:limit]
     print(f"[3d] {len(srcs)} 3D-eligible pubs (shard {i + 1}/{n})")

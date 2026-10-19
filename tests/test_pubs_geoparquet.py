@@ -56,3 +56,19 @@ def test_write_converts_a_shapefile_path(tmp_path):
     assert meta["columns"]["geom"]["covering"] == COVERING
     assert "geom" in pq.read_schema(out).names
     assert gpd.read_parquet(out).crs.to_epsg() == 26912
+
+
+def test_write_adds_a_page_index_with_small_pages(tmp_path):
+    from ugs_warehouse.vector.sink_archive import PAGE_ROWS
+
+    n = PAGE_ROWS * 3
+    gdf = gpd.GeoDataFrame({"unit": [f"u{i % 7}" for i in range(n)]},
+                           geometry=[geom.Point(-111 + i / n, 40) for i in range(n)], crs=4326)
+    out = tmp_path / "p.parquet"
+    geoparquet.write(gdf, out)
+
+    meta = pq.read_metadata(out)
+    assert all(meta.row_group(0).column(c).has_offset_index for c in range(meta.num_columns))
+    assert meta.row_group(0).column(0).has_column_index
+    assert _geo(out)["columns"]["geometry"]["covering"] == COVERING
+    assert len(gpd.read_parquet(out)) == n

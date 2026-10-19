@@ -70,6 +70,57 @@ def test_copy_writes_a_page_index_and_no_geometry_dictionary(tmp_path) -> None:
     assert b"geo" in f.schema_arrow.metadata
 
 
+def _page_rows(path: str, column: str) -> list[int]:
+    """Rows in each data page of `column`, read from the Thrift compact page headers."""
+    import pyarrow.parquet as pq
+
+    meta = pq.ParquetFile(path).metadata
+    leaf = [meta.schema.column(i).path for i in range(meta.num_columns)].index(column)
+    with open(path, "rb") as f:
+        data = f.read()
+
+    def varint(i):
+        n = shift = 0
+        while data[i] & 0x80:
+            n |= (data[i] & 0x7F) << shift
+            shift, i = shift + 7, i + 1
+        return n | data[i] << shift, i + 1
+
+    def struct(i):  # {field id: value}, for the field types a page header holds
+        out, fid = {}, 0
+        while data[i]:
+            delta, kind = data[i] >> 4, data[i] & 0x0F
+            fid, i = (fid + delta, i + 1) if delta else varint(i + 1)
+            if kind == 12:
+                out[fid], i = struct(i)
+            elif kind in (5, 6):
+                v, i = varint(i)
+                out[fid] = (v >> 1) ^ -(v & 1)
+            elif kind == 8:
+                n, i = varint(i)
+                i += n
+        return out, i + 1
+
+    rows = []
+    for g in range(meta.num_row_groups):
+        chunk = meta.row_group(g).column(leaf)
+        assert chunk.has_offset_index and chunk.has_column_index
+        i = chunk.data_page_offset
+        while i < chunk.data_page_offset + chunk.total_compressed_size:
+            header, i = struct(i)
+            rows.append(header[5][1])
+            i += header[3]
+    return rows
+
+
+def test_bbox_pages_are_short_enough_to_prune(tmp_path) -> None:
+    """64 KiB pages of bbox doubles held 8192 rows; a z13 tile then read a page per row group."""
+    _written(tmp_path)
+    for col in ("bbox_xmin", "bbox_ymax", "bbox.xmin", "bbox.ymax"):
+        rows = _page_rows(str(tmp_path / "out.parquet"), col)
+        assert sum(rows) == 5000 and max(rows) <= sink_archive.PAGE_ROWS, (col, rows)
+
+
 # A row group is the floor on what a clipped export downloads, so it has to be bounded in BYTES.
 # A fixed row count is not: a row's weight is mostly its geometry, and that varies by three orders
 # of magnitude. wetlands_riverine went out in 2 groups, the larger 1.06 GB, so a 22-feature AOI

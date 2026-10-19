@@ -7,7 +7,7 @@
 import type { ItemRef } from "./browse";
 import { GEOM_NAMES } from "@/data/columns";
 import {
-  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, KIND_RANK,
+  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, isOverview, KIND_RANK,
   parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, zarrAsset,
 } from "@/stac";
 
@@ -238,8 +238,8 @@ export const plateEntry = (plate: StacDoc | undefined): AssetEntry | undefined =
 // The tabs over an item's assets, the publication PDF first, then by kind. `extra` (the plate) follows.
 export const assetEntries = (item: StacDoc, extra?: AssetEntry): AssetEntry[] => [
   ...Object.entries(item.assets ?? {})
-    // thumbnails are redundant with the real image/cog; skip as their own tab
-    .filter(([, a]) => !a.roles?.includes("thumbnail"))
+    // thumbnails are redundant with the real image/cog, and overviews are only the FeatureServer's
+    .filter(([, a]) => !a.roles?.includes("thumbnail") && !isOverview(a))
     .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
     .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
       || KIND_RANK[x.kind] - KIND_RANK[y.kind]
@@ -252,7 +252,7 @@ export const assetEntries = (item: StacDoc, extra?: AssetEntry): AssetEntry[] =>
 // A thumbnail or a metadata record (the ISO 19139 sidecar) describes the dataset; it isn't one of
 // its formats, so format chips and the Format facet skip it.
 export const isFormatAsset = (a: Asset): boolean =>
-  !a.roles?.includes("thumbnail") && !a.roles?.includes("metadata");
+  !a.roles?.includes("thumbnail") && !a.roles?.includes("metadata") && !isOverview(a);
 
 // The assets a result card lists as format chips. Thumbnails/images are already the card image and
 // metadata records are not formats, so they're dropped.

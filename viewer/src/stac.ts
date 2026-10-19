@@ -813,10 +813,14 @@ export function useIndexes(collections: { id: string; href: string }[]) {
 const isParquetAsset = (a: Asset): boolean =>
   Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
 
-// The full-detail `data` asset first: a heavy layer also has a generalized `overview` parquet.
+// A heavy layer's generalized copies, for the FeatureServer's small-scale drawing only.
+export const isOverview = (a: Asset): boolean => Boolean(a.roles?.includes("ugs:overview"));
+
+// The full-detail `data` asset first, and never an overview.
 export const parquetAsset = (item: StacDoc): Asset | undefined => {
   const data = item.assets?.data;
-  return data && isParquetAsset(data) ? data : Object.values(item.assets ?? {}).find(isParquetAsset);
+  return data && isParquetAsset(data) ? data
+    : Object.values(item.assets ?? {}).find((a) => isParquetAsset(a) && !isOverview(a));
 };
 
 // ---- datacube extension (zarr) ----

@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.11.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.10.0...v1.11.0) (2026-10-19)
+
+
+### Features
+
+* **archive:** write overview levels per drawing scale for heavy vector layers ([#603](https://github.com/UGS-GIO/ugs-warehouse/issues/603)) ([7768e9b](https://github.com/UGS-GIO/ugs-warehouse/commit/7768e9b7bcffdf967f925e55459117c00be51845))
+
+
+### Bug Fixes
+
+* **ci:** drop the unused _REGION substitution from the preview cleanup ([#600](https://github.com/UGS-GIO/ugs-warehouse/issues/600)) ([15c527f](https://github.com/UGS-GIO/ugs-warehouse/commit/15c527f0be0dea4260714327333024d01b033b5b))
+
+
+### Performance Improvements
+
+* **archive:** cap data pages at 1024 rows so bbox page-index pruning is sharp ([#602](https://github.com/UGS-GIO/ugs-warehouse/issues/602)) ([5f2b788](https://github.com/UGS-GIO/ugs-warehouse/commit/5f2b7880c40ec42f16677c475cecdaf4937668db))
+
 ## [1.10.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.9.0...v1.10.0) (2026-10-18)
 
 

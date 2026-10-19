@@ -288,9 +288,10 @@ def test_index_entry_assets_stay_summaries():
 
 
 def test_index_entry_keeps_the_overview_tolerance():
-    overview = {"href": "x_overview.parquet", "ugs:simplify_tolerance": 0.0005, "file:size": 1}
-    asset = stac._index_entry({"id": "x", "assets": {"overview": overview}})["assets"]["overview"]
-    assert asset == {"href": "x_overview.parquet", "ugs:simplify_tolerance": 0.0005}
+    overview = {"href": "x_overview_1.parquet", "roles": ["ugs:overview"], "ugs:simplify_tolerance": 0.00068,
+                "file:size": 1}
+    asset = stac._index_entry({"id": "x", "assets": {"overview_1": overview}})["assets"]["overview_1"]
+    assert asset == {"href": "x_overview_1.parquet", "roles": ["ugs:overview"], "ugs:simplify_tolerance": 0.00068}
 
 
 def test_index_entry_keeps_web_map_links_alongside_self():
@@ -1535,6 +1536,6 @@ def test_feature_service_serves_the_data_asset_not_the_overview():
     from ugs_warehouse.core import feature_service
 
     asset = lambda path: {"href": config.public_url(path), "type": config.PARQUET_MIME}  # noqa: E731
-    assets = {"overview": asset(config.overview_path("x")), "data": asset(config.archive_path("x"))}
+    assets = {"overview_1": asset(config.overview_path("x", 1)), "data": asset(config.archive_path("x"))}
     served = feature_service.collection({"id": "x", "assets": assets})
     assert served["source"] == f"gs://{config.BUCKET}/{config.archive_path('x')}"

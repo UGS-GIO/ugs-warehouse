@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, parquetAsset, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 import { joinsRows, vectorSpecOf } from "./map/preview-spec";
 
@@ -626,5 +626,14 @@ describe("part descriptors", () => {
     const joins = relatedJoins({ assets: { t: { href: "https://x/t.parquet", roles: ["data", "related"], "table:row_count": 41,
       "ugs:foreign_keys": [{ fields: ["a"], reference: { resource: "r", fields: ["b"] } }] } } });
     expect(joins[0].rows).toBe(41);
+  });
+});
+
+describe("parquetAsset", () => {
+  const overview = { href: "x_overview_1.parquet", type: "application/vnd.apache.parquet", roles: ["ugs:overview"] };
+  it("reads the full data, never an overview", () => {
+    const data = { href: "x.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
+    expect(parquetAsset({ assets: { overview_1: overview, data } } as unknown as StacDoc)).toBe(data);
+    expect(parquetAsset({ assets: { overview_1: overview } } as unknown as StacDoc)).toBeUndefined();
   });
 });

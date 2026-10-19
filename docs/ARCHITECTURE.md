@@ -77,9 +77,12 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
 - Reproject every source CRS → **EPSG:4326**; add an H3 r9 cell; Hilbert-sort so Parquet row-groups
   bbox-prune well. (Unstamped SRID-0 geometry errors loudly rather than assuming 4326.)
 - **Four sinks per topic:** DuckLake table · GeoParquet (`latest` + dated, citable) · PMTiles
-  (tippecanoe, `-r1`) · STAC item (the discovery + linking layer). The GeoParquet has a page index,
-  and a heavy line or polygon layer also gets an `overview` asset: the same rows simplified to
-  ~50 m, for small-scale drawing. Downloads and tables read `data`, never `overview`.
+  (tippecanoe, `-r1`) · STAC item (the discovery + linking layer). The GeoParquet has a page index
+  over pages of at most 1,024 rows. A line or polygon layer over 16 MB of geometry also gets
+  `overview_1..3` assets (role `ugs:overview`): the same rows simplified to just under a pixel at
+  ArcGIS LOD 11, 9 and 7 (a quarter of that for polygons narrower than a pixel), one sub-pixel
+  speck kept per pixel. The FeatureServer draws small scales from the coarsest one under the
+  request's `maxAllowableOffset`. Downloads and tables read `data`.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.

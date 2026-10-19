@@ -1428,9 +1428,8 @@ def _fetch_item(path: str, iid: str, dropped: list[str]) -> dict | None:
     except FileNotFoundError:
         return None  # listed-then-deleted between the list and this read — legitimately silent
     except Exception as e:  # noqa: BLE001 — one bad item shouldn't sink the refresh, but say so
-        # An item dropping out of items.json is silent data loss — this is how #341 stayed
-        # invisible for weeks. Log it so the next obstore/GCS quirk doesn't repeat that with
-        # zero lines in the log.
+        # An item dropping out of items.json is silent data loss; log it so an obstore/GCS quirk
+        # never drops items with zero lines in the log.
         msg = (f"dropped {path}/{iid} from the index: "
                f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
         print(f"[catalog] {msg}", file=sys.stderr)

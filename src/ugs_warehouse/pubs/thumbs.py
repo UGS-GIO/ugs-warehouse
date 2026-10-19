@@ -18,7 +18,7 @@ import shutil
 import sys
 import tempfile
 
-from ..core import config, gcs
+from ..core import config, gcs, jobs
 from . import contents, identity, sink_stac, source, webp
 from .harvest import _series_ctx, download, encode_url, hlog, outcome_category, run
 
@@ -222,10 +222,8 @@ def main() -> int:
         work = [p for p in pubs if (p.get("series_id") or "").strip().upper() in want]
     hlog(f"{len(work)} publications", step="startup")
 
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    work, i, n = jobs.task_shard(work)
     if n > 1:
-        work = work[i::n]
         hlog(f"shard {i + 1}/{n}: {len(work)} publications", step="shard")
     if args.limit:
         work = work[:args.limit]

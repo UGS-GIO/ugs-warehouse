@@ -19,7 +19,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..core import config, gcs
+from ..core import config, gcs, stac
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
@@ -50,6 +50,18 @@ PAGE_ROWS = 1024
 OVERVIEW_TOLERANCES = (0.00068, 0.0027, 0.0108)
 OVERVIEW_MIN_BYTES = 16 * 1024**2
 OVERVIEW_MIN_SHRINK = 0.7   # a level must be under 70% of the file before it, or it is not written
+# Bump when write or write_overviews changes what they write in a way the settings below miss.
+ARCHIVE_BUILD_VERSION = 1
+
+
+def archive_signature() -> str:
+    """Stable string of the archive and overview writer's inputs. Folded into the content
+    fingerprint, as the tiling signature is, so a change in HOW a topic is written rebuilds it once
+    even when its data has not changed."""
+    return "|".join(str(v) for v in (
+        f"{stac.ARCHIVE_SIGNATURE_PREFIX}{ARCHIVE_BUILD_VERSION}", GEOPARQUET_VERSION, TARGET_ROW_GROUP_BYTES, ROW_GROUP_MIN,
+        ROW_GROUP_MAX, PAGE_BYTES, PAGE_ROWS, *OVERVIEW_TOLERANCES, OVERVIEW_MIN_BYTES,
+        OVERVIEW_MIN_SHRINK))
 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.

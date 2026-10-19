@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.1...v1.11.2) (2026-10-19)
+
+
+### Performance Improvements
+
+* **pubs:** write publication GeoParquet with a page index and small pages ([#610](https://github.com/UGS-GIO/ugs-warehouse/issues/610)) ([daf954a](https://github.com/UGS-GIO/ugs-warehouse/commit/daf954a7eab8b16abe6017c8bb9babcaf0c5e752))
+
 ## [1.11.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.0...v1.11.1) (2026-10-19)
 
 

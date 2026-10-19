@@ -434,11 +434,7 @@ export function filterClause(f: ColFilter): string {
   return t ? `CAST(${c} AS VARCHAR) ILIKE ${lit(`%${t}%`)}` : "";
 }
 
-function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): Record<string, ColType> {
-  const allCols = descRows.map((r) => String(r.column_name));
-  const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
-  const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), COVERING_COL, ID_COL]);
+function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[], hidden: Set<string>): Record<string, ColType> {
   const types: Record<string, ColType> = {};
   for (const r of descRows) {
     const name = String(r.column_name);
@@ -464,7 +460,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), COVERING_COL]);
     const colHidden = new Set([...rowHidden, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
-    const types = typesOf(descRows);
+    const types = typesOf(descRows, colHidden);
 
     // WHERE = global free-text (OR across all columns) AND each per-column filter.
     const where = buildWhere(columns, opts);
@@ -594,9 +590,7 @@ export async function exportItem(
     const cols0 = (await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`)).toArray()
       .map((r) => String(r.column_name));
     const prune = clip && BBOX_COLS.every((c) => cols0.includes(c))
-      ? ` WHERE bbox_xmin <= ${clip[2]} AND bbox_xmax >= ${clip[0]}`
-        + ` AND bbox_ymin <= ${clip[3]} AND bbox_ymax >= ${clip[1]}`
-      : "";
+      ? ` WHERE ${clipClause(clip)}` : "";
     // Read FIRST, before loading spatial: spatial's GeoParquet reader trips over the
     // CRS metadata ("stoi: no conversion"). Plain read already yields a GEOMETRY column.
     await conn.query(`CREATE TABLE ${raw} AS SELECT * FROM read_parquet('${src}')${prune};`);

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, catalogItemHref, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, parquetAsset, rasterTilesAsset, relatedJoins } from "./stac";
+import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, parquetAsset, rasterTilesAsset, relatedJoins } from "./stac";
+import { ROOT_INDEX_URL, rootIndexItems, hasItemsIndex } from "./stac/items-index";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";

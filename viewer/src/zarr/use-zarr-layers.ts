@@ -11,7 +11,8 @@ import type { Device } from "@luma.gl/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
-import { type CubeStep, cubeRenderRescale, stacDocQuery, type StacDoc } from "@/stac";
+import { type CubeStep, cubeRenderRescale } from "@/stac/datacube";
+import { stacDocQuery, type StacDoc } from "@/stac";
 import { makeLocalEpsgResolver } from "./epsg";
 import { openZarr, sampleStretch, type Stretch, type ZarrSource } from "./store";
 import { makeGetTileData, makeRenderTile } from "./tile";

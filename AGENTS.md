@@ -50,7 +50,7 @@ Do not write code that a dependency or a helper in this repo already provides. B
 - COGs: `rio-cogeo`, `rasterio`. GDAL CLIs read COGs in place over `/vsigs/`; do not download them first.
 - Object storage: `obstore` through `core/gcs.py`. One `obs.delete(store, paths)` call deletes a batch.
 - Stdlib first: `mimetypes`, `xml.etree`. For sizes, `pydantic.ByteSize` (already a dependency).
-- Viewer: react-query for data loading, minisearch, hyparquet, duckdb-wasm, `pmtiles`, `@turf/bbox`. Reuse the helpers in `viewer/src/stac.ts`, `viewer/src/map/map-model.ts` and `viewer/src/data/columns.ts`.
+- Viewer: react-query for data loading, minisearch, hyparquet, duckdb-wasm, `pmtiles`, `@turf/bbox`. Reuse the helpers in `viewer/src/stac.ts` (and `viewer/src/stac/`), `viewer/src/map/map-model.ts` and `viewer/src/data/columns.ts`.
 
 Check these projects before you build something new: [portolan-sdi](https://github.com/portolan-sdi), [developmentseed](https://github.com/developmentseed), [stac-utils](https://github.com/stac-utils), [geoparquet-io](https://github.com/geoparquet/geoparquet-io). Agent skills for Portolan: [portolan-skills](https://github.com/portolan-sdi/portolan-skills).
 

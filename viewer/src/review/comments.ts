@@ -39,6 +39,13 @@ async function api<T>(url: string, opts?: RequestInit): Promise<T> {
 }
 
 // Comments for an item, optionally narrowed to a row (by stable key value) or column.
+// Replies keyed by their thread root (parent_id), in list order.
+export function threadReplies(comments: Comment[]): Map<number, Comment[]> {
+  const m = new Map<number, Comment[]>();
+  for (const c of comments) if (c.parent_id != null) (m.get(c.parent_id) ?? m.set(c.parent_id, []).get(c.parent_id)!).push(c);
+  return m;
+}
+
 export const listComments = (itemId: string, target?: { rowVal?: string; column?: string }) => {
   const q = new URLSearchParams({ item_id: itemId });
   if (target?.rowVal != null) q.set("row_val", target.rowVal);

@@ -8,7 +8,8 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useMutation, useQueries } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { toLayer, useViewCtx } from "@/app";
+import { useViewCtx } from "@/app";
+import { toLayer } from "@/map/to-layer";
 import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
 import { planArea } from "./area";

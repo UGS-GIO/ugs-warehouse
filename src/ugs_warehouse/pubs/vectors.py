@@ -232,22 +232,9 @@ def _sources(work: str, nested_dirs: list[str] | tuple = (), used: set[str] | No
     sheet of a workbook is a table labelled `<workbook>__<sheet>`, and a CSV is `<file>`. `used`
     holds the labels of the publication's earlier attachments and gains this bundle's.
     """
-    import pyogrio
-
     out: list[tuple[str, str | None, str, bool]] = []
     errors: list[dict] = []
     used = set() if used is None else used
-
-    def unique(label: str, path: str) -> str:
-        if label in used:
-            rel = os.path.relpath(os.path.dirname(path), work)
-            if rel != ".":
-                label = f"{_safe(rel.replace(os.sep, '__'))}__{label}"
-        base, n = label, 2
-        while label in used:
-            label, n = f"{base}_{n}", n + 1
-        used.add(label)
-        return label
 
     def nested(path: str) -> bool:
         return any(path == d or path.startswith(d + os.sep) for d in nested_dirs)
@@ -255,7 +242,32 @@ def _sources(work: str, nested_dirs: list[str] | tuple = (), used: set[str] | No
     entries = sorted(_walk(work), key=lambda e: (nested(e[0]), e[0]))
     for path, ext in entries:
         if ext == ".shp" and os.path.isfile(path):
-            out.append((path, None, unique(_safe(os.path.basename(path)[:-4]), path), True))
+            out.append((path, None, _unique_label(_safe(os.path.basename(path)[:-4]), path, work, used),
+                        True))
+    _add_gdb_sources(entries, work, used, out, errors)
+    _add_sheet_sources(entries, work, used, out, errors)
+    return out, errors
+
+
+def _unique_label(label: str, path: str, work: str, used: set[str]) -> str:
+    """`label`, or when `used` holds it, prefixed with its folder inside `work` and then numbered
+    until unique; the result is added to `used`."""
+    if label in used:
+        rel = os.path.relpath(os.path.dirname(path), work)
+        if rel != ".":
+            label = f"{_safe(rel.replace(os.sep, '__'))}__{label}"
+    base, n = label, 2
+    while label in used:
+        label, n = f"{base}_{n}", n + 1
+    used.add(label)
+    return label
+
+
+def _add_gdb_sources(entries: list[tuple[str, str]], work: str, used: set[str],
+                     out: list, errors: list[dict]) -> None:
+    """Append each non-template geodatabase's layers to `out`; an unreadable geodatabase or an
+    unsupported container format goes to `errors`."""
+    import pyogrio
 
     for path, ext in entries:
         name = os.path.basename(path)
@@ -265,7 +277,8 @@ def _sources(work: str, nested_dirs: list[str] | tuple = (), used: set[str] | No
             gstem = _safe(name[:-4])
             try:
                 for layer, geomtype in pyogrio.list_layers(path):
-                    out.append((path, layer, unique(f"{gstem}__{_safe(layer)}", path), bool(geomtype)))
+                    out.append((path, layer, _unique_label(f"{gstem}__{_safe(layer)}", path, work, used),
+                                bool(geomtype)))
             except Exception as e:
                 errors.append({"source": name, "error": _error(e)})
                 print(f"  geodatabase {name} unreadable: {e}", file=sys.stderr)
@@ -273,6 +286,11 @@ def _sources(work: str, nested_dirs: list[str] | tuple = (), used: set[str] | No
             errors.append({"source": name, "error": f"unsupported format: {_UNSUPPORTED[ext]}, not extracted"})
             print(f"  {name}: unsupported format, not extracted", file=sys.stderr)
 
+
+def _add_sheet_sources(entries: list[tuple[str, str]], work: str, used: set[str],
+                       out: list, errors: list[dict]) -> None:
+    """Append each spreadsheet sheet and CSV file to `out` as a table; an unreadable one goes to
+    `errors`."""
     for path, ext in entries:
         name = os.path.basename(path)
         if ext not in sheets.SHEET_EXTS or not os.path.isfile(path):
@@ -281,11 +299,10 @@ def _sources(work: str, nested_dirs: list[str] | tuple = (), used: set[str] | No
         try:
             for sheet in sheets.sheet_names(path):
                 label = stem if sheet is None else f"{stem}__{_safe(sheet)}"
-                out.append((path, sheet, unique(label, path), False))
+                out.append((path, sheet, _unique_label(label, path, work, used), False))
         except Exception as e:
             errors.append({"source": name, "error": _error(e)})
             print(f"  spreadsheet {name} unreadable: {e}", file=sys.stderr)
-    return out, errors
 
 
 def _schema(source) -> tuple[list[dict], dict | None]:
@@ -566,8 +583,6 @@ def _extract_and_upload(
     nothing to extract is a warning, not an error. `origins` maps a label to the attachment it came
     from, recorded on its entry as `source_file` {key, title, path}.
     """
-    import pyogrio
-
     manifest: dict = {"spatial": [], "tables": [], "layers": [], "empty": [],
                       "errors": list(source_errors or []), "warnings": [],
                       "extract_version": EXTRACT_VERSION}
@@ -589,63 +604,15 @@ def _extract_and_upload(
             origin = origins.get(label)
             root = origin.root if origin else work
             try:
-                if label in point_frames:
-                    gdf = point_frames.pop(label)
-                    rows = len(gdf)
-                    geoparquet.write(gdf, dst)
-                elif is_spatial:
-                    gdf = _read_spatial(path, layer, label, manifest)
-                    _dedupe_columns(gdf, label, manifest)
-                    rows = len(gdf)
-                    if rows and gdf.crs is None:
-                        raise ValueError("no CRS (missing or unreadable .prj); not written, since "
-                                         "GeoParquet would read its coordinates as longitude/latitude")
-                    blanked = geoparquet.blank_non_finite(gdf)
-                    if blanked:
-                        text = (f"{blanked} geometries with a non-finite coordinate were "
-                                "written as null")
-                        manifest["warnings"].append({"label": label, "code": NON_FINITE_GEOMETRY,
-                                                     "warning": text})
-                        print(f"  {label}: {text}", file=sys.stderr)
-                    if rows:
-                        geoparquet.write(gdf, dst)
-                elif _is_sheet(path):
-                    if layer is not None and path not in books:
-                        books[path] = sheets.Workbook(path)
-                    sheet = sheets.read(path, layer, books.get(path))
-                    manifest["warnings"] += [{"label": label, "warning": w} for w in sheet.warnings]
-                    for w in sheet.warnings:
-                        print(f"  {label}: {w}", file=sys.stderr)
-                    if sheet.frame is None:
-                        continue
-                    df = sheet.frame
-                    rows = len(df)
-                    df.to_parquet(dst)
-                else:
-                    df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
-                    _dedupe_columns(df, label, manifest)
-                    rows = len(df)
-                    if rows:
-                        df.to_parquet(dst)
+                gdf, df, rows = _write_frame(path, layer, label, is_spatial, dst, point_frames,
+                                             books, manifest)
+                if rows is None:
+                    continue
                 if not rows:
                     manifest["empty"].append(label)
                     continue
-
-                columns, geo = _schema(dst)
-                entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
-                         "source": _dataset_name(root, series_id, path, layer, label)}
-                if origin:
-                    entry["source_file"] = {
-                        **({"key": origin.key} if origin.key else {}), "title": origin.title,
-                        "path": _path_in(root, path)}
-                if is_spatial:
-                    entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
-                gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
-                meta = gcs.upload(dst, gcs_path, content_type=PARQUET_MIME,
-                                  cache_control=gcs.CACHE_MUTABLE)
-                entry.update(bytes=meta.size, checksum=meta.checksum)
-                manifest["spatial" if is_spatial else "tables"].append(label)
-                manifest["layers"].append(entry)
+                entry = _upload_layer(dst, series_id, path, layer, label, is_spatial, rows, gdf,
+                                      origin, root, manifest)
                 if df is not None and _is_sheet(path):
                     _queue_points(df, label, path, layer, origin, pending, point_frames, origins,
                                   manifest)
@@ -667,14 +634,105 @@ def _extract_and_upload(
         for book in books.values():
             book.close()
 
+    _finish_manifest(series_id, srcs, profiles, manifest)
+    return manifest
+
+
+def _write_frame(path: str, layer: str | None, label: str, is_spatial: bool, dst: str,
+                 point_frames: dict, books: dict, manifest: dict) -> tuple:
+    """Read one source and write it to `dst` when it has rows. Returns (gdf, df, rows); rows is
+    None for a sheet with nothing to extract."""
+    import pyogrio
+
+    if label in point_frames:
+        gdf = point_frames.pop(label)
+        rows = len(gdf)
+        geoparquet.write(gdf, dst)
+        return gdf, None, rows
+    if is_spatial:
+        gdf = _write_spatial(path, layer, label, dst, manifest)
+        return gdf, None, len(gdf)
+    if _is_sheet(path):
+        df = _read_sheet(path, layer, label, books, manifest)
+        if df is None:
+            return None, None, None
+        rows = len(df)
+        df.to_parquet(dst)
+        return None, df, rows
+    df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
+    _dedupe_columns(df, label, manifest)
+    rows = len(df)
+    if rows:
+        df.to_parquet(dst)
+    return None, df, rows
+
+
+def _write_spatial(path: str, layer: str | None, label: str, dst: str, manifest: dict):
+    """Read a spatial layer, refuse it when it has rows but no CRS, write non-finite geometries
+    as null (with a warning) and write it to `dst` as GeoParquet when it has rows."""
+    gdf = _read_spatial(path, layer, label, manifest)
+    _dedupe_columns(gdf, label, manifest)
+    rows = len(gdf)
+    if rows and gdf.crs is None:
+        raise ValueError("no CRS (missing or unreadable .prj); not written, since "
+                         "GeoParquet would read its coordinates as longitude/latitude")
+    blanked = geoparquet.blank_non_finite(gdf)
+    if blanked:
+        text = (f"{blanked} geometries with a non-finite coordinate were "
+                "written as null")
+        manifest["warnings"].append({"label": label, "code": NON_FINITE_GEOMETRY,
+                                     "warning": text})
+        print(f"  {label}: {text}", file=sys.stderr)
+    if rows:
+        geoparquet.write(gdf, dst)
+    return gdf
+
+
+def _read_sheet(path: str, layer: str | None, label: str, books: dict, manifest: dict):
+    """A spreadsheet sheet or CSV as a DataFrame, or None when it has nothing to extract; its
+    warnings are recorded and printed."""
+    if layer is not None and path not in books:
+        books[path] = sheets.Workbook(path)
+    sheet = sheets.read(path, layer, books.get(path))
+    manifest["warnings"] += [{"label": label, "warning": w} for w in sheet.warnings]
+    for w in sheet.warnings:
+        print(f"  {label}: {w}", file=sys.stderr)
+    return sheet.frame
+
+
+def _upload_layer(dst: str, series_id: str, path: str, layer: str | None, label: str,
+                  is_spatial: bool, rows: int, gdf, origin: Origin | None, root: str,
+                  manifest: dict) -> dict:
+    """Upload the written layer and add its manifest entry (rows, schema, source dataset and
+    attachment, spatial metadata, size, checksum); returns the entry."""
+    columns, geo = _schema(dst)
+    entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
+             "source": _dataset_name(root, series_id, path, layer, label)}
+    if origin:
+        entry["source_file"] = {
+            **({"key": origin.key} if origin.key else {}), "title": origin.title,
+            "path": _path_in(root, path)}
+    if is_spatial:
+        entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
+    gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
+    meta = gcs.upload(dst, gcs_path, content_type=PARQUET_MIME,
+                      cache_control=gcs.CACHE_MUTABLE)
+    entry.update(bytes=meta.size, checksum=meta.checksum)
+    manifest["spatial" if is_spatial else "tables"].append(label)
+    manifest["layers"].append(entry)
+    return entry
+
+
+def _finish_manifest(series_id: str, srcs: list, profiles: list[relations.Layer],
+                     manifest: dict) -> None:
+    """When any layer was uploaded, add the declared and inferred relationships and the styles,
+    then write the manifest."""
     if manifest["spatial"] or manifest["tables"]:
         declared = _declared_relationships(srcs, {e["label"] for e in manifest["layers"]}, manifest)
         _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
         for err in _style_into(series_id, manifest):
             print(f"  {err}", file=sys.stderr)
         _write_manifest(series_id, manifest)
-
-    return manifest
 
 
 def _path_in(root: str, path: str) -> str:
@@ -1106,24 +1164,11 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         print(f"{series_id}: SKIP (unpublished placeholder)")
         return "skip"
 
-    if not force and not dry_run:
-        # `existing` is one listing for a batch run; a single pub reads only its own manifest.
-        if existing is not None:
-            done = series_id in existing
-        else:
-            manifest = _clean_manifest_of(series_id)
-            done = manifest is not None and is_current(manifest)
-        if done:
-            print(f"{series_id}: SKIP (already extracted cleanly)")
-            return "skip"
+    if not force and not dry_run and _already_extracted(series_id, existing):
+        print(f"{series_id}: SKIP (already extracted cleanly)")
+        return "skip"
 
-    files = harvest.data_files(series_id)
-    if not files:
-        # No attachments row: the optional manifest CSV or the site's data.php may still name a zip.
-        _, gis_url = harvest.zip_urls(series_id)
-        files = [harvest.DataFile(harvest.asset_key_of(series_id, gis_url), "GIS", gis_url)
-                 ] if gis_url else []
-
+    files = _data_files_of(series_id)
     if not files:
         print(f"{series_id}: SKIP (no data zip or spreadsheet attachments)")
         return "skip"
@@ -1134,11 +1179,6 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         return "ok"
 
     prior = _data_failure_of(_last_attempt(series_id)) if repeated is not None else None
-
-    def record_failure(record: dict) -> None:
-        _record_attempt(series_id, record)
-        if prior is not None and _data_failure_of({"extract_version": EXTRACT_VERSION, **record}) == prior:
-            repeated.append(series_id)
 
     # Recorded before the download, so a run killed mid-pub (out of memory, job timeout) still
     # counts this pub as tried and orders it after the pubs never tried.
@@ -1152,29 +1192,11 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             return "skip"
 
         manifest = _extract_and_upload(work, series_id, srcs, source_errors, origins)
-        failed_tiles = tiling_failures(manifest)
-        if failed_tiles:
-            print(f"{series_id}: {len(failed_tiles)} layers have no PMTiles (tiling failed): "
-                  f"{', '.join(failed_tiles)}", file=sys.stderr)
-            if untiled is not None:
-                untiled += [f"{series_id}/{lb}" for lb in failed_tiles]
+        _report_untiled(series_id, manifest, untiled)
         n_spatial, n_tables = len(manifest["spatial"]), len(manifest["tables"])
-        errors = manifest["errors"]
         res = "ok"
-        if errors:
-            unreadable = ", ".join(e.get("label") or e["source"] for e in errors)
-            # Only unreadable containers (.mdb, .mpk): a known gap, re-reported by later runs
-            # without re-downloading, rather than a failure.
-            res = ("unsupported" if all(e["error"].startswith("unsupported format") for e in errors)
-                   else "fail:layers")
-            print(f"{series_id}: {'UNSUPPORTED' if res == 'unsupported' else 'FAIL'} "
-                  f"({n_spatial} vector layers + {n_tables} companion tables uploaded, "
-                  f"{len(errors)} failed: {unreadable})", file=sys.stderr)
-            record = {"result": res, "errors": _stable_errors(errors, work)}
-            if res == "unsupported":
-                _record_attempt(series_id, record)
-            else:
-                record_failure(record)
+        if manifest["errors"]:
+            res = _record_layer_errors(series_id, manifest, work, prior, repeated)
             if n_spatial + n_tables == 0:
                 return res
         elif n_spatial + n_tables == 0:
@@ -1182,20 +1204,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             _record_attempt(series_id, {"result": "skip", "warnings": manifest["warnings"]})
             return "skip"
 
-        try:
-            _, package_errors = _geopackage_series(series_id)
-        except Exception as e:
-            package_errors = [f"{series_id}: GeoPackage not built: {_error(e)}"]
-            print(package_errors[0], file=sys.stderr)
-        if unpackaged is not None:
-            unpackaged += package_errors
-        try:
-            unit_errors = _unit_polys_series(series_id)
-        except Exception as e:
-            unit_errors = [f"{series_id}: unit polygons not built: {_error(e)}"]
-            print(unit_errors[0], file=sys.stderr)
-        if without_units is not None:
-            without_units += unit_errors
+        _build_products(series_id, unpackaged, without_units)
 
         if res == "ok":
             print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
@@ -1204,11 +1213,95 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         return res
     except Exception as e:
         print(f"{series_id}: FAIL {e}", file=sys.stderr)
-        record_failure({"result": f"fail:{type(e).__name__}",
-                        "errors": _stable_errors([{"source": "gis zip", "error": _error(e)}], work)})
+        _record_failure(series_id, {"result": f"fail:{type(e).__name__}",
+                                    "errors": _stable_errors([{"source": "gis zip", "error": _error(e)}],
+                                                             work)},
+                        prior, repeated)
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _already_extracted(series_id: str, existing: set[str] | None) -> bool:
+    """Whether the pub was extracted cleanly by the current extractor."""
+    # `existing` is one listing for a batch run; a single pub reads only its own manifest.
+    if existing is not None:
+        return series_id in existing
+    manifest = _clean_manifest_of(series_id)
+    return manifest is not None and is_current(manifest)
+
+
+def _data_files_of(series_id: str) -> list:
+    """The pub's data attachments (`harvest.DataFile`), else the GIS zip the publications site
+    names, else none."""
+    files = harvest.data_files(series_id)
+    if not files:
+        # No attachments row: the optional manifest CSV or the site's data.php may still name a zip.
+        _, gis_url = harvest.zip_urls(series_id)
+        files = [harvest.DataFile(harvest.asset_key_of(series_id, gis_url), "GIS", gis_url)
+                 ] if gis_url else []
+    return files
+
+
+def _record_failure(series_id: str, record: dict, prior: tuple | None,
+                    repeated: list[str] | None) -> None:
+    """Record a failed attempt, and append the pub to `repeated` when it failed on the same bad
+    data as its last attempt (`prior`)."""
+    _record_attempt(series_id, record)
+    if prior is not None and _data_failure_of({"extract_version": EXTRACT_VERSION, **record}) == prior:
+        repeated.append(series_id)
+
+
+def _report_untiled(series_id: str, manifest: dict, untiled: list[str] | None) -> None:
+    """Print the layers whose tiling failed and add them to `untiled` as `SID/label`."""
+    failed_tiles = tiling_failures(manifest)
+    if failed_tiles:
+        print(f"{series_id}: {len(failed_tiles)} layers have no PMTiles (tiling failed): "
+              f"{', '.join(failed_tiles)}", file=sys.stderr)
+        if untiled is not None:
+            untiled += [f"{series_id}/{lb}" for lb in failed_tiles]
+
+
+def _record_layer_errors(series_id: str, manifest: dict, work: str, prior: tuple | None,
+                         repeated: list[str] | None) -> str:
+    """Print and record the layers that failed; returns 'unsupported' when every error is an
+    unreadable container, else 'fail:layers'."""
+    errors = manifest["errors"]
+    n_spatial, n_tables = len(manifest["spatial"]), len(manifest["tables"])
+    unreadable = ", ".join(e.get("label") or e["source"] for e in errors)
+    # Only unreadable containers (.mdb, .mpk): a known gap, re-reported by later runs
+    # without re-downloading, rather than a failure.
+    res = ("unsupported" if all(e["error"].startswith("unsupported format") for e in errors)
+           else "fail:layers")
+    print(f"{series_id}: {'UNSUPPORTED' if res == 'unsupported' else 'FAIL'} "
+          f"({n_spatial} vector layers + {n_tables} companion tables uploaded, "
+          f"{len(errors)} failed: {unreadable})", file=sys.stderr)
+    record = {"result": res, "errors": _stable_errors(errors, work)}
+    if res == "unsupported":
+        _record_attempt(series_id, record)
+    else:
+        _record_failure(series_id, record, prior, repeated)
+    return res
+
+
+def _build_products(series_id: str, unpackaged: list[str] | None,
+                    without_units: list[str] | None) -> None:
+    """Build the pub's GeoPackage and unit polygons; what could not be built is printed and added
+    to `unpackaged` / `without_units`."""
+    try:
+        _, package_errors = _geopackage_series(series_id)
+    except Exception as e:
+        package_errors = [f"{series_id}: GeoPackage not built: {_error(e)}"]
+        print(package_errors[0], file=sys.stderr)
+    if unpackaged is not None:
+        unpackaged += package_errors
+    try:
+        unit_errors = _unit_polys_series(series_id)
+    except Exception as e:
+        unit_errors = [f"{series_id}: unit polygons not built: {_error(e)}"]
+        print(unit_errors[0], file=sys.stderr)
+    if without_units is not None:
+        without_units += unit_errors
 
 
 
@@ -1747,69 +1840,14 @@ def _heal_units(heal: Heal, units: dict[str, str], deadline: float | None) -> No
 
 def main() -> int:
     started = time.monotonic()
-    ap = argparse.ArgumentParser(description="Extract GIS publication vector layers to GCS")
-    g = ap.add_mutually_exclusive_group()
-    g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to extract")
-    g.add_argument("--all", action="store_true", help="Extract all series IDs from metadata")
-    ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to extract")
-    ap.add_argument("--dry-run", action="store_true", help="Dry run (check URLs and schema only)")
-    ap.add_argument("--force", action="store_true", help="Force extraction even if artifacts exist")
-    args = ap.parse_args()
-    if not args.all and not args.series_id:
-        ap.error("give series ids or --all")
+    args = _parse_args()
 
     sids = []
     all_sids: list[str] = []
     existing = None
     needs: dict[str, Needs] = {}
     if args.all:
-        print(f"Loading publications from source: {source.source_name()}")
-        all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
-        # A batch run only visits pubs with a data zip or spreadsheet attachment, and checks what
-        # is already extracted with one listing, so a weekly run costs about nothing when nothing
-        # is new.
-        sids = [s for s in all_sids if harvest.data_files(s)]
-        # A forced run re-extracts every pub, so nothing is left to heal. A manifest below
-        # EXTRACT_VERSION is extracted again, not healed. A current one with errors is healed too,
-        # so its extracted layers get their products, but only a clean one counts as extracted.
-        listed = set(sids)
-        found = {} if args.force else healable_manifests(
-            lambda sid, doc: (needs_of(doc), (doc.get("extract_version") or 0) >= EXTRACT_VERSION,
-                              is_current(doc)))
-        needs = {s: n for s, (n, current, _) in found.items() if s in listed and current}
-        existing = None if args.force else {s for s in needs if found[s][2]}
-        unsupported: list[str] = []
-        nothing: list[str] = []
-        if existing is not None:
-            tried = _series_with("_attempt.json", "_manifest.json")
-            attempted = _series_with("_attempt.json")
-            # A pub whose last attempt failed only on unreadable containers, or finished cleanly
-            # with nothing to extract, is listed, not re-downloaded; --force retries it (for
-            # example after the image gains a driver). An attempt made at an older
-            # EXTRACT_VERSION does not count: the pub is tried again at the current coverage.
-            for s in [s for s in sids if s in attempted and s not in existing]:
-                last = _last_attempt(s)
-                if (last.get("extract_version") or 0) < EXTRACT_VERSION:
-                    continue
-                if last.get("result") == "unsupported":
-                    kinds = ", ".join(sorted({e["source"] for e in last.get("errors", [])}))
-                    unsupported.append(f"{s} ({kinds})")
-                    sids.remove(s)
-                elif last.get("result") == "skip":
-                    nothing.append(s)
-                    sids.remove(s)
-            # Pubs never tried go first, retries of earlier failures and upgrades last, so a pub
-            # that fails slowly every run cannot spend the job's timeout before new pubs are reached.
-            sids = sorted(sids, key=lambda s: s in tried)
-        print(f"Found {len(all_sids)} publications, "
-              f"{len(sids) + len(unsupported) + len(nothing)} with a data zip or spreadsheet, "
-              f"{len(set(sids) & (existing or set()))} already extracted")
-        if nothing:
-            print(f"{len(nothing)} had no layers to extract last time, not retried (--force to "
-                  f"retry): {', '.join(nothing)}")
-        if unsupported:
-            print(f"{len(unsupported)} contain formats this image cannot read (any readable "
-                  f"layers were extracted), not retried (--force to retry): {', '.join(unsupported)}")
+        sids, all_sids, existing, needs = _plan_batch(args.force)
     else:
         sids = args.series_id
 
@@ -1820,11 +1858,7 @@ def main() -> int:
     task_index, task_count = jobs.task()
     sharded = task_count > 1
     if sharded:
-        sids = [s for s in sids if jobs.owns(identity.Pub.parse(s).series_id)]
-        print(f"shard {task_index + 1}/{task_count}: {len(sids)} publications")
-        if not args.all and not sids:
-            print(f"shard {task_index + 1}/{task_count}: none of the named publications belong "
-                  f"to this task")
+        sids = _owned(sids, task_index, task_count, args.all)
 
     if args.limit:
         sids = sids[:args.limit]
@@ -1838,25 +1872,10 @@ def main() -> int:
     untiled: list[str] = []
     unpackaged: list[str] = []
     without_units: list[str] = []
-    extracted: set[str] = set()
     deadline = started + TIME_BUDGET_S
-    # Only a regular batch run picks up what it leaves, so targeted and forced runs extract all.
-    budgeted = args.all and not args.force
-    for i, sid in enumerate(sids):
-        if budgeted and time.monotonic() >= deadline:
-            left = sids[i:]
-            more = f", ... ({len(left) - 20} more)" if len(left) > 20 else ""
-            print(f"Time budget used: {len(left)} publications left to extract, the next run "
-                  f"continues: {', '.join(left[:20])}{more}")
-            break
-        res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
-                          untiled=untiled, unpackaged=unpackaged,
-                          without_units=without_units, repeated=repeated)
-        if res != "skip":
-            extracted.add(identity.Pub.parse(sid).series_id)
-        if res.startswith("fail"):
-            same = repeated is not None and identity.Pub.parse(sid).series_id in repeated
-            (known if same else failed).append(f"{sid} ({res})")
+    extracted = _extract_each(sids, args, existing, deadline, failed=failed, known=known,
+                              repeated=repeated, untiled=untiled, unpackaged=unpackaged,
+                              without_units=without_units)
     if args.all:
         # A pub with errors is both healable and extracted again; the extraction's result stands,
         # as in a targeted run. Pubs the time budget skipped stay in `needs` and still heal.
@@ -1876,27 +1895,158 @@ def main() -> int:
         # The task that owns a pub also heals it, so no two tasks write one manifest or units file.
         needs = {sid: n for sid, n in needs.items() if jobs.owns(sid)}
         units = {sid: u for sid, u in units.items() if jobs.owns(sid)}
+    heal, identified = _heal_and_identify(args, needs, units, deadline, task_index)
+    # Exit 1 only for work that failed in THIS run: a pub that failed to extract (unless on the same
+    # bad data as last run), a layer whose tiling failed at extraction, or a layer or pub whose
+    # self-heal failed. Work the time budget left pending is not a failure; the next run continues it.
+    _print_failures(sids, failed=failed, known=known, untiled=untiled, unpackaged=unpackaged,
+                    without_units=without_units, heal=heal, identified=identified)
+    return 1 if (failed or untiled or unpackaged or without_units or heal.failed
+                 or identified.errors) else 0
+
+
+def _parse_args() -> argparse.Namespace:
+    """The command line: series ids or --all, plus --limit, --dry-run and --force."""
+    ap = argparse.ArgumentParser(description="Extract GIS publication vector layers to GCS")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to extract")
+    g.add_argument("--all", action="store_true", help="Extract all series IDs from metadata")
+    ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to extract")
+    ap.add_argument("--dry-run", action="store_true", help="Dry run (check URLs and schema only)")
+    ap.add_argument("--force", action="store_true", help="Force extraction even if artifacts exist")
+    args = ap.parse_args()
+    if not args.all and not args.series_id:
+        ap.error("give series ids or --all")
+    return args
+
+
+def _plan_batch(force: bool) -> tuple[list[str], list[str], set[str] | None, dict[str, Needs]]:
+    """An --all run's (pubs to extract, in order; every series id; the pubs already extracted
+    cleanly, None when forced; the heal needs of the current manifests)."""
+    print(f"Loading publications from source: {source.source_name()}")
+    all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
+    # A batch run only visits pubs with a data zip or spreadsheet attachment, and checks what
+    # is already extracted with one listing, so a weekly run costs about nothing when nothing
+    # is new.
+    sids = [s for s in all_sids if harvest.data_files(s)]
+    # A forced run re-extracts every pub, so nothing is left to heal. A manifest below
+    # EXTRACT_VERSION is extracted again, not healed. A current one with errors is healed too,
+    # so its extracted layers get their products, but only a clean one counts as extracted.
+    listed = set(sids)
+    found = {} if force else healable_manifests(
+        lambda sid, doc: (needs_of(doc), (doc.get("extract_version") or 0) >= EXTRACT_VERSION,
+                          is_current(doc)))
+    needs = {s: n for s, (n, current, _) in found.items() if s in listed and current}
+    existing = None if force else {s for s in needs if found[s][2]}
+    unsupported: list[str] = []
+    nothing: list[str] = []
+    if existing is not None:
+        sids, unsupported, nothing = _skip_settled(sids, existing)
+    print(f"Found {len(all_sids)} publications, "
+          f"{len(sids) + len(unsupported) + len(nothing)} with a data zip or spreadsheet, "
+          f"{len(set(sids) & (existing or set()))} already extracted")
+    if nothing:
+        print(f"{len(nothing)} had no layers to extract last time, not retried (--force to "
+              f"retry): {', '.join(nothing)}")
+    if unsupported:
+        print(f"{len(unsupported)} contain formats this image cannot read (any readable "
+              f"layers were extracted), not retried (--force to retry): {', '.join(unsupported)}")
+    return sids, all_sids, existing, needs
+
+
+def _skip_settled(sids: list[str], existing: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """(`sids` without the pubs whose last attempt settled them, never-tried pubs first; the
+    unsupported ones with their formats; the ones with nothing to extract)."""
+    tried = _series_with("_attempt.json", "_manifest.json")
+    attempted = _series_with("_attempt.json")
+    unsupported: list[str] = []
+    nothing: list[str] = []
+    # A pub whose last attempt failed only on unreadable containers, or finished cleanly
+    # with nothing to extract, is listed, not re-downloaded; --force retries it (for
+    # example after the image gains a driver). An attempt made at an older
+    # EXTRACT_VERSION does not count: the pub is tried again at the current coverage.
+    for s in [s for s in sids if s in attempted and s not in existing]:
+        last = _last_attempt(s)
+        if (last.get("extract_version") or 0) < EXTRACT_VERSION:
+            continue
+        if last.get("result") == "unsupported":
+            kinds = ", ".join(sorted({e["source"] for e in last.get("errors", [])}))
+            unsupported.append(f"{s} ({kinds})")
+            sids.remove(s)
+        elif last.get("result") == "skip":
+            nothing.append(s)
+            sids.remove(s)
+    # Pubs never tried go first, retries of earlier failures and upgrades last, so a pub
+    # that fails slowly every run cannot spend the job's timeout before new pubs are reached.
+    return sorted(sids, key=lambda s: s in tried), unsupported, nothing
+
+
+def _owned(sids: list[str], task_index: int, task_count: int, batch: bool) -> list[str]:
+    """The pubs of `sids` this task owns, with the shard's count printed."""
+    sids = [s for s in sids if jobs.owns(identity.Pub.parse(s).series_id)]
+    print(f"shard {task_index + 1}/{task_count}: {len(sids)} publications")
+    if not batch and not sids:
+        print(f"shard {task_index + 1}/{task_count}: none of the named publications belong "
+              f"to this task")
+    return sids
+
+
+def _extract_each(sids: list[str], args: argparse.Namespace, existing: set[str] | None,
+                  deadline: float, *, failed: list[str], known: list[str],
+                  repeated: list[str] | None, untiled: list[str], unpackaged: list[str],
+                  without_units: list[str]) -> set[str]:
+    """Run `extract_one` over `sids` until a batch run's time budget is spent, sorting failures
+    into `failed` and `known` (same bad data as last run). Returns the series ids not skipped."""
+    extracted: set[str] = set()
+    # Only a regular batch run picks up what it leaves, so targeted and forced runs extract all.
+    budgeted = args.all and not args.force
+    for i, sid in enumerate(sids):
+        if budgeted and time.monotonic() >= deadline:
+            left = sids[i:]
+            more = f", ... ({len(left) - 20} more)" if len(left) > 20 else ""
+            print(f"Time budget used: {len(left)} publications left to extract, the next run "
+                  f"continues: {', '.join(left[:20])}{more}")
+            break
+        res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
+                          untiled=untiled, unpackaged=unpackaged,
+                          without_units=without_units, repeated=repeated)
+        if res != "skip":
+            extracted.add(identity.Pub.parse(sid).series_id)
+        if res.startswith("fail"):
+            same = repeated is not None and identity.Pub.parse(sid).series_id in repeated
+            (known if same else failed).append(f"{sid} ({res})")
+    return extracted
+
+
+def _heal_and_identify(args: argparse.Namespace, needs: dict[str, Needs], units: dict[str, str],
+                       deadline: float, task_index: int) -> tuple[Heal, identify.Result]:
+    """Run the self-heal (or, on a dry run, print what it would do) and, for task 0 of a batch run,
+    rebuild the identify layers that changed."""
     identified = identify.Result()
     if args.dry_run:
         pending = sum(len(n.tiles) for n in needs.values())
         print(f"[dry-run] self-heal would tile {pending} layers, record relationships for "
               f"{sum(n.relations for n in needs.values())} pubs, build unit polygons for "
               f"{sum(n.unit_polys for n in needs.values())} pubs and check {len(units)} units files")
-        heal = Heal()
-    else:
-        heal = self_heal(needs, deadline=deadline, units=units)
-        print(heal.summary())
-        if args.all and task_index == 0:
-            # After the heal, so the tiers see the unit polygons it just built. A run the time
-            # budget cut short leaves the rest to the next run, which sees their checksums change.
-            # Catalog-wide (tier files, band cache, mosaic Items), so task 0 alone writes it, from
-            # what is extracted so far.
-            identified = identify.build_changed()
-            print(f"Identify layers: built {identified.built or 'none'}, unchanged "
-                  f"{identified.unchanged or 'none'}")
-    # Exit 1 only for work that failed in THIS run: a pub that failed to extract (unless on the same
-    # bad data as last run), a layer whose tiling failed at extraction, or a layer or pub whose
-    # self-heal failed. Work the time budget left pending is not a failure; the next run continues it.
+        return Heal(), identified
+    heal = self_heal(needs, deadline=deadline, units=units)
+    print(heal.summary())
+    if args.all and task_index == 0:
+        # After the heal, so the tiers see the unit polygons it just built. A run the time
+        # budget cut short leaves the rest to the next run, which sees their checksums change.
+        # Catalog-wide (tier files, band cache, mosaic Items), so task 0 alone writes it, from
+        # what is extracted so far.
+        identified = identify.build_changed()
+        print(f"Identify layers: built {identified.built or 'none'}, unchanged "
+              f"{identified.unchanged or 'none'}")
+    return heal, identified
+
+
+def _print_failures(sids: list[str], *, failed: list[str], known: list[str], untiled: list[str],
+                    unpackaged: list[str], without_units: list[str], heal: Heal,
+                    identified: identify.Result) -> None:
+    """Print what failed this run (each product, the self-heal, identify, the pubs) and the pubs
+    that failed as last run."""
     if untiled:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed this run; the next "
               f"run retries them): {', '.join(untiled)}", file=sys.stderr)
@@ -1919,8 +2069,6 @@ def main() -> int:
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)
-    return 1 if (failed or untiled or unpackaged or without_units or heal.failed
-                 or identified.errors) else 0
 
 
 if __name__ == "__main__":

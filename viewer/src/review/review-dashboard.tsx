@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { useState } from "react";
-import { type Comment, ITEM_STATUSES, listAllComments, useCommentActions, whoami } from "./comments";
+import { ITEM_STATUSES, listAllComments, threadReplies, useCommentActions, whoami } from "./comments";
 import { CommentMeta } from "./comments-panel";
 import { NotificationsInbox } from "./notifications-inbox";
 import { ReviewReport } from "./review-report";
@@ -32,8 +32,7 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
   const me = useQuery({ queryKey: qk.whoami, queryFn: whoami, retry: false, staleTime: Infinity });
   const { toggle, remove } = useCommentActions(invalidate);
 
-  const repliesByRoot = new Map<number, Comment[]>();
-  for (const c of all) if (c.parent_id != null) (repliesByRoot.get(c.parent_id) ?? repliesByRoot.set(c.parent_id, []).get(c.parent_id)!).push(c);
+  const repliesByRoot = threadReplies(all);
   const comments = all.filter((c) => c.parent_id == null &&
     (filter === "all" || (filter === "resolved" ? c.status === "resolved" : c.status !== "resolved")));
 

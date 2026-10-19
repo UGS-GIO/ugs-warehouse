@@ -1,5 +1,5 @@
 import type { ActiveLayer } from "@/map/map-model";
-import { resolveSelection } from "@/stac";
+import { resolveSelection } from "@/stac/datacube";
 import { pickedRescale, useCubePicks } from "./cube-picks";
 import { CubeControls } from "./step-picker";
 import { useCubeSteps, useCubeStretch } from "./use-zarr-layers";

@@ -1,7 +1,7 @@
 // The item page's datacube controls hand-off (see cube-steps-context), split out for Fast Refresh.
 import { createContext, useContext } from "react";
 
-import type { CubeStep } from "@/stac";
+import type { CubeStep } from "@/stac/datacube";
 import type { Stretch } from "./store";
 
 export type CubeOffer = {

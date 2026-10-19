@@ -37,14 +37,18 @@ def _page(path) -> None:
     from ..vector.sink_archive import PAGE_BYTES, PAGE_ROWS
 
     tmp = f"{path}.paged"
-    with pq.ParquetFile(path) as src:
-        schema = src.schema_arrow
-        dictionary = [f.name for f in schema if pa.types.is_string(f.type) or
-                      pa.types.is_large_string(f.type) or pa.types.is_integer(f.type)]
-        with pq.ParquetWriter(tmp, schema, compression="zstd", compression_level=9,
-                              write_page_index=True,
-                              data_page_size=PAGE_BYTES, max_rows_per_page=PAGE_ROWS,
-                              write_batch_size=64, use_dictionary=dictionary) as out:
-            for g in range(src.num_row_groups):
-                out.write_table(src.read_row_group(g))
-    os.replace(tmp, path)
+    try:
+        with pq.ParquetFile(path) as src:
+            schema = src.schema_arrow
+            dictionary = [f.name for f in schema if pa.types.is_string(f.type) or
+                          pa.types.is_large_string(f.type) or pa.types.is_integer(f.type)]
+            with pq.ParquetWriter(tmp, schema, compression="zstd", compression_level=9,
+                                  write_page_index=True, data_page_size=PAGE_BYTES,
+                                  max_rows_per_page=PAGE_ROWS, write_batch_size=64,
+                                  use_dictionary=dictionary) as out:
+                for g in range(src.num_row_groups):
+                    out.write_table(src.read_row_group(g))
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):  # a failed rewrite; /tmp is RAM on Cloud Run
+            os.remove(tmp)

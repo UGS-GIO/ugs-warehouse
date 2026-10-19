@@ -17,7 +17,7 @@ ID_FIELD = "feature_id"
 
 def _source(item: dict) -> str | None:
     """The `gs://` path of the item's GeoParquet asset, or None when it has none on our CDN. The
-    full-detail `data` asset first: a heavy layer also has a generalized `overview` parquet."""
+    full-detail `data` asset first: a heavy layer also has generalized `overview_*` parquets."""
     base = config.public_url("")
     assets = item.get("assets") or {}
     for asset in sorted(assets.values(), key=lambda a: a is not assets.get("data")):

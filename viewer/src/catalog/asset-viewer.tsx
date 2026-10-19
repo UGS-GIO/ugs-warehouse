@@ -8,7 +8,7 @@ import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
-import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
+import { type Asset, type AssetKind, assetKind, isDrawableCog, isOverview, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
@@ -190,7 +190,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
 function AssetViewer({ item }: { item: StacDoc }) {
   const entries = useMemo(() => Object.entries(item.assets ?? {})
     // thumbnails are redundant with the real image/cog; skip as their own tab
-    .filter(([, a]) => !a.roles?.includes("thumbnail"))
+    .filter(([, a]) => !a.roles?.includes("thumbnail") && !isOverview(a))
     .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
     .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
       || KIND_RANK[x.kind] - KIND_RANK[y.kind]

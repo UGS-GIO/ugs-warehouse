@@ -7,7 +7,7 @@
 //          (a URL, a `1:24000` scale) falls back to a plain term.
 
 export type FieldName = "title" | "keywords" | "topic" | "series" | "coll" | "id";
-export const FIELDS: readonly FieldName[] = ["title", "keywords", "topic", "series", "coll", "id"];
+const FIELDS: readonly FieldName[] = ["title", "keywords", "topic", "series", "coll", "id"];
 const FIELD_SET = new Set<string>(FIELDS);
 
 export type FieldClause = { field: FieldName; value: string; negate: boolean };
@@ -67,18 +67,6 @@ export function parseQuery(input: string): Query {
   return q;
 }
 
-const quoteIfNeeded = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
-
-export function serializeQuery(q: Query): string {
-  const parts: string[] = [];
-  for (const t of q.terms) parts.push(t);
-  for (const p of q.phrases) parts.push(`"${p}"`);
-  for (const f of q.fields) parts.push(`${f.negate ? "-" : ""}${f.field}:${quoteIfNeeded(f.value)}`);
-  for (const t of q.not) parts.push(`-${t}`);
-  for (const p of q.notPhrases) parts.push(`-"${p}"`);
-  return parts.join(" ");
-}
-
 export const isEmptyQuery = (q: Query): boolean =>
   !q.terms.length && !q.phrases.length && !q.not.length && !q.notPhrases.length && !q.fields.length;
 
@@ -124,32 +112,6 @@ export function matchesQuery(q: Query, d: SearchDoc): boolean {
     if (f.negate ? hit : !hit) return false;
   }
   return true;
-}
-
-// ---- panel editing helpers (immutably derive a new Query, caller serializes back to the box) ----
-
-/** Replace all bare terms with the words in `s` (keeps phrases/fields/excludes). */
-export function withTerms(q: Query, s: string): Query {
-  return { ...q, terms: s.split(/\s+/).filter(Boolean) };
-}
-/** Set a single exact phrase (panel simplification — inline still supports many). */
-export function withSinglePhrase(q: Query, s: string): Query {
-  const p = s.trim();
-  return { ...q, phrases: p ? [p] : [] };
-}
-/** Replace all plain exclusions with the words in `s`. */
-export function withExcludes(q: Query, s: string): Query {
-  return { ...q, not: s.split(/\s+/).filter(Boolean) };
-}
-/** Set (or clear, when value is empty) a single positive field clause. */
-export function withField(q: Query, field: FieldName, value: string): Query {
-  const rest = q.fields.filter((f) => f.field !== field);
-  const v = value.trim();
-  return { ...q, fields: v ? [...rest, { field, value: v, negate: false }] : rest };
-}
-/** Read the first positive value for a field (for the panel input value). */
-export function fieldInput(q: Query, field: FieldName): string {
-  return q.fields.find((f) => f.field === field && !f.negate)?.value ?? "";
 }
 
 // ---- BM25 (DuckDB) wiring ----

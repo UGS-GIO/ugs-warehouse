@@ -11,7 +11,7 @@ import { validBbox } from "@/map/map-model";
 
 // The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
 // the discovery-facing names so this module's API and the view stay unchanged.
-export { collectionLabel, docIdOf, hasGeometry, typeOf };
+export { docIdOf, hasGeometry, typeOf };
 export const discoveryTitle = title;
 
 export type FacetCount = { key: string; label: string; n: number };

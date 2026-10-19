@@ -14,7 +14,7 @@ export type Renders = ReturnType<typeof rendersOf>;
 
 export const specItemId = (s: PreviewSpec): string => (s ? String(s.item.id ?? "") : "");
 
-export const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
+const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
   const [w, s, e, n] = b;
   return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] };
 };

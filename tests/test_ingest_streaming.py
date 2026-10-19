@@ -153,7 +153,7 @@ def _run_with_failing(failing=None, published="old-hash"):
          patch("ugs_warehouse.vector.fingerprint.published_hash", return_value=published), \
          patch("ugs_warehouse.vector.sink_ducklake.write", side_effect=effect("ducklake")), \
          patch("ugs_warehouse.vector.sink_archive.write", side_effect=effect("archive")), \
-         patch("ugs_warehouse.vector.sink_archive.write_overview",
+         patch("ugs_warehouse.vector.sink_archive.write_overviews",
                side_effect=effect("overview")) as overview, \
          patch("ugs_warehouse.vector.sink_pmtiles.build", side_effect=effect("pmtiles")), \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
@@ -175,7 +175,7 @@ def test_a_failed_data_sink_keeps_the_published_hash(failing):
 
 
 def test_no_overview_beside_a_failed_archive():
-    """The published overview is of the published archive, so a run whose archive failed keeps both."""
+    """The published overviews are of the published archive, so a run whose archive failed keeps all."""
     *_, overview_calls = _run_with_failing("archive")
     assert overview_calls == 0
 

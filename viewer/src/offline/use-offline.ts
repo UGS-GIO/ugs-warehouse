@@ -1,20 +1,15 @@
 // Hooks for the download controls: the queue (offline/queue.ts) for what is saving, the store
 // (offline/store.ts) for what is saved, and TanStack Query only for questions asked of the network.
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useSyncExternalStore } from "react";
 import { BASEMAP_BASE } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
-import type { Job } from "./queue";
 import * as store from "./store";
-import type { StoredArea } from "./store";
+import { type StoredArea, useJobs } from "./store";
 
 /** Progress of an in-flight download: bytes written, and the total when the server declared one. */
-export type Progress = { written: number; total?: number };
-
-/** Every save waiting, running or failed, from the device's download queue (offline/queue.ts). */
-export const useJobs = (): Job[] => useSyncExternalStore(queue.subscribe, queue.snapshot, queue.snapshot);
+type Progress = { written: number; total?: number };
 
 /**
  * Queue one artifact for download, or delete the stored copy, keeping the pmtiles protocol's view

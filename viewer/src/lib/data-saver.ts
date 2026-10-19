@@ -23,7 +23,7 @@ const connection = (): NetworkInformation | undefined => {
 
 const SLOW = new Set(["slow-2g", "2g", "3g"]);
 
-export function getPref(): DataSaverPref {
+function getPref(): DataSaverPref {
   try {
     const v = localStorage.getItem(KEY);
     return v === "on" || v === "off" ? v : "auto";
@@ -38,7 +38,7 @@ export function setPref(p: DataSaverPref): void {
 }
 
 /** Whether pages should hold back what the person did not ask for. */
-export function dataSaverActive(): boolean {
+function dataSaverActive(): boolean {
   const pref = getPref();
   if (pref !== "auto") return pref === "on";
   const c = connection();

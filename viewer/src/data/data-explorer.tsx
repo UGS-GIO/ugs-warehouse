@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { sameFeature } from "@/lib/same-feature";
 import { qk } from "@/query-keys";
-import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
+import { type ColumnDef, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebounced } from "@/lib/use-debounced";
@@ -11,6 +11,7 @@ import { CommentsPanel } from "@/review/comments-panel";
 import { buildFilters } from "./build-filters";
 import type { ColFilter } from "./download";
 import { PAGE_SIZES } from "./paging";
+import { HeaderCells, RowCells } from "./table";
 import type { FocusSel, MapPick } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
 import { C } from "@/ui/ui";
@@ -343,15 +344,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
                       })} />
                   </th>
                 )}
-                {hg.headers.map((h) => {
-                  const s = h.column.getIsSorted();
-                  return (
-                    <th key={h.id} className={C.th} onClick={h.column.getToggleSortingHandler()}>
-                      {flexRender(h.column.columnDef.header, h.getContext())}
-                      {s === "asc" ? " ▲" : s === "desc" ? " ▼" : ""}
-                    </th>
-                  );
-                })}
+                <HeaderCells group={hg} />
               </tr>
             ))}
             {/* Per-column filter row: numeric → min/max range, text → substring. */}
@@ -411,9 +404,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
                       ) : null}
                     </td>
                   )}
-                  {r.getVisibleCells().map((c) => (
-                    <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
-                  ))}
+                  <RowCells row={r} />
                 </tr>
               );
             })}

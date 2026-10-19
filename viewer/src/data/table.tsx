@@ -1,4 +1,4 @@
-import { flexRender, type Table } from "@tanstack/react-table";
+import { flexRender, type HeaderGroup, type Row, type Table } from "@tanstack/react-table";
 
 import { ALL_PAGES, pageLabel, PAGE_SIZES, type PageSize } from "./paging";
 import { C } from "@/ui/ui";
@@ -46,6 +46,34 @@ export function Pager<T>({ table, size, onSize }: {
   );
 }
 
+/** A header group's cells: a click toggles the sort, an arrow shows it. */
+export function HeaderCells<T>({ group }: { group: HeaderGroup<T> }) {
+  return (
+    <>
+      {group.headers.map((h) => {
+        const s = h.column.getIsSorted();
+        return (
+          <th key={h.id} className={h.column.getCanSort() ? C.th : C.thPlain}
+            onClick={h.column.getToggleSortingHandler()}>
+            {flexRender(h.column.columnDef.header, h.getContext())}
+            {s === "asc" ? " ▲" : s === "desc" ? " ▼" : ""}
+          </th>
+        );
+      })}
+    </>
+  );
+}
+
+export function RowCells<T>({ row }: { row: Row<T> }) {
+  return (
+    <>
+      {row.getVisibleCells().map((c) => (
+        <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
+      ))}
+    </>
+  );
+}
+
 export function DataTable<T>({ table, onRowClick }: {
   table: Table<T>;
   onRowClick?: (row: T) => void;
@@ -55,16 +83,7 @@ export function DataTable<T>({ table, onRowClick }: {
       <thead>
         {table.getHeaderGroups().map((hg) => (
           <tr key={hg.id}>
-            {hg.headers.map((h) => {
-              const s = h.column.getIsSorted();
-              return (
-                <th key={h.id} className={h.column.getCanSort() ? C.th : C.thPlain}
-                  onClick={h.column.getToggleSortingHandler()}>
-                  {flexRender(h.column.columnDef.header, h.getContext())}
-                  {s === "asc" ? " ▲" : s === "desc" ? " ▼" : ""}
-                </th>
-              );
-            })}
+            <HeaderCells group={hg} />
           </tr>
         ))}
       </thead>
@@ -72,9 +91,7 @@ export function DataTable<T>({ table, onRowClick }: {
         {table.getRowModel().rows.map((r) => (
           <tr key={r.id} className={onRowClick ? "cursor-pointer hover:bg-hover" : undefined}
             onClick={onRowClick ? () => onRowClick(r.original) : undefined}>
-            {r.getVisibleCells().map((c) => (
-              <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
-            ))}
+            <RowCells row={r} />
           </tr>
         ))}
       </tbody>

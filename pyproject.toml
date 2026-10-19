@@ -21,7 +21,7 @@ dependencies = [
   "CacheControl>=0.14",  # caches the signing keys (iap.py)
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
   "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
-  "pyarrow>=19",         # writes the archive GeoParquet with a page index (vector/sink_archive.py)
+  "pyarrow>=23",         # writes the archive GeoParquet with a page index (vector/sink_archive.py)
   # NB: no shapely — the vector ingest streams Postgres→DuckDB→CDN in DuckDB; pyarrow only writes
   # DuckDB's Arrow batches out. shapely lives in the [pubs] extra (geopandas/pyogrio need it).
 ]
@@ -99,5 +99,9 @@ target-version = "py311"
 #   E4/E7/E9 = pycodestyle (imports, statements, syntax)
 #   F        = pyflakes (real errors: undefined names, unused imports)
 #   I        = import sorting (auto-fixable)
+#   C901     = mccabe complexity
 # Grow this set deliberately, ideally org-wide, not by accident.
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12

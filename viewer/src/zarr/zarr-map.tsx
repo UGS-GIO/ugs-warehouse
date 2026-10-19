@@ -8,7 +8,8 @@ import maplibregl from "@/map/maplibre-lib";
 import { useEffect, useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 
-import { type Asset, collectionHrefOf, cubeRenderRescale, cubeStepDims, cubeVariables, idOf, resolveSelection, type StacDoc } from "@/stac";
+import { type Asset, collectionHrefOf, idOf, type StacDoc } from "@/stac";
+import { cubeRenderRescale, cubeStepDims, cubeVariables, resolveSelection } from "@/stac/datacube";
 import { DIRECT, protomapsStyle } from "@/map/basemap-style";
 import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";

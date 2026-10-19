@@ -7,15 +7,13 @@ import { Meter } from "@base-ui/react/meter";
 import { useMutation } from "@tanstack/react-query";
 import { useViewCtx } from "@/app";
 import { BasemapDownload } from "./basemap-download";
-import { Downloads } from "./downloads";
+import { BTN, Downloads } from "./downloads";
 import { describe, type Described, sortDescribed } from "./describe";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import * as store from "./store";
 import { type StoredArea, useOffline } from "./store";
 import { updateArea, useStaleAreas, useStaleBasemaps } from "./use-offline";
-
-const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
 
 export function OfflineManager() {
   const { allItems, mapItems, openItem } = useViewCtx();

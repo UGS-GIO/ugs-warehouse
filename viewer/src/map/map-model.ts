@@ -3,7 +3,8 @@
 // so these tests guard the parts we CAN check deterministically).
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
-import type { CubeStep, StacDoc } from "@/stac";
+import type { CubeStep } from "@/stac/datacube";
+import type { StacDoc } from "@/stac";
 import { to2d } from "@/lib/bbox";
 import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 

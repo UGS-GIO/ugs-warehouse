@@ -7,7 +7,8 @@ import { useSearch } from "@tanstack/react-router";
 import { type ReactNode, useContext, useState } from "react";
 
 import { Panel } from "@/catalog/panel";
-import { idOf, resolveSelection } from "@/stac";
+import { idOf } from "@/stac";
+import { resolveSelection } from "@/stac/datacube";
 import { type CubeOffer, Ctx, OfferCtx } from "./cube-offer";
 import { pickedRescale, useCubePicks } from "./cube-picks";
 import { CubeControls } from "./step-picker";

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.0...v1.11.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **ingest:** fold the archive writer settings into the fingerprint so a layout change rebuilds ([#608](https://github.com/UGS-GIO/ugs-warehouse/issues/608)) ([c5a7714](https://github.com/UGS-GIO/ugs-warehouse/commit/c5a77144be782ea4f1f221593d177a42ee52f19a))
+
 ## [1.11.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.10.0...v1.11.0) (2026-10-19)
 
 

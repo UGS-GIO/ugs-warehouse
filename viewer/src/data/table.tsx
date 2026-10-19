@@ -1,6 +1,6 @@
 import { flexRender, type HeaderGroup, type Row, type Table } from "@tanstack/react-table";
 
-import { ALL_PAGES, pageLabel, PAGE_SIZES, type PageSize } from "./paging";
+import { ALL_PAGES, pageLabel, PAGE_SIZE_ITEMS, type PageSize } from "./paging";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
@@ -39,8 +39,7 @@ export function Pager<T>({ table, size, onSize }: {
         <span>Per page</span>
         <UiSelect value={String(size)} className="px-1 py-0.5 text-xs"
           onValueChange={(v) => onSize(v === ALL_PAGES ? ALL_PAGES : Number(v))}
-          items={[...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })),
-                  { value: ALL_PAGES, label: "All" }]} />
+          items={PAGE_SIZE_ITEMS} />
       </label>
     </div>
   );

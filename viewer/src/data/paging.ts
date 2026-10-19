@@ -3,6 +3,8 @@
 
 export const PAGE_SIZES = [25, 50, 100, 250] as const;
 export const ALL_PAGES = "all" as const;
+/** The page-size picker's choices. */
+export const PAGE_SIZE_ITEMS = [...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })), { value: ALL_PAGES, label: "All" }];
 
 /** A page size: a row count, or every row on one page. */
 export type PageSize = number | typeof ALL_PAGES;

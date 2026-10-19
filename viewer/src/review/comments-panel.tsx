@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { useRef, useState } from "react";
-import { type Comment, type CommentTarget, createComment, listComments, listReviewers, replyToComment, useCommentActions, whoami } from "./comments";
+import { type Comment, type CommentTarget, createComment, listComments, listReviewers, replyToComment, threadReplies, useCommentActions, whoami } from "./comments";
 
 // The active "@token" immediately left of the caret (the fragment being typed), or null if none.
 // `at` is the index of the '@'; `query` is what follows it — what we filter the roster by.
@@ -89,8 +89,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
 
   // Thread the flat list: top-level comments (parent_id null) each with their replies, oldest-first.
   const roots = comments.filter((c) => c.parent_id == null);
-  const repliesByRoot = new Map<number, Comment[]>();
-  for (const c of comments) if (c.parent_id != null) (repliesByRoot.get(c.parent_id) ?? repliesByRoot.set(c.parent_id, []).get(c.parent_id)!).push(c);
+  const repliesByRoot = threadReplies(comments);
 
   // 503 = DB not wired on the deploy; the HTML/JSON-parse errors = no API behind this origin (local dev,
   // or the public build where /api/comments doesn't exist). Both → "backend not available", not a scary error.

@@ -2,7 +2,7 @@
 // answering the pmtiles protocol from them. Apart from area.ts (planning and saving, which needs
 // maplibre's projection) because the offline store and the Offline data page load this, and they
 // have no map.
-import { type Bbox, bboxesOf, finished, folderSize, isBbox, isDirectory, isRecord, optionalNumber, optionalString, prune } from "./guards";
+import { type Bbox, bboxesOf, finished, folderSize, isBbox, isDirectory, isRecord, optionalNumber, optionalString, sweepDir, topDir } from "./guards";
 import { Compression } from "pmtiles";
 import { fileNameFor } from "./opfs-name";
 
@@ -31,12 +31,6 @@ export async function areaDir(url: string, create: boolean): Promise<FileSystemD
 }
 
 export const tileName = (z: number, x: number, y: number) => `${z}-${x}-${y}`;
-
-export async function writeFile(dir: FileSystemDirectoryHandle, name: string, data: BlobPart) {
-  const out = await (await dir.getFileHandle(name, { create: true })).createWritable();
-  await out.write(data);
-  await out.close();
-}
 
 /** A saved area's meta.json, checked field by field; null when missing or not one. */
 export function parseAreaMeta(v: unknown): AreaMeta | null {
@@ -85,8 +79,7 @@ export type StoredArea = { url: string; tiles: number; bytes: number; version?: 
 
 export async function loadStoredAreas(): Promise<StoredArea[]> {
   const out: StoredArea[] = [];
-  const root = await navigator.storage?.getDirectory?.().catch(() => null);
-  const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
+  const areas = await topDir(AREAS);
   if (!areas) return out;
   for await (const [name, parent] of areas) {
     if (!isDirectory(parent)) continue;
@@ -143,11 +136,4 @@ export async function areaResponse(url: string, kind: "json" | "tile", signal?: 
 }
 
 /** Remove the unfinished versions of every archive no queued save is working on (`busy`). */
-export async function sweepAreas(busy: Set<string>): Promise<void> {
-  const root = await navigator.storage?.getDirectory?.().catch(() => null);
-  const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
-  if (!areas) return;
-  for await (const [name, parent] of areas) {
-    if (isDirectory(parent) && !busy.has(decodeURIComponent(name))) await prune(parent, null);
-  }
-}
+export const sweepAreas = (busy: Set<string>): Promise<void> => sweepDir(AREAS, busy);

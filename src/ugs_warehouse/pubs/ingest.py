@@ -350,28 +350,11 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     # edition link can cross series-type prefixes (an OFR predecessor to a later M map) or fall
     # outside a smoke-test slice, and a filtered run must never blind edition detection to a real
     # predecessor/successor just because this run isn't writing it.
-    try:
-        fp_rows = editions.footprint_rows()
-        layers = editions.layers_by_series(fp_rows)
-        tier_by_sid = editions.mosaic_tier_by_series(layers)
-        edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows),
-                                               tier_by_sid=tier_by_sid)
-    except RuntimeError as e:
-        print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
-              "version/deprecated/predecessor/successor/latest or mosaic links until the "
-              "footprints parquet is built.", file=sys.stderr)
-        edition_graph, tier_by_sid = {}, {}
-    if series:
-        series_upper = series.strip().upper()
-        pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
-        print(f"[pubs] filtered to series {series_upper}: {len(pubs)} publications")
-    if limit:
-        pubs = pubs[:limit]
+    edition_graph, tier_by_sid = _edition_links(pubs)
+    pubs = _narrow(pubs, series, limit)
     pubs, collisions = _split_shared_collection_paths(pubs)
     registered_dois = dois.registered()  # the DOIs Crossref lists; a pub gets one only if registered
-    att: dict[str, list[dict]] = {}
-    for a in source.read_attachments():
-        att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
+    att = _attachments_by_sid()
 
     cogs = _ids_with_suffix(identity.COG_PREFIX, ".cog.tif")
     thumbs, covers = _image_ids()
@@ -385,14 +368,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     vector_manifests, manifest_failures, needs = _read_vector_manifests()  # spatial/table split extracted by pubs/vectors.py
     healed = _self_heal(pubs, needs, started + HEAL_BUDGET_S)
     del needs
-    if healed.touched:  # build the items from the healed manifests, re-reading only those
-        fresh, fresh_failed, _ = _read_vector_manifests(
-            [f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json" for sid in sorted(healed.touched)])
-        for sid in healed.touched:
-            vector_manifests.pop(sid.upper(), None)
-            manifest_failures.pop(sid.upper(), None)
-        vector_manifests.update(fresh)
-        manifest_failures.update(fresh_failed)
+    _reload_healed(healed, vector_manifests, manifest_failures)
     file_meta = _file_meta_index()  # file:size/checksum for the assets in our bucket
     n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
@@ -455,15 +431,79 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     with ThreadPoolExecutor(max_workers=64) as executor:
         results = list(executor.map(process_pub, pubs))
     n = sum(1 for r in results if r)
-    prune_error: Exception | None = None
-    try:
-        _delete_stale_items(stale)
-    except Exception as e:  # noqa: BLE001 (raised below together with the failed publications)
-        prune_error = e
-        print(f"[pubs] stale items not removed: {type(e).__name__}: {e}", file=sys.stderr)
+    prune_error = _prune_stale(stale)
 
     _build_search_corpus()
 
+    _refresh_and_raise(n, errors, prune_error, skip_refresh)
+    return n
+
+
+def _edition_links(pubs: list[dict]) -> tuple[dict, dict]:
+    """(edition graph, mosaic tier by series) over `pubs`, or two empty maps with a warning when
+    the footprints parquet is not built yet."""
+    try:
+        fp_rows = editions.footprint_rows()
+        layers = editions.layers_by_series(fp_rows)
+        tier_by_sid = editions.mosaic_tier_by_series(layers)
+        edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows),
+                                               tier_by_sid=tier_by_sid)
+    except RuntimeError as e:
+        print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
+              "version/deprecated/predecessor/successor/latest or mosaic links until the "
+              "footprints parquet is built.", file=sys.stderr)
+        edition_graph, tier_by_sid = {}, {}
+    return edition_graph, tier_by_sid
+
+
+def _narrow(pubs: list[dict], series: str | None, limit: int | None) -> list[dict]:
+    """`pubs` filtered to one series code and capped at `limit`, when either is given."""
+    if series:
+        series_upper = series.strip().upper()
+        pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
+        print(f"[pubs] filtered to series {series_upper}: {len(pubs)} publications")
+    if limit:
+        pubs = pubs[:limit]
+    return pubs
+
+
+def _attachments_by_sid() -> dict[str, list[dict]]:
+    """Every attachment row, grouped by upper-cased series id."""
+    att: dict[str, list[dict]] = {}
+    for a in source.read_attachments():
+        att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
+    return att
+
+
+def _reload_healed(healed: vectors.Heal, vector_manifests: dict, manifest_failures: dict) -> None:
+    """Replace, in place, the manifests and read failures of the series the self-heal touched with
+    a fresh read of just those manifests, so the items are built from the healed ones."""
+    if not healed.touched:
+        return
+    fresh, fresh_failed, _ = _read_vector_manifests(
+        [f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json" for sid in sorted(healed.touched)])
+    for sid in healed.touched:
+        vector_manifests.pop(sid.upper(), None)
+        manifest_failures.pop(sid.upper(), None)
+    vector_manifests.update(fresh)
+    manifest_failures.update(fresh_failed)
+
+
+def _prune_stale(stale: dict[str, list[str]]) -> Exception | None:
+    """Delete the stale items, returning the error instead of raising so the caller can report it
+    with the failed publications."""
+    try:
+        _delete_stale_items(stale)
+    except Exception as e:  # noqa: BLE001 (returned and raised with the failed publications)
+        print(f"[pubs] stale items not removed: {type(e).__name__}: {e}", file=sys.stderr)
+        return e
+    return None
+
+
+def _refresh_and_raise(n: int, errors: list[tuple[str, str]], prune_error: Exception | None,
+                       skip_refresh: bool) -> None:
+    """Print each failed publication, refresh the catalog unless skipped, then raise one error
+    covering the failed publications, the stale-item prune and the refresh."""
     # Printed before the refresh, so a refresh failure cannot hide the per-publication causes.
     for sid, msg in errors:
         print(f"[pubs] FAILED {sid}: {msg}", file=sys.stderr)
@@ -483,7 +523,6 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         pruned = [f"stale items: {type(prune_error).__name__}: {prune_error}"] if prune_error else []
         refresh = [f"catalog refresh: {type(refresh_error).__name__}: {refresh_error}"] if refresh_error else []
         raise RuntimeError("; ".join(failed + pruned + refresh)) from (refresh_error or prune_error)
-    return n
 
 
 def _split_shared_collection_paths(pubs: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:

@@ -15,6 +15,7 @@ import re
 import sys
 import urllib.parse
 from collections import Counter
+from typing import NamedTuple
 
 from ..core import config, gcs, stac
 from ..core.bbox import to_2d_bbox
@@ -267,6 +268,30 @@ def _file_roles(mtype: str) -> list[str]:
     return ["source"] if mtype in ("image/tiff", "application/zip") else ["data"]
 
 
+class _PubCtx(NamedTuple):
+    """What every Item of one publication shares: its ids, date, DOI pieces and the footprint an
+    Item without its own extent sits on."""
+    sid: str
+    pub_id: str
+    coll_path: str
+    dt: str | None
+    undated: dict
+    sci: dict
+    doi: list[dict]
+    aoi: dict
+    aoi_bbox: list[float]
+    aoi_source: str | None
+
+
+class _Related(NamedTuple):
+    """`_relationship_parts` output: related-table assets, related links and own foreign keys per
+    label, and the relationships published."""
+    assets: dict
+    links: dict
+    fks: dict
+    published: list[dict]
+
+
 def build_publication(p: dict, attachments: list[dict], *,
                       geom: dict | None = None, bbox: list[float] | None = None,
                       fp_source: str | None = None,
@@ -303,14 +328,8 @@ def build_publication(p: dict, attachments: list[dict], *,
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
-    for label in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]:
-        if is_validation_layer(label):
-            print(f"[pubs] {pub_id}: skipped {label!r} (GeMS validation output, not map data)",
-                  file=sys.stderr)
-    unpublished = {lb for lb in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]
-                   if is_validation_layer(lb)} | set(empty_layers or [])
-    vector_layers = [lb for lb in vector_layers or [] if not is_validation_layer(lb)]
-    companion_tables = [t for t in companion_tables or [] if not is_validation_layer(t["label"])]
+    vector_layers, companion_tables, unpublished = _drop_unpublished(
+        pub_id, vector_layers, companion_tables, empty_layers)
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z")
@@ -326,84 +345,18 @@ def build_publication(p: dict, attachments: list[dict], *,
     sci = ({"sci:doi": f"10.34191/{sid}", **({"sci:citation": citation} if citation else {})}
            if has_doi else {})
     layer_meta = layers or {}
-    aoi = geom or stac.bbox_polygon(stac.UTAH_BBOX)
-    aoi_bbox = bbox or stac.UTAH_BBOX
-    aoi_source = fp_source if geom else FOOTPRINT_FALLBACK
+    ctx = _PubCtx(sid, pub_id, coll_path, dt, undated, sci, doi,
+                  aoi=geom or stac.bbox_polygon(stac.UTAH_BBOX), aoi_bbox=bbox or stac.UTAH_BBOX,
+                  aoi_source=fp_source if geom else FOOTPRINT_FALLBACK)
 
-    def crs_of(meta: dict) -> dict:
-        """The layer's own CRS from its manifest: the EPSG code when GDAL matched one with
-        confidence, else its WKT2. Nothing when neither was recorded."""
-        if meta.get("proj_code"):
-            return {"proj:code": meta["proj_code"]}
-        return {"proj:wkt2": meta["proj_wkt2"]} if meta.get("proj_wkt2") else {}
-
-    def item(item_id: str, title: str, assets: dict, *, geometry: dict | None,
-             item_bbox: list[float] | None, footprint_source: str | None = None,
-             extra: dict | None = None, links: list[dict] | None = None,
-             extensions: list[str] | None = None) -> dict:
-        props = {"title": title, "ugs:series_id": sid, **undated, **sci, **(extra or {}),
-                 **({"ugs:footprint_source": footprint_source} if footprint_source else {})}
-        exts = list(extensions or [])
-        if sci:
-            exts.append(stac.SCI_EXT)
-        return stac.build_item(
-            item_id=item_id, collection=pub_id, collection_path=coll_path,
-            geometry=geometry, bbox=item_bbox, datetime_iso=dt, properties=props,
-            assets=assets, extra_links=[*doi, *(links or [])], stac_extensions=exts or None)
-
-    for label in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]:
-        if label not in layer_meta:
-            print(f"[pubs] {pub_id}: no manifest entry for layer {label!r}; "
-                  "its item has no CRS or row count", file=sys.stderr)
-
-    taken: dict[str, str] = {}
-
-    def layer_id(label: str) -> str:
-        """The layer's item id, made unique ignoring case (item directories merge on
-        case-insensitive filesystems)."""
-        lid = layer_item_id(sid, label)
-        new, n = lid, 1
-        while taken.get(new.casefold(), new) != new:
-            n += 1
-            new = f"{lid}_{n}"
-        if new != lid:
-            print(f"[pubs] {pub_id}: layer {label!r} renamed to {new!r} (collides ignoring case)",
-                  file=sys.stderr)
-        taken[new.casefold()] = new
-        return new
-
-    labels = [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]
-    ids = {label: layer_id(label) for label in labels}
+    labels = [*vector_layers, *(t["label"] for t in companion_tables)]
+    _warn_unmanifested(pub_id, labels, layer_meta)
+    ids = _layer_ids(sid, pub_id, labels)
     titles = layer_titles(labels)
-    rel_assets, rel_links, own_fks, published = _relationship_parts(
+    rel = _Related(*_relationship_parts(
         sid, coll_path, relationships or [], ids, titles,
-        {t["label"]: t.get("columns") for t in companion_tables or []}, set(vector_layers or []),
-        unpublished, {k: m["rows"] for k, m in layer_meta.items() if m.get("rows") is not None})
-
-    def kind_props(label: str, spatial: bool) -> dict:
-        """The Item's `ugs:layer_kind` (from the relationships published here), its source dataset's
-        key and its humanised title, and the title of the attachment it was extracted from."""
-        source = layer_meta.get(label, {}).get("source") or source_of_label(label, sid)
-        file = layer_meta.get(label, {}).get("source_file")
-        return {"ugs:layer_kind": layer_kind(spatial, label, published),
-                "ugs:source_key": source, "ugs:source_dataset": source_title(source),
-                **({"ugs:source_file": file["title"]} if file else {}),
-                **({"ugs:geometry_kind": gk} if spatial and (gk := geometry_kind(
-                    layer_meta.get(label, {}).get("geometry_types"))) else {})}
-
-    def with_related(label: str, data: dict) -> dict:
-        """The Item's assets: its data (carrying its own foreign keys), then its related tables
-        keyed by label, moved off a key the data or tiles use."""
-        if own_fks.get(label):
-            data["ugs:foreign_keys"] = own_fks[label]
-        assets = {"data": data}
-        for key, asset in rel_assets.get(label, {}).items():
-            new, n = key, 1
-            while new in assets or new in ("pmtiles", "thumbnail"):
-                n += 1
-                new = f"{key}_{n}"
-            assets[new] = asset
-        return assets
+        {t["label"]: t.get("columns") for t in companion_tables}, set(vector_layers),
+        unpublished, {k: m["rows"] for k, m in layer_meta.items() if m.get("rows") is not None}))
 
     mosaic = ([stac.related_link(
         "ugs-geologic-maps", f"geologic-maps-{mosaic_tier}",
@@ -411,86 +364,23 @@ def build_publication(p: dict, attachments: list[dict], *,
         if has_cog and mosaic_tier and not ed.get("deprecated") else [])
     items: list[dict] = []
     if has_cog:
-        plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
-                                "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                                "roles": ["data", "cloud-optimized"], **(cog_fields or {})}}
-        units_asset = identify.plate_asset(sid, unit_polys)
-        if units_asset:
-            plate_assets["units"] = units_asset
-        if has_thumb:
-            plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
-                                         "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
-        items.append(item(plate_item_id(sid), "Map plate", plate_assets, geometry=aoi, item_bbox=aoi_bbox,
-                          footprint_source=aoi_source, links=mosaic))
+        items.append(_plate_item(ctx, cog_fields, unit_polys, has_thumb, mosaic))
     if has_units:
         # The units GeoParquet is written in EPSG:4326.
-        items.append(item(f"{pub_id}_units", "Geologic unit polygons", {"data": {
+        items.append(_pub_item(ctx, f"{pub_id}_units", "Geologic unit polygons", {"data": {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}},
-            geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source, extra={"proj:code": "EPSG:4326"}))
-    for label in vector_layers or []:
-        meta = layer_meta.get(label, {})
-        generated = None
-        lb = meta.get("bbox")
-        rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
-        ltitle, ldesc = titles[label]
-        data = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
-                "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
-        # The manifest's recorded schema rides the data asset, as on a companion table.
-        if meta.get("columns"):
-            data["table:columns"] = meta["columns"]
-        assets = with_related(label, data)
-        exts: list[str] = []
-        links = []
-        # Tiles carry the same asset + web-map link as a serving topic's, so the viewer previews
-        # the layer and adds it to the map the same way. The item's `proj:*` is the layer's native
-        # CRS; the tiles state their own, which overrides it.
-        if meta.get("pmtiles_layer"):
-            pm_url = config.public_url(pmtiles_object(sid.upper(), label))
-            assets["pmtiles"] = {**stac.pmtiles_asset(pm_url), "proj:code": "EPSG:4326"}
-            links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
-            exts.append(stac.WEB_MAP_LINKS_EXT)
-            if meta.get("style"):  # restyle binds this file; an ugs-styles style for the Item wins
-                generated = config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{meta['style']}")
-        items.append(item(ids[label], ltitle, assets,
-            geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
-            footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
-            extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {}),
-                   **({stac.GENERATED_STYLE: generated} if generated else {}),
-                   **kind_props(label, True)},
-            links=[*links, *rel_links.get(label, [])], extensions=exts or None))
-    for t in companion_tables or []:
-        label, meta = t["label"], layer_meta.get(t["label"], {})
-        ltitle, ldesc = titles[label]
-        asset = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
-                 "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
-        if t.get("columns"):
-            asset["table:columns"] = t["columns"]
-        assets = with_related(label, asset)
-        items.append(item(ids[label], ltitle, assets,
-                          geometry=aoi, item_bbox=aoi_bbox,
-                          footprint_source=TABLE_FOOTPRINT_SOURCE if geom else FOOTPRINT_FALLBACK,
-                          extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
-                                 **({"description": ldesc} if ldesc else {}),
-                                 **kind_props(label, False)},
-                          links=rel_links.get(label)))
+            geometry=ctx.aoi, item_bbox=ctx.aoi_bbox, footprint_source=ctx.aoi_source,
+            extra={"proj:code": "EPSG:4326"}))
+    for label in vector_layers:
+        items.append(_layer_item(ctx, label, layer_meta.get(label, {}), ids[label], titles[label], rel))
+    for t in companion_tables:
+        items.append(_table_item(ctx, t, layer_meta.get(t["label"], {}), ids[t["label"]],
+                                 titles[t["label"]], rel,
+                                 TABLE_FOOTPRINT_SOURCE if geom else FOOTPRINT_FALLBACK))
     if has_3d:
-        items.append(item(f"{pub_id}_fence", "3D fence diagram", {
-            "fence_polygons": {"href": config.public_url(threed_object(sid, POLY_NAME)), "type": PARQUET_MIME,
-                               "roles": ["data", "3d-vector"], "title": "3D fence polygons (GeoParquet)"},
-            "fence_lines": {"href": config.public_url(threed_object(sid, LINE_NAME)), "type": PARQUET_MIME,
-                            "roles": ["data", "3d-vector"], "title": "3D fence contacts & faults (GeoParquet)"},
-            "fence_mesh": {"href": config.public_url(threed_object(sid, MESH_NAME)), "type": "model/gltf-binary",
-                           "roles": ["data", "visual"], "title": "3D fence mesh (glTF)"}},
-            geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source,
-            extra={"classification:classes": classes_3d} if classes_3d else None,
-            extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None))
-
-    seen: set[str] = set()
-    dupes = sorted({it["id"] for it in items
-                    if it["id"].casefold() in seen or seen.add(it["id"].casefold())})
-    if dupes:
-        raise ValueError(f"{pub_id}: duplicate item ids {dupes}")
+        items.append(_fence_item(ctx, classes_3d))
+    _check_unique_ids(pub_id, items)
 
     single = is_single_file(has_cog=has_cog, has_units=has_units, has_3d=has_3d,
                             vector_layers=vector_layers, companion_tables=companion_tables)
@@ -504,76 +394,22 @@ def build_publication(p: dict, attachments: list[dict], *,
     data_exts: list[str] = []
     moved_links: list[dict] = []
     if single:
-        # The lone Item's data moves to the Collection; its item-level CRS, row count and class
-        # fields are only valid on an asset there, so they ride each data asset (not the tiles, which
-        # are in EPSG:4326). Its tiles' web-map link moves with it.
-        only = items.pop()
-        carried = {k: v for k, v in only["properties"].items()
-                   if k.startswith(("proj:", "table:", "classification:"))}
-        data_assets = {k: {**a, **{ck: cv for ck, cv in carried.items()
-                                   if ck not in a and "data" in a.get("roles", [])}}
-                       for k, a in only["assets"].items() if k != "thumbnail"}
-        data_exts = [e for e in only.get("stac_extensions", []) if e != stac.SCI_EXT]
-        moved_links = [*mosaic, *(lk for lk in only["links"] if lk.get("rel") == "pmtiles")]
-        if only["properties"].get(stac.GENERATED_STYLE):
-            style_fields = {stac.GENERATED_STYLE: only["properties"][stac.GENERATED_STYLE]}
-
-    assets: dict = {}
-    main_pdf = href(p.get("pub_url"))
-    if main_pdf:
-        mtype = media_type(main_pdf)
-        assets["publication"] = _source_asset(main_pdf, mirrored, type=mtype, title="Publication",
-                                              roles=_file_roles(mtype))
-    pairs = [(h, a.get("extra_data")) for a in attachments if (h := href(a.get("pub_url")))]
-    keys, labels = identity.attachment_keys(pairs), identity.attachment_labels(pairs)
-    done: set[str] = set()
-    for a in attachments:
-        h = href(a.get("pub_url"))
-        if not h or h in done:
-            continue
-        done.add(h)
-        mtype = media_type(h)
-        assets[keys[h]] = _source_asset(h, mirrored, type=mtype,
-                                        title=(labels[h] or "").strip(),
-                                        roles=_file_roles(mtype))
-    for key, asset in data_assets.items():
-        new = key
-        n = 1
-        while new.casefold() in {k.casefold() for k in assets} or new in ("thumbnail", "overview"):
-            n += 1
-            new = f"{key}_{n}"
-        if new != key:
-            print(f"[pubs] {pub_id}: data asset {key!r} renamed to {new!r} (collides with a document asset)",
-                  file=sys.stderr)
-        assets[new] = asset
+        data_assets, data_exts, moved_links, style_fields = _lift_single(items.pop(), mosaic)
+    assets = _document_assets(p, attachments, mirrored)
+    _merge_data_assets(pub_id, assets, data_assets)
     if geopackage and geopackage.get("bytes"):
         assets["geopackage"] = {
             "href": config.public_url(geopackage_object(sid.upper())), "type": GEOPACKAGE_MIME,
             "roles": ["data"], "title": "All data (GeoPackage)",
             **stac.file_fields(gcs.FileMeta(geopackage["bytes"], geopackage.get("checksum")))}
-    plate_preview = ({"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
-                      "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
-                     if has_cog and has_thumb else None)
-    if has_cover:
-        assets["thumbnail"] = {"href": config.public_url(identity.pub_cover_object(sid)),
-                               "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
-        if single and plate_preview:
-            # The cover owns `thumbnail`; the plate's preview stays reachable as the overview.
-            assets["overview"] = {**plate_preview, "title": "Map preview", "roles": ["overview"]}
-    elif plate_preview:
-        # No cover: the plate's own thumbnail stands in so the Collection still has a preview.
-        assets["thumbnail"] = plate_preview
+    _add_previews(assets, sid, has_cog=has_cog, has_thumb=has_thumb, has_cover=has_cover,
+                  single=single)
 
     boxes = [*([to_2d_bbox(bbox)] if bbox else []), *item_bboxes]
     ext_bbox = stac.union_bbox(boxes) or stac.UTAH_BBOX
     extent = {"spatial": {"bbox": [ext_bbox]},
               "temporal": {"interval": [[dt, dt] if dt else [EARLIEST_RECORD, now]]}}
-    links = [{"rel": "alternate", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
-              "title": "UGS publication landing page"}, *doi, *moved_links]
-    for rel, key in (("predecessor-version", "predecessor_href"), ("successor-version", "successor_href"),
-                     ("latest-version", "latest_href")):
-        if ed.get(key):
-            links.append({"rel": rel, "href": ed[key], "type": "application/json"})
+    links = _collection_links(quoted_sid, doi, moved_links, ed)
     # Falls back to the old-layout item's description.
     group, code = collection_group(p), series_code(sid)
     desc = ov.get("description") or (p.get("full_citation") or "").strip() \
@@ -613,6 +449,279 @@ def build_publication(p: dict, attachments: list[dict], *,
                                      if k in it["properties"]} for it in items},
         extra_links=links, fields=fields, stac_extensions=coll_exts or None)
     return coll, items
+
+
+def _drop_unpublished(pub_id: str, vector_layers: list[str] | None,
+                      companion_tables: list[dict] | None, empty_layers: list[str] | None
+                      ) -> tuple[list[str], list[dict], set[str]]:
+    """(map layers, companion tables) without the GeMS validation output, each skip logged, and
+    the labels not published: that output plus the manifest's empty layers."""
+    for label in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]:
+        if is_validation_layer(label):
+            print(f"[pubs] {pub_id}: skipped {label!r} (GeMS validation output, not map data)",
+                  file=sys.stderr)
+    unpublished = {lb for lb in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]
+                   if is_validation_layer(lb)} | set(empty_layers or [])
+    return ([lb for lb in vector_layers or [] if not is_validation_layer(lb)],
+            [t for t in companion_tables or [] if not is_validation_layer(t["label"])],
+            unpublished)
+
+
+def _warn_unmanifested(pub_id: str, labels: list[str], layer_meta: dict) -> None:
+    """Log each published layer or table the vector manifest has no entry for."""
+    for label in labels:
+        if label not in layer_meta:
+            print(f"[pubs] {pub_id}: no manifest entry for layer {label!r}; "
+                  "its item has no CRS or row count", file=sys.stderr)
+
+
+def _layer_ids(sid: str, pub_id: str, labels: list[str]) -> dict[str, str]:
+    """Each layer's item id, made unique ignoring case (item directories merge on
+    case-insensitive filesystems)."""
+    taken: dict[str, str] = {}
+    ids: dict[str, str] = {}
+    for label in labels:
+        lid = layer_item_id(sid, label)
+        new, n = lid, 1
+        while taken.get(new.casefold(), new) != new:
+            n += 1
+            new = f"{lid}_{n}"
+        if new != lid:
+            print(f"[pubs] {pub_id}: layer {label!r} renamed to {new!r} (collides ignoring case)",
+                  file=sys.stderr)
+        taken[new.casefold()] = new
+        ids[label] = new
+    return ids
+
+
+def _crs_of(meta: dict) -> dict:
+    """The layer's own CRS from its manifest: the EPSG code when GDAL matched one with
+    confidence, else its WKT2. Nothing when neither was recorded."""
+    if meta.get("proj_code"):
+        return {"proj:code": meta["proj_code"]}
+    return {"proj:wkt2": meta["proj_wkt2"]} if meta.get("proj_wkt2") else {}
+
+
+def _pub_item(ctx: _PubCtx, item_id: str, title: str, assets: dict, *, geometry: dict | None,
+              item_bbox: list[float] | None, footprint_source: str | None = None,
+              extra: dict | None = None, links: list[dict] | None = None,
+              extensions: list[str] | None = None) -> dict:
+    """One Item of the publication, carrying its series id, date, DOI and citation."""
+    props = {"title": title, "ugs:series_id": ctx.sid, **ctx.undated, **ctx.sci, **(extra or {}),
+             **({"ugs:footprint_source": footprint_source} if footprint_source else {})}
+    exts = list(extensions or [])
+    if ctx.sci:
+        exts.append(stac.SCI_EXT)
+    return stac.build_item(
+        item_id=item_id, collection=ctx.pub_id, collection_path=ctx.coll_path,
+        geometry=geometry, bbox=item_bbox, datetime_iso=ctx.dt, properties=props,
+        assets=assets, extra_links=[*ctx.doi, *(links or [])], stac_extensions=exts or None)
+
+
+def _kind_props(sid: str, label: str, meta: dict, spatial: bool, published: list[dict]) -> dict:
+    """The Item's `ugs:layer_kind` (from the relationships published here), its source dataset's
+    key and its humanised title, and the title of the attachment it was extracted from."""
+    source = meta.get("source") or source_of_label(label, sid)
+    file = meta.get("source_file")
+    return {"ugs:layer_kind": layer_kind(spatial, label, published),
+            "ugs:source_key": source, "ugs:source_dataset": source_title(source),
+            **({"ugs:source_file": file["title"]} if file else {}),
+            **({"ugs:geometry_kind": gk} if spatial and (gk := geometry_kind(
+                meta.get("geometry_types"))) else {})}
+
+
+def _with_related(label: str, data: dict, rel: _Related) -> dict:
+    """The Item's assets: its data (carrying its own foreign keys), then its related tables
+    keyed by label, moved off a key the data or tiles use."""
+    if rel.fks.get(label):
+        data["ugs:foreign_keys"] = rel.fks[label]
+    assets = {"data": data}
+    for key, asset in rel.assets.get(label, {}).items():
+        new, n = key, 1
+        while new in assets or new in ("pmtiles", "thumbnail"):
+            n += 1
+            new = f"{key}_{n}"
+        assets[new] = asset
+    return assets
+
+
+def _plate_item(ctx: _PubCtx, cog_fields: dict | None, unit_polys: dict | None, has_thumb: bool,
+                mosaic: list[dict]) -> dict:
+    """The plate COG's Item, with its identify tiles and thumbnail when present."""
+    sid = ctx.sid
+    plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
+                            "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
+                            "roles": ["data", "cloud-optimized"], **(cog_fields or {})}}
+    units_asset = identify.plate_asset(sid, unit_polys)
+    if units_asset:
+        plate_assets["units"] = units_asset
+    if has_thumb:
+        plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                                     "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
+    return _pub_item(ctx, plate_item_id(sid), "Map plate", plate_assets, geometry=ctx.aoi,
+                     item_bbox=ctx.aoi_bbox, footprint_source=ctx.aoi_source, links=mosaic)
+
+
+def _layer_item(ctx: _PubCtx, label: str, meta: dict, item_id: str,
+                title: tuple[str, str | None], rel: _Related) -> dict:
+    """An extracted map layer's Item: its GeoParquet, related tables and, when tiled, PMTiles."""
+    sid = ctx.sid
+    generated = None
+    lb = meta.get("bbox")
+    rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
+    ltitle, ldesc = title
+    data = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+            "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
+    # The manifest's recorded schema rides the data asset, as on a companion table.
+    if meta.get("columns"):
+        data["table:columns"] = meta["columns"]
+    assets = _with_related(label, data, rel)
+    exts: list[str] = []
+    links = []
+    # Tiles carry the same asset + web-map link as a serving topic's, so the viewer previews
+    # the layer and adds it to the map the same way. The item's `proj:*` is the layer's native
+    # CRS; the tiles state their own, which overrides it.
+    if meta.get("pmtiles_layer"):
+        pm_url = config.public_url(pmtiles_object(sid.upper(), label))
+        assets["pmtiles"] = {**stac.pmtiles_asset(pm_url), "proj:code": "EPSG:4326"}
+        links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
+        exts.append(stac.WEB_MAP_LINKS_EXT)
+        if meta.get("style"):  # restyle binds this file; an ugs-styles style for the Item wins
+            generated = config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{meta['style']}")
+    return _pub_item(ctx, item_id, ltitle, assets,
+        geometry=stac.bbox_polygon(lb) if lb else ctx.aoi, item_bbox=lb or ctx.aoi_bbox,
+        footprint_source=LAYER_BBOX_SOURCE if lb else ctx.aoi_source,
+        extra={**_crs_of(meta), **rows, **({"description": ldesc} if ldesc else {}),
+               **({stac.GENERATED_STYLE: generated} if generated else {}),
+               **_kind_props(sid, label, meta, True, rel.published)},
+        links=[*links, *rel.links.get(label, [])], extensions=exts or None)
+
+
+def _table_item(ctx: _PubCtx, t: dict, meta: dict, item_id: str, title: tuple[str, str | None],
+                rel: _Related, footprint_source: str) -> dict:
+    """A companion table's Item, on the publication's footprint."""
+    label = t["label"]
+    ltitle, ldesc = title
+    asset = {"href": config.public_url(f"{VECTORS_PREFIX}/{ctx.sid.upper()}/{label}.parquet"),
+             "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
+    if t.get("columns"):
+        asset["table:columns"] = t["columns"]
+    assets = _with_related(label, asset, rel)
+    return _pub_item(ctx, item_id, ltitle, assets,
+                     geometry=ctx.aoi, item_bbox=ctx.aoi_bbox,
+                     footprint_source=footprint_source,
+                     extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
+                            **({"description": ldesc} if ldesc else {}),
+                            **_kind_props(ctx.sid, label, meta, False, rel.published)},
+                     links=rel.links.get(label))
+
+
+def _fence_item(ctx: _PubCtx, classes_3d: list[dict] | None) -> dict:
+    """The 3D fence diagram's Item: its polygons, contacts and glTF mesh."""
+    sid = ctx.sid
+    return _pub_item(ctx, f"{ctx.pub_id}_fence", "3D fence diagram", {
+        "fence_polygons": {"href": config.public_url(threed_object(sid, POLY_NAME)), "type": PARQUET_MIME,
+                           "roles": ["data", "3d-vector"], "title": "3D fence polygons (GeoParquet)"},
+        "fence_lines": {"href": config.public_url(threed_object(sid, LINE_NAME)), "type": PARQUET_MIME,
+                        "roles": ["data", "3d-vector"], "title": "3D fence contacts & faults (GeoParquet)"},
+        "fence_mesh": {"href": config.public_url(threed_object(sid, MESH_NAME)), "type": "model/gltf-binary",
+                       "roles": ["data", "visual"], "title": "3D fence mesh (glTF)"}},
+        geometry=ctx.aoi, item_bbox=ctx.aoi_bbox, footprint_source=ctx.aoi_source,
+        extra={"classification:classes": classes_3d} if classes_3d else None,
+        extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None)
+
+
+def _check_unique_ids(pub_id: str, items: list[dict]) -> None:
+    """Raise when two Items share an id ignoring case."""
+    seen: set[str] = set()
+    dupes = sorted({it["id"] for it in items
+                    if it["id"].casefold() in seen or seen.add(it["id"].casefold())})
+    if dupes:
+        raise ValueError(f"{pub_id}: duplicate item ids {dupes}")
+
+
+def _lift_single(only: dict, mosaic: list[dict]) -> tuple[dict, list[str], list[dict], dict]:
+    """(data assets, extensions, links, generated-style field) the lone Item hands its Collection."""
+    # The lone Item's data moves to the Collection; its item-level CRS, row count and class
+    # fields are only valid on an asset there, so they ride each data asset (not the tiles, which
+    # are in EPSG:4326). Its tiles' web-map link moves with it.
+    carried = {k: v for k, v in only["properties"].items()
+               if k.startswith(("proj:", "table:", "classification:"))}
+    data_assets = {k: {**a, **{ck: cv for ck, cv in carried.items()
+                               if ck not in a and "data" in a.get("roles", [])}}
+                   for k, a in only["assets"].items() if k != "thumbnail"}
+    data_exts = [e for e in only.get("stac_extensions", []) if e != stac.SCI_EXT]
+    moved_links = [*mosaic, *(lk for lk in only["links"] if lk.get("rel") == "pmtiles")]
+    style_fields = ({stac.GENERATED_STYLE: only["properties"][stac.GENERATED_STYLE]}
+                    if only["properties"].get(stac.GENERATED_STYLE) else {})
+    return data_assets, data_exts, moved_links, style_fields
+
+
+def _document_assets(p: dict, attachments: list[dict], mirrored: set[str] | None) -> dict:
+    """The publication's documents as Collection assets: the main file, then each attachment once."""
+    assets: dict = {}
+    main_pdf = href(p.get("pub_url"))
+    if main_pdf:
+        mtype = media_type(main_pdf)
+        assets["publication"] = _source_asset(main_pdf, mirrored, type=mtype, title="Publication",
+                                              roles=_file_roles(mtype))
+    pairs = [(h, a.get("extra_data")) for a in attachments if (h := href(a.get("pub_url")))]
+    keys, labels = identity.attachment_keys(pairs), identity.attachment_labels(pairs)
+    done: set[str] = set()
+    for a in attachments:
+        h = href(a.get("pub_url"))
+        if not h or h in done:
+            continue
+        done.add(h)
+        mtype = media_type(h)
+        assets[keys[h]] = _source_asset(h, mirrored, type=mtype,
+                                        title=(labels[h] or "").strip(),
+                                        roles=_file_roles(mtype))
+    return assets
+
+
+def _merge_data_assets(pub_id: str, assets: dict, data_assets: dict) -> None:
+    """Add a single-file publication's data assets to `assets`, each moved off a key a document or
+    preview already uses."""
+    for key, asset in data_assets.items():
+        new = key
+        n = 1
+        while new.casefold() in {k.casefold() for k in assets} or new in ("thumbnail", "overview"):
+            n += 1
+            new = f"{key}_{n}"
+        if new != key:
+            print(f"[pubs] {pub_id}: data asset {key!r} renamed to {new!r} (collides with a document asset)",
+                  file=sys.stderr)
+        assets[new] = asset
+
+
+def _add_previews(assets: dict, sid: str, *, has_cog: bool, has_thumb: bool, has_cover: bool,
+                  single: bool) -> None:
+    """Add the Collection's `thumbnail` (the cover, else the plate's preview) and, for a
+    single-file publication with both, the plate preview as `overview`."""
+    plate_preview = ({"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                      "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
+                     if has_cog and has_thumb else None)
+    if has_cover:
+        assets["thumbnail"] = {"href": config.public_url(identity.pub_cover_object(sid)),
+                               "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
+        if single and plate_preview:
+            # The cover owns `thumbnail`; the plate's preview stays reachable as the overview.
+            assets["overview"] = {**plate_preview, "title": "Map preview", "roles": ["overview"]}
+    elif plate_preview:
+        # No cover: the plate's own thumbnail stands in so the Collection still has a preview.
+        assets["thumbnail"] = plate_preview
+
+
+def _collection_links(quoted_sid: str, doi: list[dict], moved_links: list[dict], ed: dict) -> list[dict]:
+    """The Collection's landing page, DOI, moved and edition (predecessor/successor/latest) links."""
+    links = [{"rel": "alternate", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
+              "title": "UGS publication landing page"}, *doi, *moved_links]
+    for rel, key in (("predecessor-version", "predecessor_href"), ("successor-version", "successor_href"),
+                     ("latest-version", "latest_href")):
+        if ed.get(key):
+            links.append({"rel": rel, "href": ed[key], "type": "application/json"})
+    return links
 
 
 # Item properties a publication's rel=item links repeat, so the viewer groups its items unfetched.
@@ -688,6 +797,13 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
         else:
             link(o, d)
         link(d, o)
+    _mark_reference_tables(assets, published, spatial)
+    return assets, links, fks, published
+
+
+def _mark_reference_tables(assets: dict[str, dict], published: list[dict], spatial: set[str]) -> None:
+    """Add REFERENCE_ROLE to the related-table assets of a table that at least half the map layers
+    (and no fewer than three) point at."""
     by_layers: dict[str, set[str]] = {}
     for r in published:
         if r["origin"] in spatial:
@@ -697,4 +813,3 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
         for d, asset in tables.items():
             if d in shared:
                 asset["roles"].append(REFERENCE_ROLE)
-    return assets, links, fks, published

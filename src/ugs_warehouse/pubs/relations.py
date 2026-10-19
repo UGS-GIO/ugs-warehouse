@@ -203,23 +203,39 @@ def infer(layers: list[Layer]) -> list[dict]:
                 if s.group != t.group or s.label == t.label:
                     continue
                 for scol, sc in s.columns.items():
-                    name = name_score(scol, tcol, t.name)
-                    if name < LOW_NAME_GATE:
+                    scored = _score(s, scol, sc, t, tcol, tc, affinity)
+                    if scored is None:
                         continue
-                    shared = len(sc.sample & tc.keys)
-                    overlap = 100 * shared / len(sc.sample)
-                    if not _accepted(name, overlap, shared, scol, tcol, t.name):
-                        continue
-                    total = name + overlap * 0.6
-                    rank = (total, overlap, affinity, len(tc.keys), scol, tcol)
-                    rel = {"origin": s.label, "origin_cols": [scol],
-                           "destination": t.label, "destination_cols": [tcol],
-                           "cardinality": "one_to_one" if sc.unique else "many_to_one",
-                           "detected_by": "inferred", "confidence": int(total + 0.5),
-                           "overlap": round(overlap, 1), "_keys": len(tc.keys)}
                     pair = (s.label, t.label)
-                    if pair not in best or rank > best[pair][0]:
-                        best[pair] = (rank, rel)
+                    if pair not in best or scored[0] > best[pair][0]:
+                        best[pair] = scored
+    return _one_per_pair(best)
+
+
+def _score(s: Layer, scol: str, sc: Column, t: Layer, tcol: str, tc: Column,
+           affinity: bool) -> tuple[tuple, dict] | None:
+    """(rank, relationship) for `s.scol` -> `t.tcol`, or None when it fails the name gate or
+    `_accepted`."""
+    name = name_score(scol, tcol, t.name)
+    if name < LOW_NAME_GATE:
+        return None
+    shared = len(sc.sample & tc.keys)
+    overlap = 100 * shared / len(sc.sample)
+    if not _accepted(name, overlap, shared, scol, tcol, t.name):
+        return None
+    total = name + overlap * 0.6
+    rank = (total, overlap, affinity, len(tc.keys), scol, tcol)
+    rel = {"origin": s.label, "origin_cols": [scol],
+           "destination": t.label, "destination_cols": [tcol],
+           "cardinality": "one_to_one" if sc.unique else "many_to_one",
+           "detected_by": "inferred", "confidence": int(total + 0.5),
+           "overlap": round(overlap, 1), "_keys": len(tc.keys)}
+    return rank, rel
+
+
+def _one_per_pair(best: dict[tuple[str, str], tuple[tuple, dict]]) -> list[dict]:
+    """The best relationships sorted by pair, keeping one direction when two tables key each other
+    (the side with more keys wins)."""
     out = []
     for (o, d), (_, rel) in sorted(best.items()):
         back = best.get((d, o))

@@ -129,6 +129,12 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
                 no_style.append(iid)
 
     orphans = sorted(man_ids - scope_ids)
+    _print_report(collection, scope_ids, matched, asset_miss, no_style, orphans)
+    return len(asset_miss) + len(orphans)
+
+
+def _print_report(collection, scope_ids, matched, asset_miss, no_style, orphans) -> None:
+    """Print the report's scope summary and its asset-miss, orphan and no-style lists."""
     print(f"[report] in scope '{collection}': {len(scope_ids)} items — "
           f"{len(matched)} styled, {len(asset_miss)} asset-miss, {len(no_style)} no manifest entry")
     if asset_miss:
@@ -142,7 +148,6 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
             print(f"    {iid}")
     if no_style:
         print(f"  no manifest entry ({len(no_style)}): {', '.join(no_style)}")
-    return len(asset_miss) + len(orphans)
 
 
 def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
@@ -205,15 +210,21 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
         jobs.start_topic_thumbs()
     print(f"[restyle] {'would rebind' if dry_run else 'rebound'} {changed} item(s)"
           + ("" if refresh or dry_run else " (run --refresh to refresh items.json asset summaries)"))
-    if failures:
-        print(f"[restyle] FAILED to read {len(failures)} object(s):", file=sys.stderr)
-        for f in sorted(failures):
-            print(f"    {f}", file=sys.stderr)
-        raise RuntimeError(f"restyle could not read {len(failures)} object(s); first: {sorted(failures)[0]}")
+    _raise_on_read_failures(failures)
     if not dry_run and (drifted := _verify(groups)):
         # A run that wrote stale renders must not exit 0; see _verify.
         raise RuntimeError(f"restyle wrote {len(drifted)} render(s) that don't match the manifest")
     return changed
+
+
+def _raise_on_read_failures(failures: list[str]) -> None:
+    """List every object the pool could not read on stderr, then raise if there were any."""
+    if not failures:
+        return
+    print(f"[restyle] FAILED to read {len(failures)} object(s):", file=sys.stderr)
+    for f in sorted(failures):
+        print(f"    {f}", file=sys.stderr)
+    raise RuntimeError(f"restyle could not read {len(failures)} object(s); first: {sorted(failures)[0]}")
 
 
 def _verify(groups: dict[str, list[str]]) -> list[str]:

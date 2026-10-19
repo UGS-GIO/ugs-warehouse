@@ -1331,20 +1331,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     groups = _group_items(paths)
     pub_colls = _pub_collection_paths(paths)
     migrated, pending = _pub_series_layout(groups, pub_colls)
-    for spath, sids in sorted(pending.items()):
-        print(f"[catalog] {spath}: {len(sids)} publication(s) not yet in the collection layout, "
-              f"series stays in the old layout: {', '.join(sids[:5])}{' ...' if len(sids) > 5 else ''}",
-              file=sys.stderr)
-    awaiting = sorted(s for s in migrated if s in groups)
-    if awaiting:
-        print(f"[catalog] {len(awaiting)} migrated publication series still hold old-layout items "
-              f"awaiting prune --legacy: {', '.join(awaiting)}", file=sys.stderr)
-    orphans = sorted(g for g in groups if _is_pub_collection_path(g) and g not in pub_colls)
-    problems = [f"publication items with no collection.json: {g}" for g in orphans]
-    for g in list(groups):
-        if g in migrated or (_is_pub_collection_path(g)
-                             and (g in orphans or g.rsplit("/", 1)[0] not in migrated)):
-            del groups[g]
+    _print_layout_status(groups, migrated, pending)
+    problems = _drop_unindexed_groups(groups, pub_colls, migrated)
     problems += _duplicate_item_ids(groups)
     pub_colls = {p: 0 for p in pub_colls if p.rsplit("/", 1)[0] in migrated}
     pub_mappable: set[str] = set()
@@ -1362,26 +1350,10 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     served: list[dict] = []              # the items the OGC API Features service serves
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
-            def _fetch_one(iid: str) -> dict | None:
-                try:
-                    return json.loads(gcs.get_bytes(item_object_path(path, iid)).decode())
-                except FileNotFoundError:
-                    return None  # listed-then-deleted between the list and this read — legitimately silent
-                except Exception as e:  # noqa: BLE001 — one bad item shouldn't sink the refresh, but say so
-                    # An item dropping out of items.json is silent data loss — this is how #341 stayed
-                    # invisible for weeks. Log it so the next obstore/GCS quirk doesn't repeat that with
-                    # zero lines in the log.
-                    msg = (f"dropped {path}/{iid} from the index: "
-                           f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
-                    print(f"[catalog] {msg}", file=sys.stderr)
-                    dropped.append(msg)
-                    return None
-
-            items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
+            items = [it for it in executor.map(lambda iid, p=path: _fetch_item(p, iid, dropped),
+                                               sorted(item_ids)) if it is not None]
             if has_feature_service(path):
                 served.extend(items)
-            nested = "/" in path
-            top, cid = path.split("/")[0], path.split("/")[-1]
             if _is_pub_collection_path(path):
                 # Publication collections are written by the pubs ingest; refresh only indexes them.
                 # The count is of Items that loaded, the ones the indexes list.
@@ -1391,39 +1363,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                     pub_mappable.add(path)
                 del items
                 continue
-            # Title/description are inherited, never authored here: see _group_title. A group with
-            # nothing to inherit stays None and _collection_doc falls back to prettify(id).
-            title = _group_title(top, items) if nested else None
-            mappable = sum(1 for it in items if _is_mappable(it))
-            # Series blurbs are keyed by short codes (M, C, B…) — only look them up under a pub
-            # catalog, or a raster layer that happened to be named `M` would inherit the Map series text.
-            desc = SERIES_DESC.get(cid) if top in PUB_GROUPS else None
-            if nested and top in ROLLUP_INDEX_CATALOGS:
-                rollup.setdefault(top, []).extend(items)
-            # From the fetched docs, so an item that failed to fetch just carries no title.
-            item_titles = {it["id"]: it["properties"]["title"] for it in items
-                           if it.get("id") and it.get("properties", {}).get("title")}
-            # The mirror is derived from these same items, so it is rebuilt whenever the
-            # collection is — the two cannot drift.
-            mirror = item_mirror.write(path, items)
-            layers = has_layer_collections(path)
-            _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
-                                        mappable=mappable, description=desc,
-                                        item_titles=item_titles,
-                                        assets=_collection_assets(path, items, mirror),
-                                        layers=layers),
-                        f"{config.STAC_PREFIX}/{path}/collection.json")
-            _write_json(_index_doc(cid, items, layer=layers), f"{config.STAC_PREFIX}/{path}/items.json")
-            everything.extend(_index_entry(it, prefix=f"{path}/", layer=layers) for it in items)
-            if layers:
-                list(executor.map(lambda it, p=path: _write_layer_collection(it, p), items))
-            _write_markdown(path, title=title or prettify(cid),
-                            description=desc or f"UGS warehouse — {title or cid}.",
-                            kind="collection", children=len(item_ids),
-                            extent=_extent(items), items=items,
-                            service=has_feature_service(path))
-            leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),
-                          "mappable": mappable}
+            leaf[path] = _write_leaf(executor, path, item_ids, items, rollup, everything)
 
     # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
     #    becomes a sub-catalog (e.g. ugs-serving-topics → one collection per topic, a publication
@@ -1437,36 +1377,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     for path, meta in pub_docs.items():
         everything.append(meta.row)
         everything.extend(_tag_pub_entry(row, meta.id, meta.title) for row in pub_rows.get(path, []))
-    tops: dict[str, list[str]] = {}
-    for path in groups:
-        if not _is_pub_collection_path(path):
-            tops.setdefault(path.split("/")[0], []).append(path)
-    for group in pub_series:
-        tops.setdefault(group, [])
-    root_children = []
-    for top, paths in tops.items():
-        if top not in groups:  # sub-catalog (nested, no direct items)
-            kids = [leaf[p] for p in sorted(paths)] + pub_series.get(top, [])
-            ptitle = prettify(top.replace("ugs-", ""))
-            rolled = rollup.get(top)
-            if rolled is not None:  # one index spanning every child collection
-                _write_json(_index_doc(top, rolled, rollup=True, layer=top == SERVING_TOPICS_CATALOG),
-                            f"{config.STAC_PREFIX}/{top}/items.json")
-            _write_json(_subcatalog_doc(top, kids, title=ptitle, items_index=rolled is not None),
-                        f"{config.STAC_PREFIX}/{top}/catalog.json")
-            _write_markdown(top, title=ptitle,
-                            description=f"UGS warehouse — {ptitle}, by data series.",
-                            kind="catalog", children=len(kids), items=rolled,
-                            # The serving-topics sub-catalog's children are all featureserv-served;
-                            # its AGENTS.md should name the query endpoint too (pubs series aren't).
-                            service=top == SERVING_TOPICS_CATALOG)
-            root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,
-                                  "count": sum(k["count"] for k in kids),
-                                  "mappable": sum(k["mappable"] for k in kids)})
-        else:                  # flat collection
-            root_children.append({"href": f"./{top}/collection.json",
-                                  "title": leaf[top]["title"], "count": leaf[top]["count"],
-                                  "mappable": leaf[top]["mappable"]})
+    root_children = _write_hierarchy(groups, leaf, rollup, pub_series)
     _write_json(_pub_coverage(migrated, pending, pub_docs, pub_rows),
                 f"{config.STAC_PREFIX}/{PUB_COVERAGE_FILE}")
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
@@ -1477,7 +1388,142 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
     feature_service.write(served)
+    _print_refresh_summary(groups, pub_colls, skipped)
+    _report_problems(problems, strict)
+    return problems
 
+
+def _print_layout_status(groups: dict[str, list[str]], migrated: set[str],
+                         pending: dict[str, list[str]]) -> None:
+    """Warn on stderr about publication series still pending the collection layout, and about
+    migrated series that still hold old-layout items."""
+    for spath, sids in sorted(pending.items()):
+        print(f"[catalog] {spath}: {len(sids)} publication(s) not yet in the collection layout, "
+              f"series stays in the old layout: {', '.join(sids[:5])}{' ...' if len(sids) > 5 else ''}",
+              file=sys.stderr)
+    awaiting = sorted(s for s in migrated if s in groups)
+    if awaiting:
+        print(f"[catalog] {len(awaiting)} migrated publication series still hold old-layout items "
+              f"awaiting prune --legacy: {', '.join(awaiting)}", file=sys.stderr)
+
+
+def _drop_unindexed_groups(groups: dict[str, list[str]], pub_colls: dict[str, int],
+                           migrated: set[str]) -> list[str]:
+    """Remove from `groups` the old-layout groups of migrated series and the publication groups
+    refresh does not index; return a problem for each publication group with no collection.json."""
+    orphans = sorted(g for g in groups if _is_pub_collection_path(g) and g not in pub_colls)
+    problems = [f"publication items with no collection.json: {g}" for g in orphans]
+    for g in list(groups):
+        if g in migrated or (_is_pub_collection_path(g)
+                             and (g in orphans or g.rsplit("/", 1)[0] not in migrated)):
+            del groups[g]
+    return problems
+
+
+def _fetch_item(path: str, iid: str, dropped: list[str]) -> dict | None:
+    """One item doc from GCS, or None when it is gone or unreadable (the latter logged and
+    recorded in `dropped`)."""
+    try:
+        return json.loads(gcs.get_bytes(item_object_path(path, iid)).decode())
+    except FileNotFoundError:
+        return None  # listed-then-deleted between the list and this read — legitimately silent
+    except Exception as e:  # noqa: BLE001 — one bad item shouldn't sink the refresh, but say so
+        # An item dropping out of items.json is silent data loss — this is how #341 stayed
+        # invisible for weeks. Log it so the next obstore/GCS quirk doesn't repeat that with
+        # zero lines in the log.
+        msg = (f"dropped {path}/{iid} from the index: "
+               f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
+        print(f"[catalog] {msg}", file=sys.stderr)
+        dropped.append(msg)
+        return None
+
+
+def _write_leaf(executor, path: str, item_ids: list[str], items: list[dict],
+                rollup: dict[str, list[dict]], everything: list[dict]) -> dict:
+    """Write one non-publication collection's collection.json, items.json, mirror, layer
+    collections and README; return its {id, title, count, mappable} for the hierarchy links."""
+    nested = "/" in path
+    top, cid = path.split("/")[0], path.split("/")[-1]
+    # Title/description are inherited, never authored here: see _group_title. A group with
+    # nothing to inherit stays None and _collection_doc falls back to prettify(id).
+    title = _group_title(top, items) if nested else None
+    mappable = sum(1 for it in items if _is_mappable(it))
+    # Series blurbs are keyed by short codes (M, C, B…) — only look them up under a pub
+    # catalog, or a raster layer that happened to be named `M` would inherit the Map series text.
+    desc = SERIES_DESC.get(cid) if top in PUB_GROUPS else None
+    if nested and top in ROLLUP_INDEX_CATALOGS:
+        rollup.setdefault(top, []).extend(items)
+    # From the fetched docs, so an item that failed to fetch just carries no title.
+    item_titles = {it["id"]: it["properties"]["title"] for it in items
+                   if it.get("id") and it.get("properties", {}).get("title")}
+    # The mirror is derived from these same items, so it is rebuilt whenever the
+    # collection is — the two cannot drift.
+    mirror = item_mirror.write(path, items)
+    layers = has_layer_collections(path)
+    _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
+                                mappable=mappable, description=desc,
+                                item_titles=item_titles,
+                                assets=_collection_assets(path, items, mirror),
+                                layers=layers),
+                f"{config.STAC_PREFIX}/{path}/collection.json")
+    _write_json(_index_doc(cid, items, layer=layers), f"{config.STAC_PREFIX}/{path}/items.json")
+    everything.extend(_index_entry(it, prefix=f"{path}/", layer=layers) for it in items)
+    if layers:
+        list(executor.map(lambda it, p=path: _write_layer_collection(it, p), items))
+    _write_markdown(path, title=title or prettify(cid),
+                    description=desc or f"UGS warehouse — {title or cid}.",
+                    kind="collection", children=len(item_ids),
+                    extent=_extent(items), items=items,
+                    service=has_feature_service(path))
+    return {"id": cid, "title": title or prettify(cid), "count": len(item_ids),
+            "mappable": mappable}
+
+
+def _write_hierarchy(groups: dict[str, list[str]], leaf: dict[str, dict],
+                     rollup: dict[str, list[dict]], pub_series: dict[str, list[dict]]) -> list[dict]:
+    """Write each top-level sub-catalog and return the root's child links, one per top-level
+    segment: a sub-catalog when it nests children, else its flat collection."""
+    tops: dict[str, list[str]] = {}
+    for path in groups:
+        if not _is_pub_collection_path(path):
+            tops.setdefault(path.split("/")[0], []).append(path)
+    for group in pub_series:
+        tops.setdefault(group, [])
+    root_children = []
+    for top, paths in tops.items():
+        if top not in groups:  # sub-catalog (nested, no direct items)
+            kids = [leaf[p] for p in sorted(paths)] + pub_series.get(top, [])
+            root_children.append(_write_subcatalog(top, kids, rollup.get(top)))
+        else:                  # flat collection
+            root_children.append({"href": f"./{top}/collection.json",
+                                  "title": leaf[top]["title"], "count": leaf[top]["count"],
+                                  "mappable": leaf[top]["mappable"]})
+    return root_children
+
+
+def _write_subcatalog(top: str, kids: list[dict], rolled: list[dict] | None) -> dict:
+    """Write a top-level sub-catalog's catalog.json, rollup items.json and README; return its
+    root child link."""
+    ptitle = prettify(top.replace("ugs-", ""))
+    if rolled is not None:  # one index spanning every child collection
+        _write_json(_index_doc(top, rolled, rollup=True, layer=top == SERVING_TOPICS_CATALOG),
+                    f"{config.STAC_PREFIX}/{top}/items.json")
+    _write_json(_subcatalog_doc(top, kids, title=ptitle, items_index=rolled is not None),
+                f"{config.STAC_PREFIX}/{top}/catalog.json")
+    _write_markdown(top, title=ptitle,
+                    description=f"UGS warehouse — {ptitle}, by data series.",
+                    kind="catalog", children=len(kids), items=rolled,
+                    # The serving-topics sub-catalog's children are all featureserv-served;
+                    # its AGENTS.md should name the query endpoint too (pubs series aren't).
+                    service=top == SERVING_TOPICS_CATALOG)
+    return {"href": f"./{top}/catalog.json", "title": ptitle,
+            "count": sum(k["count"] for k in kids),
+            "mappable": sum(k["mappable"] for k in kids)}
+
+
+def _print_refresh_summary(groups: dict[str, list[str]], pub_colls: dict[str, int],
+                           skipped: dict[str, str]) -> None:
+    """Print the refreshed catalog's URL with its collection and item counts."""
     # Publication collections are counted once, from pub_colls (Items that loaded), not again
     # from their listed groups.
     written_pubs = [p for p in pub_colls if p not in skipped]
@@ -1485,9 +1531,12 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     n = sum(len(v) for v in plain) + sum(pub_colls[p] for p in written_pubs)
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "
           f"({len(plain) + len(written_pubs)} collections, {n} items)")
+
+
+def _report_problems(problems: list[str], strict: bool) -> None:
+    """Print each refresh problem on stderr; under `strict`, raise if there were any."""
     for problem in problems:
         print(f"[catalog] {problem}", file=sys.stderr)
     if strict and problems:
         raise RuntimeError(f"[catalog] {len(problems)} problem(s) after the refresh completed: "
                            f"{'; '.join(problems)}")
-    return problems

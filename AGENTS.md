@@ -84,4 +84,5 @@ GCS auth is ADC: `gcloud auth application-default login` locally, the service ac
 - dbt convention: the geometry column is `geom`; `_current` is the table suffix.
 - A change touching the `_current` contract is coordinated with dataELT's owner; neighbor repos (`dataELT`, `ugs-ingest`, `ugs-map-viewer`) are read-only from here.
 - **Don't commit plans, specs, or handoff notes.** Design and progress go in the PR description or the Jira ticket; git history keeps them. Docs in `docs/` describe the system as it is and change in the same PR as the code they describe. A lasting decision gets a line in the relevant doc, not a new file.
+- A dependency bump that changes a deployed service (e.g. `FEATURESERVER_VERSION`) must use the `fix(deps):` prefix so release-please opens a release. `chore(deps)` does not trigger a release.
 - Querying the publications corpus with the `pubs-duckdb` MCP: `docs/QUERYING_PUBS.md`.

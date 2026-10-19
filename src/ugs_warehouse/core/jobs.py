@@ -30,7 +30,7 @@ def run_job(name: str, args: list[str] | None = None, *, tasks: int | None = Non
 
     overrides = run_v2.RunJobRequest.Overrides
     env_vars = [run_v2.EnvVar(name=k, value=v) for k, v in (env or {}).items()]
-    containers = [overrides.ContainerOverride(args=args, env=env_vars)] if args else None
+    containers = [overrides.ContainerOverride(args=args, env=env_vars)] if args is not None or env_vars else None
     request = run_v2.RunJobRequest(name=name, overrides=overrides(
         container_overrides=containers, task_count=tasks) if containers or tasks else None)
     op = run_v2.JobsClient().run_job(request=request, **({"timeout": timeout} if timeout else {}))

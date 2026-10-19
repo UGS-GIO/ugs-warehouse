@@ -127,7 +127,7 @@ def _start(job: Job, message: str, args: list[str] | None = None, *, tasks: int 
     try:
         from ugs_warehouse.core.jobs import run_job
         execution = run_job(_job_path(job), args, tasks=tasks, env=env)
-        return {"ok": True, "message": message, "execution": execution.split("/")[-1]}
+        return {"ok": True, "message": message, "execution": execution.split("/")[-1] or "(started)"}
     except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 

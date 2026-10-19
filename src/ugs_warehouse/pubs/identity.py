@@ -18,6 +18,8 @@ from urllib.parse import quote, unquote
 COG_PREFIX = os.environ.get("GEOLMAP_COG_PREFIX", "geolmap/cogs")
 FOOTPRINTS_PREFIX = os.environ.get("GEOLMAP_FOOTPRINTS_PREFIX", "geolmap/footprints")
 UNITS_PREFIX = os.environ.get("GEOLMAP_UNITS_PREFIX", "geolmap/units")
+# One placed source raster per 30x60 map, which the harvest warps instead of picking a plate from zips.
+SOURCES_PREFIX = os.environ.get("GEOLMAP_SOURCES_PREFIX", "geolmap/sources/30x60")
 # Cloud-native 3D fence-diagram artifacts (GeoParquet-3D polys/lines + glTF mesh + classes sidecar),
 # converted from a pub's CSA_3D GeMS gdb + .mapx. Presence here drives the STAC 3D-asset stamping.
 THREED_PREFIX = os.environ.get("GEOLMAP_3D_PREFIX", "geolmap/3d")
@@ -112,6 +114,10 @@ class Pub:
     @property
     def cog_object(self) -> str:
         return f"{COG_PREFIX}/{self.series_id}.cog.tif"
+
+    @property
+    def source_raster_object(self) -> str:
+        return f"{SOURCES_PREFIX}/{self.series_id}.tif"
 
     @property
     def thumb_object(self) -> str:

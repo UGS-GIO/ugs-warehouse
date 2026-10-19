@@ -3,7 +3,8 @@
 // so these tests guard the parts we CAN check deterministically).
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
-import type { CubeStep, StacDoc } from "@/stac";
+import type { CubeStep } from "@/stac/datacube";
+import type { StacDoc } from "@/stac";
 import { to2d } from "@/lib/bbox";
 import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 
@@ -60,18 +61,6 @@ export function nextPick(prev: MapPick | null, id: number, props?: Record<string
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
 export const DETENTS = [0.06, 0.55, 0.92] as const;
 
-// Which detent a drag ended nearest. Ties go to the lower one — releasing mid-way biases toward
-// showing more map, which is the thing the sheet is covering. The epsilon is what makes that true:
-// an exact midpoint is rarely exact in binary floating point, so a hair either way would otherwise
-// decide it (0.305 between 0.06 and 0.55 lands 2e-17 nearer the upper one).
-export function nearestDetent(frac: number): number {
-  let best = 0;
-  for (let i = 1; i < DETENTS.length; i++) {
-    if (Math.abs(DETENTS[i] - frac) < Math.abs(DETENTS[best] - frac) - 1e-9) best = i;
-  }
-  return best;
-}
-
 // The phone sheet in the URL (`sheet`): its tab, then how far up it is. `layers` is Layers at half,
 // `info-full` is Info at full, `info-peek` is Info lowered. Absent, or anything unknown, is a
 // Layers peek, so the default map URL stays bare.
@@ -86,22 +75,6 @@ export function parseSheet(v: string | undefined): SheetState {
 export function sheetParam({ tab, detent }: SheetState): string | undefined {
   if (tab === "layers" && detent === 0) return undefined;
   return [tab, SHEET_AT[detent]].filter(Boolean).join("-");
-}
-
-// Where a released drag settles. A flick (speed in sheet-heights per second, + is up) goes one
-// detent past where the sheet is, in the flick's direction, however short the drag was.
-export const FLICK_SPEED = 0.8;
-export function releaseDetent(frac: number, speed: number): number {
-  if (speed > FLICK_SPEED) return Math.min(DETENTS.filter((d) => d <= frac + 1e-9).length, DETENTS.length - 1);
-  if (speed < -FLICK_SPEED) return Math.max(DETENTS.filter((d) => d < frac - 1e-9).length - 1, 0);
-  return nearestDetent(frac);
-}
-
-// Whether a swipe on the sheet's content moves the sheet instead of scrolling it, from its first
-// move (dy + is down): down only from the top, up only while the sheet can still grow.
-export function contentTakesDrag(dx: number, dy: number, atTop: boolean, detent: number): boolean {
-  if (Math.abs(dy) <= Math.abs(dx)) return false;
-  return dy > 0 ? atTop : detent < DETENTS.length - 1;
 }
 
 // Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a

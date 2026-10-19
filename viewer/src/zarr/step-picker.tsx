@@ -2,7 +2,7 @@
  * What a datacube shows: a variable select, and per non-spatial dim ‹ › to step through it plus one
  * select per calendar field the series resolves to (Year, Month, Day). Undated dims list labels.
  */
-import { type CubeStep, MONTH_NAMES, stepKey } from "@/stac";
+import { type CubeStep, MONTH_NAMES, stepKey } from "@/stac/datacube";
 import { UiSelect } from "@/ui/select";
 import { UiSlider } from "@/ui/slider";
 import { MAX, MIN, type SetPick, VAR } from "./cube-picks";
@@ -92,7 +92,7 @@ function StretchSliders({ stretch, rescale, onPick }: {
   );
 }
 
-export function StepPickers({ stepDims, selection, onChange }: {
+function StepPickers({ stepDims, selection, onChange }: {
   stepDims: Record<string, CubeStep[]>;
   selection: Record<string, number>;
   onChange: (dim: string, index: number) => void;

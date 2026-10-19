@@ -28,10 +28,10 @@ substitutions:
   _VECTORS_JOB: ugs-pubs-vectors          # Cloud Run job: extract every layer + companion table from new pubs' GIS zips → GeoParquet; skip-existing, pubs-ingest binds them
   _PRUNE_JOB: ugs-pubs-prune              # Cloud Run job: delete pub STAC items the source no longer lists (case twins, renamed ids); refuses a large share
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
-  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip, chain after ingest + restyle
+  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview WebPs for ugs-serving-topics (headless MapLibre); content-hash skip; started by ingest + restyle, nightly via Cloud Scheduler as the backstop
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (pygeoapi over GeoParquet, scale-to-zero)
-  _TILES_SERVICE: ugs-warehouse-tiles         # XYZ vector tiles + ready-to-use MapLibre styles (go-pmtiles over the CDN PMTiles, scale-to-zero)
+  _GEOSERVICES_SERVICE: ugs-warehouse-geoservices  # ArcGIS FeatureServer for Map Viewer / Experience Builder (Go over the CDN GeoParquet, scale-to-zero)
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
@@ -137,18 +137,17 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:latest
       - featureserv/
 
-  # XYZ vector tiles for clients that cannot read PMTiles directly. No data copy: go-pmtiles
-  # range-reads the same PMTiles the viewer uses, and the app binds the ugs-styles fragment to
-  # those tiles so a consumer gets one URL that renders (tiles/README.md).
-  - id: build-tiles
+  # ArcGIS FeatureServer for Map Viewer, Experience Builder and StoryMaps: one Go binary over the
+  # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes. The code lives in
+  # UGS-GIO/geoparquet-featureserver; Dockerfile.geoservices pins the release.
+  - id: build-geoservices
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:latest
-      - tiles/
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices
+        docker build -t "$$IMG:${_TAG}" -t "$$IMG:latest" - < Dockerfile.geoservices
 
   # Ops console (Django + HTMX). Build context is the repo root (Dockerfile.admin COPYs admin/).
   - id: build-admin
@@ -164,7 +163,7 @@ steps:
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
-  # Topics-thumbnail renderer: Python orchestrator + Node/puppeteer/Chromium (headless MapLibre).
+  # Topics-thumbnail renderer: Python driving headless Chromium via Playwright (headless MapLibre).
   - id: build-topics-thumbs
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -198,10 +197,10 @@ steps:
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features']
 
-  - id: push-tiles
-    waitFor: [build-tiles]
+  - id: push-geoservices
+    waitFor: [build-geoservices]
     name: gcr.io/cloud-builders/docker
-    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles']
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices']
 
   - id: push-api
     waitFor: [build-api]
@@ -241,7 +240,9 @@ steps:
       # DUCKDB_MAX_MEMORY caps DuckDB's buffer manager, not the process: RSS lands well above it —
       # the producer hydrates the whole `_current` table into ONE in-memory DuckDB (no temp_directory,
       # and /tmp is RAM on Cloud Run anyway), so peak RSS tracks the layer's geometry, not this cap.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB
+      # TOPIC_THUMBS_JOB: after publishing a topic the ingest starts the thumbnail job for it
+      # (core/jobs.py). Prod only; the review job leaves it unset so it starts nothing.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB@TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
@@ -513,10 +514,13 @@ steps:
       - --memory=8Gi
       - --tasks=5
 
-  # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Node/puppeteer/Chromium)
-  # renders each topic's styled PMTiles → PNG. Content-hash skip means it's safe to run after every
-  # vector ingest AND every restyle; it only re-renders topics whose style changed. Run a vector
-  # ingest (or restyle) after to bind the new `thumbnail` assets onto the items. Chromium = more RAM.
+  # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Python + Playwright/Chromium)
+  # renders each topic's styled PMTiles → WebP. The ingest and restyle jobs start it after publishing
+  # (core/jobs.py) and Cloud Scheduler runs it nightly as the backstop (scripts/provision.sh); the
+  # content-hash skip means it only re-renders topics whose data or style changed. It stamps the
+  # `thumbnail` assets onto the items and refreshes the catalog itself. Chromium = more RAM.
+  # core/jobs.py overrides --args for single-topic runs and relies on --command=python staying as is
+  # (tests/test_thumbs_trigger.py pins the two together).
   - id: deploy-topics-thumbs-job
     waitFor: [push-topics-thumbs]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -575,6 +579,8 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      # A rebind starts the thumbnail job, since a style change is a preview change (core/jobs.py).
+      - --set-env-vars=TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
       - --command=python
       - --args=-m,ugs_warehouse.restyle
       - --task-timeout=1800
@@ -633,10 +639,10 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Raster PMTiles mosaics of the geologic maps, one per portal layer: intermediate (100k) and 500k
-  # here. The 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh);
-  # building it here too would overwrite that z17 object with a z14 one. Add --scale 250k (the 1 x 2
-  # degree sheets) here and in the admin console once one of those maps has a COG; none does yet.
+  # Raster PMTiles mosaics of the geologic maps, one per portal layer: only 500k builds here. The 24k
+  # (z17) and 100k (z15) tiers need a real disk and run on Cloud Batch (scripts/submit_mosaics_batch.sh).
+  # Add --scale 250k (the 1 x 2 degree sheets) here and in the admin console once one of those maps
+  # has a COG; none does yet.
   - id: deploy-mosaics-job
     waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -654,7 +660,7 @@ steps:
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       # --scale=<tier> form: gcloud rejects a repeated bare "--scale" item in --args.
-      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=100k,--scale=500k
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=500k
       - --task-timeout=14400
       - --max-retries=1
       - --cpu=4
@@ -842,42 +848,33 @@ steps:
       # Bounds the cost of an unbounded fan-out on a public endpoint; past it Cloud Run returns 429.
       - --max-instances=50
 
-  # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
-  # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only
-  # ever sees cache misses, so concurrency matters more than instance count.
+  # ArcGIS FeatureServer. infra/geoservices.tf owns its settings; this step only rolls out the image.
   # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
-  # was pinned to an older revision (a rollback or manual reroute pins it; a plain deploy gets 0%).
-  - id: deploy-tiles
-    waitFor: [push-tiles]
+  # was pinned to an older revision.
+  - id: deploy-geoservices
+    waitFor: [push-geoservices]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
       - -c
       - |
         set -euo pipefail
-        gcloud run deploy ${_TILES_SERVICE} \
-          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG} \
+        gcloud run deploy ${_GEOSERVICES_SERVICE} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:${_TAG} \
           --region=${_REGION} \
-          --service-account=${_RUNTIME_SA} \
-          --allow-unauthenticated \
-          --port=8080 \
-          --cpu=1 \
-          --memory=512Mi \
-          --timeout=60 \
           --tag=prod
-        gcloud run services update-traffic ${_TILES_SERVICE} --region=${_REGION} --to-tags=prod=100
+        gcloud run services update-traffic ${_GEOSERVICES_SERVICE} --region=${_REGION} --to-tags=prod=100
 
-  # No resolve-features-url / resolve-tiles-url here any more: they existed only to bake
-  # VITE_FEATURES_BASE / VITE_TILES_BASE into the viewer build, and nothing in this config builds
-  # the viewer now. cloudbuild-review-viewer.yaml resolves them for the review bundle; the Action
-  # takes them from repo variables, having no GCP credentials to ask Cloud Run.
+  # No resolve-features-url here any more: it existed only to bake VITE_FEATURES_BASE into the
+  # viewer build, and nothing in this config builds the viewer now. cloudbuild-review-viewer.yaml
+  # resolves the service URLs for the review bundle; the Action takes them from repo variables, having no GCP credentials to ask Cloud Run.
   # The viewer is NOT built or deployed here. The public one deploys from
   # .github/workflows/firebase-hosting-merge.yml (Cloud Build has no Firebase credentials); the
   # review bundle from cloudbuild-review-viewer.yaml, on a viewer/**-scoped trigger. Keeping them
   # here meant a one-line CSS change rebuilt every service image — see docs/CLOUD_BUILD_CI.md.
 
 images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api

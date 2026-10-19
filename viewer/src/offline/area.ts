@@ -11,8 +11,8 @@
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { Compression, EtagMismatch, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
-import { type AreaMeta, areaDir, markStored, parseAreaMeta, tileName, writeFile } from "./area-store";
-import { folderSize, namesIn, prune, readJson, versionKey } from "./guards";
+import { type AreaMeta, areaDir, markStored, parseAreaMeta, tileName } from "./area-store";
+import { folderSize, namesIn, prune, readJson, versionKey, writeFile } from "./guards";
 import { FileChangedError, live } from "./opfs-name";
 import type { Bbox } from "./guards";
 

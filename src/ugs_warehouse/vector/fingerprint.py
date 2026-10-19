@@ -1,7 +1,7 @@
 """Content fingerprint for skip-unchanged ingest.
 
-A stable, order-independent hash of a topic's transformed view folded with the tiling inputs,
-stored on the published STAC item as `ugs:content_hash`. On a later ingest, if the freshly-computed
+A stable, order-independent hash of a topic's transformed view folded with the tiling and archive
+writer inputs, stored on the published STAC item as `ugs:content_hash`. On a later ingest, if the freshly-computed
 fingerprint matches the published item, the PMTiles output still exists AND the GeoParquet archive
 is in the current format (`sink_archive.is_current`), the topic's DATA sinks
 (tippecanoe / GeoParquet / DuckLake) are skipped — the rebuild would be byte-identical, so the
@@ -24,11 +24,12 @@ from ..core import config, gcs, stac
 from . import introspect, sink_archive, sink_pmtiles, sink_stac
 from .topics import Topic
 
-CONTENT_HASH_PROP = "ugs:content_hash"
+CONTENT_HASH_PROP = stac.CONTENT_HASH_PROP
 
 
 def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:
-    """Order-independent content hash of the transformed view, folded with the tiling signature.
+    """Order-independent content hash of the transformed view, folded with the tiling and archive
+    signatures.
 
     `sum(hash(row))` is commutative, so it does not depend on row order (the view is hilbert-sorted,
     but we deliberately don't lean on that). The row count is carried alongside as a cheap guard so
@@ -36,7 +37,8 @@ def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:
     n, h = con.execute(
         f"SELECT count(*)::BIGINT, COALESCE(sum(hash(v)::HUGEINT), 0)::VARCHAR FROM {view} v"
     ).fetchone()
-    return f"{n}:{h}:{sink_pmtiles.tiling_signature(introspect.has_ugs_key(con, view))}"
+    tiling = sink_pmtiles.tiling_signature(introspect.has_ugs_key(con, view))
+    return f"{n}:{h}:{tiling}:{sink_archive.archive_signature()}"
 
 
 def published_hash(topic: Topic) -> str | None:

@@ -43,17 +43,6 @@ async function dir(create = false): Promise<FileSystemDirectoryHandle | null> {
   }
 }
 
-/** The stored file for `url`, or null when it was never downloaded. */
-export async function get(url: string): Promise<File | null> {
-  const d = await dir();
-  if (!d) return null;
-  try {
-    return await (await d.getFileHandle(fileNameFor(url))).getFile();
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Where a (re)started download begins, given what is already on disk and how the server answered.
  * A 206 whose range starts at our byte count continues the file; anything else (a 200 because the

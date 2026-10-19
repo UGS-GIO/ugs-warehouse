@@ -7,8 +7,7 @@
 import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
-  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
-  type TableColumn, zarrAsset,
+  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -74,8 +73,6 @@ export const hasGeometry = (it: ItemRef): boolean =>
 
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
 export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
-
-
 
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {
@@ -254,6 +251,3 @@ const ABOUT_DEFS: MetaDef[] = [
   { key: "ugs:topic_category", label: "Topic" },
 ];
 export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);
-
-// Re-export the column-schema type so item-detail's schema table can import one thing from here.
-export type { TableColumn };

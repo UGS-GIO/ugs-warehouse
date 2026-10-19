@@ -13,7 +13,7 @@ repos:
       - id: actionlint          # GitHub Actions-aware lint: indentation, keys, expressions, shellcheck
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.0              # keep in lockstep with `ruff==` in pyproject [dev]
+    rev: v0.17.0              # keep in lockstep with `ruff==` in pyproject [dev]
     hooks:
       - id: ruff                # Python lint (the project linter)
 

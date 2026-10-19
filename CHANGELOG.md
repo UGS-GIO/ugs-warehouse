@@ -1,5 +1,123 @@
 # Changelog
 
+## [1.11.3](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.2...v1.11.3) (2026-10-19)
+
+
+### Performance Improvements
+
+* **archive:** write overviews by vertex count instead of geometry bytes ([#619](https://github.com/UGS-GIO/ugs-warehouse/issues/619)) ([1e0a42f](https://github.com/UGS-GIO/ugs-warehouse/commit/1e0a42fc45d4bb46aafcebf5c1bc496992fbe9cd))
+
+## [1.11.2](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.1...v1.11.2) (2026-10-19)
+
+
+### Performance Improvements
+
+* **pubs:** write publication GeoParquet with a page index and small pages ([#610](https://github.com/UGS-GIO/ugs-warehouse/issues/610)) ([daf954a](https://github.com/UGS-GIO/ugs-warehouse/commit/daf954a7eab8b16abe6017c8bb9babcaf0c5e752))
+
+## [1.11.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.0...v1.11.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **ingest:** fold the archive writer settings into the fingerprint so a layout change rebuilds ([#608](https://github.com/UGS-GIO/ugs-warehouse/issues/608)) ([c5a7714](https://github.com/UGS-GIO/ugs-warehouse/commit/c5a77144be782ea4f1f221593d177a42ee52f19a))
+
+## [1.11.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.10.0...v1.11.0) (2026-10-19)
+
+
+### Features
+
+* **archive:** write overview levels per drawing scale for heavy vector layers ([#603](https://github.com/UGS-GIO/ugs-warehouse/issues/603)) ([7768e9b](https://github.com/UGS-GIO/ugs-warehouse/commit/7768e9b7bcffdf967f925e55459117c00be51845))
+
+
+### Bug Fixes
+
+* **ci:** drop the unused _REGION substitution from the preview cleanup ([#600](https://github.com/UGS-GIO/ugs-warehouse/issues/600)) ([15c527f](https://github.com/UGS-GIO/ugs-warehouse/commit/15c527f0be0dea4260714327333024d01b033b5b))
+
+
+### Performance Improvements
+
+* **archive:** cap data pages at 1024 rows so bbox page-index pruning is sharp ([#602](https://github.com/UGS-GIO/ugs-warehouse/issues/602)) ([5f2b788](https://github.com/UGS-GIO/ugs-warehouse/commit/5f2b7880c40ec42f16677c475cecdaf4937668db))
+
+## [1.10.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.9.0...v1.10.0) (2026-10-18)
+
+
+### Features
+
+* **infra:** manage the FeatureServer's Cloud Run settings in OpenTofu ([#596](https://github.com/UGS-GIO/ugs-warehouse/issues/596)) ([00976b5](https://github.com/UGS-GIO/ugs-warehouse/commit/00976b533ed6a8763a7f877b2f7ca9b13f78a6d6))
+
+
+### Bug Fixes
+
+* **geoservices:** exact spatial counts, distinct over every row, honoured spatialRel, faster spatial reads ([#594](https://github.com/UGS-GIO/ugs-warehouse/issues/594)) ([db0ea13](https://github.com/UGS-GIO/ugs-warehouse/commit/db0ea13727a4e04eca889843e75bcb93700af525))
+* **geoservices:** pass a style's maxScale through to the layer ([#592](https://github.com/UGS-GIO/ugs-warehouse/issues/592)) ([20b0ec6](https://github.com/UGS-GIO/ugs-warehouse/commit/20b0ec6f5fcff46ad81a33c675cb95ce0b35b3db))
+
+## [1.9.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.8.0...v1.9.0) (2026-10-17)
+
+
+### Features
+
+* **viewer:** replace the tiles service with ArcGIS FeatureServer links ([#584](https://github.com/UGS-GIO/ugs-warehouse/issues/584)) ([485c36b](https://github.com/UGS-GIO/ugs-warehouse/commit/485c36be1dff11bb36685124bbbb69019aa798db))
+
+
+### Bug Fixes
+
+* **featureserv:** keep a sandbox refresh from replacing prod's layer list ([#585](https://github.com/UGS-GIO/ugs-warehouse/issues/585)) ([b5cb725](https://github.com/UGS-GIO/ugs-warehouse/commit/b5cb725a3d7da9b59dce2aab1cf5c15a6f8b5c60))
+* **stac:** keep the overview tolerance in items.json so the FeatureServer reads overviews ([#588](https://github.com/UGS-GIO/ugs-warehouse/issues/588)) ([748bf65](https://github.com/UGS-GIO/ugs-warehouse/commit/748bf65688b6500976bb4c8864f38a4ff8438b0b))
+
+## [1.8.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.7.0...v1.8.0) (2026-10-16)
+
+
+### Features
+
+* **geoservices:** serve each topic as an ArcGIS FeatureServer, in Go ([#581](https://github.com/UGS-GIO/ugs-warehouse/issues/581)) ([f69c4e9](https://github.com/UGS-GIO/ugs-warehouse/commit/f69c4e9b4eb9d80731777366436bdba510e2c169))
+
+
+### Performance Improvements
+
+* **archive:** write a page index and an overview so bbox reads fetch only their pages ([#580](https://github.com/UGS-GIO/ugs-warehouse/issues/580)) ([e36de88](https://github.com/UGS-GIO/ugs-warehouse/commit/e36de886b1c398a2d0a016cf518b897fd642ca10))
+
+## [1.7.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.6.0...v1.7.0) (2026-10-13)
+
+
+### Features
+
+* **stac:** publish each serving-topic layer as its own collection beside its item ([#564](https://github.com/UGS-GIO/ugs-warehouse/issues/564)) ([053b382](https://github.com/UGS-GIO/ugs-warehouse/commit/053b38211db5790f3f7d23149366f40c6bc15ce6))
+
+## [1.6.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.5.0...v1.6.0) (2026-10-12)
+
+
+### Features
+
+* **viewer:** link the repo from the footer and menu, labeled with the release version ([#562](https://github.com/UGS-GIO/ugs-warehouse/issues/562)) ([9559227](https://github.com/UGS-GIO/ugs-warehouse/commit/9559227dbf919a77969d46394b1aa4971d640ab0))
+
+
+### Bug Fixes
+
+* **thumbs:** make topic thumbnails on publish and restyle, with a nightly backstop [ALL-6020] ([#364](https://github.com/UGS-GIO/ugs-warehouse/issues/364)) ([c4b6df0](https://github.com/UGS-GIO/ugs-warehouse/commit/c4b6df0b3ddcea590a1a9bcc0f38c55a1ce16c13))
+
+## [1.5.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.4.0...v1.5.0) (2026-10-12)
+
+
+### Features
+
+* **harvest:** take a map's plate from its source raster and expand palettes before the warp [ALL-6149] ([#555](https://github.com/UGS-GIO/ugs-warehouse/issues/555)) ([a313f16](https://github.com/UGS-GIO/ugs-warehouse/commit/a313f16cfb9e06f4043a419a144bd5fc193e6a3f))
+
+## [1.4.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.3.0...v1.4.0) (2026-10-11)
+
+
+### Features
+
+* **logging:** write JSON log lines on Cloud Run, tagged by topic ([#553](https://github.com/UGS-GIO/ugs-warehouse/issues/553)) ([693af8d](https://github.com/UGS-GIO/ugs-warehouse/commit/693af8d93214a616e4f4702688c6de03912737bd))
+* **provision:** alert when the push handler cannot start the ingest job ([#547](https://github.com/UGS-GIO/ugs-warehouse/issues/547)) ([e7f08ce](https://github.com/UGS-GIO/ugs-warehouse/commit/e7f08cec37861a512acef1cb500244ab4ec18984))
+* **viewer:** pick a datacube's variable and time step, kept in the URL ([#530](https://github.com/UGS-GIO/ugs-warehouse/issues/530)) ([173873f](https://github.com/UGS-GIO/ugs-warehouse/commit/173873fd1c97cd666216c0e49b06876e9e5eab24))
+
+
+### Bug Fixes
+
+* **ingest:** run one ingest per topic at a time ([#549](https://github.com/UGS-GIO/ugs-warehouse/issues/549)) ([638c6e7](https://github.com/UGS-GIO/ugs-warehouse/commit/638c6e7608026597e9107d617f4d09cd5e2d3f87))
+* **source:** escape quotes in DSNs passed to ATTACH ([#546](https://github.com/UGS-GIO/ugs-warehouse/issues/546)) ([130ea6d](https://github.com/UGS-GIO/ugs-warehouse/commit/130ea6d6ff1e1dd21622bd7e37e0790890432605))
+* **source:** let libpq read PGPASSWORD instead of splicing it into the DSN ([#545](https://github.com/UGS-GIO/ugs-warehouse/issues/545)) ([e414bc6](https://github.com/UGS-GIO/ugs-warehouse/commit/e414bc67ae89bf7cbb1016e2a5f759b56af50e80))
+
 ## [1.3.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.2.0...v1.3.0) (2026-10-06)
 
 

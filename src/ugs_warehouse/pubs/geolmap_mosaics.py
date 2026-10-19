@@ -66,15 +66,9 @@ PMTILES_MIME = config.PMTILES_MIME
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-# Max web-mercator zoom per tier for a STATEWIDE build. `gdal raster tile --max-zoom` enforces this
-# directly (the old bake passed -co ZOOM_LEVEL, which the MBTiles driver silently ignored, then
-# worked around it by resampling the VRT). The 24k tier is the flagship and its TARGET is z17 (the
-# 600 DPI COGs' native detail), BUT a statewide z17 build produces ~tens of GB of tiles, which does
-# not fit the RAM-backed /tmp of the current job — so the default stays at a RAM-safe cap until the
-# disk-backed / tile-sharded statewide build lands (the ALL-5993 scale follow-up). Run a higher zoom
-# explicitly with --maxzoom (and MOSAIC_WORK_DIR on a real disk) once that is in place. A scoped
-# --quads build renders at native zoom (full detail on a few maps).
-TIER_MAXZOOM = {"24k": 14, "100k": 12, "250k": 12, "500k": 12}
+# Max zoom per tier for a STATEWIDE build. 24k and 100k bake on Cloud Batch, where
+# submit_mosaics_batch.sh passes z17 and z15; a --quads build without --maxzoom renders native.
+TIER_MAXZOOM = {"24k": 14, "100k": 15, "250k": 12, "500k": 12}
 # Lowest zoom to build overviews down to (off the base tiles). A statewide extent is ~1 tile at low
 # zoom, so a full pyramid to MOSAIC_MINZOOM is cheap and lets the layer draw when zoomed out.
 MOSAIC_MINZOOM = max(0, int(os.environ.get("MOSAIC_MINZOOM", "4")))
@@ -177,14 +171,18 @@ def _vsigs(sid: str) -> str:
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
-    """`sids` ordered ascending by `pub_year` (newest last). `gdalbuildvrt` gives the LAST source
-    priority on overlap, so this makes the newest edition draw on top for free — matters for
-    `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable/missing year
-    sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    """`sids` with reissues first (see `_is_reissue`), then by `pub_year`, missing years lowest and ties
+    by sid. `gdalbuildvrt` draws the LAST source on top, so the newest original map wins an overlap."""
     def _yr(s: str) -> int:
         y = (by_sid.get(s, {}).get("pub_year") or "").strip()
         return int(y) if len(y) == 4 and y.isdigit() else 0
-    return sorted(sids, key=lambda s: (_yr(s), s))
+    return sorted(sids, key=lambda s: (not _is_reissue(by_sid.get(s, {})), _yr(s), s))
+
+
+def _is_reissue(pub: dict) -> bool:
+    """A GIS reproduction of an older map. Its pub_year is the reissue's, not the mapping's, so it
+    draws beneath every original map and shows only where no other map covers the ground."""
+    return "gis reproduction" in (pub.get("pub_name") or "").casefold()
 
 
 _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)
@@ -503,8 +501,8 @@ def build(scales: list[str], maxz: int | None = None,
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build per-scale raster PMTiles mosaics of geologic maps")
     ap.add_argument("--scale", choices=(*TIERS, "all"), action="append",
-                    help="Scale tier to build; repeat for several (default all). The statewide 24k tier "
-                         "at z17 runs on Cloud Batch (scripts/submit_mosaics_batch.sh).")
+                    help="Scale tier to build; repeat for several (default all). The statewide 24k and "
+                         "100k tiers run on Cloud Batch (scripts/submit_mosaics_batch.sh).")
     ap.add_argument("--maxzoom", type=int, default=None,
                     help="Cap the base (native) zoom level; default lets GDAL pick from resolution.")
     ap.add_argument("--editions", choices=("current", "all"), default="current",

@@ -1,7 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { useState } from "react";
-import { type Comment, deleteComment, ITEM_STATUSES, listAllComments, setStatus, whoami } from "./comments";
+import { ITEM_STATUSES, listAllComments, threadReplies, useCommentActions, whoami } from "./comments";
+import { CommentMeta } from "./comments-panel";
 import { NotificationsInbox } from "./notifications-inbox";
 import { ReviewReport } from "./review-report";
 import { statusClass, statusLabel, useItemStatuses } from "./review-status";
@@ -29,11 +30,9 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
     retry: false,
   });
   const me = useQuery({ queryKey: qk.whoami, queryFn: whoami, retry: false, staleTime: Infinity });
-  const toggle = useMutation({ mutationFn: (c: Comment) => setStatus(c.id, c.status === "resolved" ? "open" : "resolved"), onSuccess: invalidate });
-  const remove = useMutation({ mutationFn: (id: number) => deleteComment(id), onSuccess: invalidate });
+  const { toggle, remove } = useCommentActions(invalidate);
 
-  const repliesByRoot = new Map<number, Comment[]>();
-  for (const c of all) if (c.parent_id != null) (repliesByRoot.get(c.parent_id) ?? repliesByRoot.set(c.parent_id, []).get(c.parent_id)!).push(c);
+  const repliesByRoot = threadReplies(all);
   const comments = all.filter((c) => c.parent_id == null &&
     (filter === "all" || (filter === "resolved" ? c.status === "resolved" : c.status !== "resolved")));
 
@@ -77,11 +76,7 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
                 <button key={it} onClick={() => onOpen(it)}
                   className="rounded bg-muted px-1.5 font-mono text-xs text-primary hover:underline">{it}</button>
               ))}
-              <span className="font-medium text-foreground">{c.author.split("@")[0]}</span>
-              <span className="text-xs text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
-              {c.status === "resolved" && (
-                <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-xs text-green-600 dark:text-green-400">resolved</span>
-              )}
+              <CommentMeta c={c} />
             </div>
             <p className="mt-0.5 whitespace-pre-wrap text-foreground">{c.body}</p>
             {(repliesByRoot.get(c.id) ?? []).map((r) => (

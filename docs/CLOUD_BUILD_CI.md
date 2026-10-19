@@ -9,7 +9,7 @@ Cloud Build, no GHA workflows).
 
 [`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
-- **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
+- **backend** (`python:3.11`): `uv lock --check` → install from `uv.lock` → `ruff check .` → `pytest -q`
 - **docs-links** (`lycheeverse/lychee`): every relative Markdown link in the repo resolves (offline)
 - **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run` → `npm run build`
 
@@ -128,7 +128,6 @@ console/CLI-created (§ One-time setup above), not Terraform-managed either.
 | `ugs-warehouse-dev` | `cloudbuild-dev.yaml` | push to `develop` | read-side service paths (`dev_included_files`) | default Compute SA |
 | `ugs-warehouse-docs` | `cloudbuild-docs.yaml` | push to `main` | `docs/**`, `mkdocs.yml`, `docs-requirements.txt`, `cloudbuild-docs.yaml` | default Compute SA |
 | `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` or `develop` | `viewer/**` | `ugs-warehouse-preview-build@` |
-| `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` or `develop` | `tiles/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-review-viewer` | `cloudbuild-review-viewer.yaml` | push to `main` | `viewer/**` | default Compute SA |
 | `ugs-warehouse-basemap` | `cloudbuild-basemap.yaml` | Pub/Sub `ugs-warehouse-basemap` (monthly Cloud Scheduler, or by hand) | n/a | `ugs-basemap-build@` |
 
@@ -164,7 +163,7 @@ changed?" filter would skip the review preview on precisely the PRs that alter r
   cross-project grant as the trigger ones above but for Firebase Hosting instead of Cloud Build).
 - **GitHub repo settings, not this repo's code**: the required secret
   `FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` and the optional variables
-  `VITE_FEATURES_BASE`/`VITE_TILES_BASE` (documented in `docs/DEPLOY.md` §5, set via `gh secret
+  `VITE_FEATURES_BASE`/`VITE_GEOSERVICES_BASE` (documented in `docs/DEPLOY.md` §5, set via `gh secret
   set`/`gh variable set` or the GitHub UI — GitHub has no Terraform-adjacent way to declare these
   short of the `github` Terraform provider, which this repo doesn't use).
 

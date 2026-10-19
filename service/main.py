@@ -27,11 +27,12 @@ import os
 
 from fastapi import FastAPI, HTTPException, Request
 
+from ugs_warehouse.core import jobs, logs
 from ugs_warehouse.raster.consume import consume as consume_raster
 from ugs_warehouse.vector.ingest import ingest_topic
 from ugs_warehouse.vector.topics import MART_SCHEMAS, from_pubsub
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logs.setup()
 log = logging.getLogger("ugs-warehouse.service")
 
 app = FastAPI(title="ugs-warehouse")
@@ -44,18 +45,11 @@ INGEST_INLINE = os.environ.get("INGEST_INLINE", "0") == "1"
 
 def _start_ingest_job(topic_fqn: str) -> str:
     """Start the ingest job for one topic. Returns the execution name."""
-    from google.cloud import run_v2
-
     if not INGEST_JOB_PROJECT:
         raise RuntimeError("INGEST_JOB_PROJECT is unset — cannot address the ingest job")
-    client = run_v2.JobsClient()
     # Args REPLACE the job's configured `--all`; the entrypoint execs `python -m <module> "$@"`.
-    override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=["--topic", topic_fqn])
-    op = client.run_job(request=run_v2.RunJobRequest(
-        name=f"projects/{INGEST_JOB_PROJECT}/locations/{INGEST_JOB_REGION}/jobs/{INGEST_JOB}",
-        overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1),
-    ))
-    return (op.metadata.name if op.metadata else "") or "(started)"
+    name = f"projects/{INGEST_JOB_PROJECT}/locations/{INGEST_JOB_REGION}/jobs/{INGEST_JOB}"
+    return jobs.run_job(name, ["--topic", topic_fqn], tasks=1) or "(started)"
 
 
 def _decode(envelope: dict) -> dict:
@@ -79,9 +73,8 @@ async def pubsub_push(req: Request) -> dict[str, str]:
     payload = _decode(await req.json())
 
     # A payload the Topic rules reject is malformed, not transient — retrying redelivers the same
-    # bytes. The subscription has no dead-letter policy and a 1-day retention, so a non-2xx here
-    # buys 24h of redelivery for a message that can never succeed. Ack + skip, same as the
-    # unsupported-schema gate below.
+    # bytes, so a non-2xx here only walks a message that can never succeed to the dead-letter
+    # topic. Ack + skip, same as the unsupported-schema gate below.
     try:
         topic = from_pubsub(payload)
     except ValueError as e:
@@ -92,14 +85,14 @@ async def pubsub_push(req: Request) -> dict[str, str]:
     # warehouse can't reach (e.g. gwportal lives in a separate DB). Ack + skip so
     # those don't log a doomed ingest or trigger Pub/Sub retries.
     if topic.schema not in MART_SCHEMAS:
-        log.info("skip unsupported schema: %s", topic.fqn)
+        log.info("skip unsupported schema: %s", topic.fqn, extra={"topic": topic.fqn})
         return {"status": "skipped", "topic": topic.fqn,
                 "reason": f"{topic.schema} not in MART_SCHEMAS"}
 
     if INGEST_INLINE:
-        log.info("ingest start (inline): %s", topic.fqn)
+        log.info("ingest start (inline): %s", topic.fqn, extra={"topic": topic.fqn})
         rc = ingest_topic(topic)
-        log.info("ingest done : %s rc=%s", topic.fqn, rc)
+        log.info("ingest done : %s rc=%s", topic.fqn, rc, extra={"topic": topic.fqn})
         # rc != 0 = at least one sink failed — already logged. Ack anyway so
         # Pub/Sub does not retry-storm; recovery happens on the next publish.
         return {"status": "ok", "topic": topic.fqn, "rc": str(rc)}
@@ -107,9 +100,9 @@ async def pubsub_push(req: Request) -> dict[str, str]:
     try:
         execution = _start_ingest_job(topic.fqn)
     except Exception as e:  # noqa: BLE001 — a 5xx here is what Pub/Sub retries into a storm
-        log.exception("could not start ingest job for %s", topic.fqn)
+        log.exception("could not start ingest job for %s", topic.fqn, extra={"topic": topic.fqn})
         return {"status": "error", "topic": topic.fqn, "reason": f"{type(e).__name__}: {e}"}
-    log.info("ingest queued: %s -> %s", topic.fqn, execution)
+    log.info("ingest queued: %s -> %s", topic.fqn, execution, extra={"topic": topic.fqn})
     return {"status": "queued", "topic": topic.fqn, "execution": execution}
 
 
@@ -131,8 +124,9 @@ async def pubsub_push_raster(req: Request) -> dict[str, str]:
     # No such edition (e.g. not flipped to prod yet) — ack + skip so Pub/Sub doesn't retry-storm; the
     # next promote for this item recovers it.
     if path is None:
-        log.info("raster skip: no raw.raster_catalog row for %s", item_id)
+        log.info("raster skip: no raw.raster_catalog row for %s", item_id,
+                 extra={"item_id": item_id})
         return {"status": "skipped", "item_id": item_id, "reason": "not found"}
 
-    log.info("raster promoted: %s -> %s", item_id, path)
+    log.info("raster promoted: %s -> %s", item_id, path, extra={"item_id": item_id})
     return {"status": "ok", "item_id": item_id, "item": path}

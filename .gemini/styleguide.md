@@ -15,6 +15,18 @@ correctness; skip pre-existing issues unrelated to this diff.
   failures / swallow-and-continue, missing tests for new logic, non-idiomatic code, and anything
   that violates the repository conventions below.
 - Performance: obvious inefficiencies, N+1 queries, needless work in hot paths.
+- Reinvented primitives: new code that hand-rolls what a library already does: gesture,
+  drag, snap or fling handling; bottom sheets and drawers; dialogs, popovers and focus traps;
+  toggle groups; virtual-keyboard or visualViewport handling; URL search-param parsing and
+  validation; data fetching and caching; debounce and throttle. Tells: touchmove or pointermove
+  listeners, setPointerCapture, visualViewport, velocity or flick math, requestAnimationFrame
+  animation loops, hand-written search-param parse/serialize. Read package.json first to know
+  what is installed. If an installed dependency covers it, that is a BLOCKER: name the
+  dependency and component that replaces the code. If only a well-known library not yet
+  installed covers it, raise a concern naming that library.
+- New dependencies: flag every dependency added to package.json. Name it, what it replaces or
+  enables, and whether an installed dependency already covers the same need (a blocker if it
+  does). Adding a library is allowed; the point is that it is seen and justified.
 
 Report concerns across a range of confidence, not only near-certain ones — raise a well-reasoned
 concern even when you are not fully sure, and state your confidence briefly.
@@ -77,6 +89,11 @@ The pipeline sink. Upstream: the vector producer reads **dataELT**'s serving `{s
 
 ## Cloud Run / deploy & security
 - Vector = scale-to-zero service, pubs = sharded Jobs; admin console behind IAP. Deploy footgun: `--no-traffic --tag` pins traffic to the old revision — shift with `--to-latest` after. No secrets in code/logs (DSNs/creds via env/Secret Manager). `_current` (and the `geom` column) is an upstream contract — coordinate rather than edit here. GCP/Vertex only.
+
+## Existing tooling & memory
+- Flag new code that redoes what a dependency or a repo helper already does. Name the replacement. The list is in AGENTS.md "Use existing tooling" (pystac, rustac, rio-stac, gpio, obstore, the tippecanoe step in `vector/sink_pmtiles.py`, `core/stac.py` builders, viewer helpers in `stac.ts`/`map-model.ts`/`data/columns.ts`). Also check portolan-sdi, developmentseed and stac-utils.
+- Flag a second copy of an existing helper in this repo, even a small one.
+- Memory: Cloud Run `/tmp` is RAM. Flag two copies of a dataset alive at once (a frame plus its `to_crs` copy, the previous loop's frame during the next read), full docs kept when only index entries are needed, and per-object calls where one batch call works.
 
 ## Review scope & severity
 - Skip (don't post findings): `viewer/package-lock.json` (lockfile) and `viewer/src/routeTree.gen.ts` (generated). The STAC catalog / GeoParquet / PMTiles / COG are build output published to GCS, not committed source — don't line-review them if a PR ever adds one.

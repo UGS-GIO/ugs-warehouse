@@ -11,7 +11,8 @@ import type { Device } from "@luma.gl/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
-import { type CubeStep, cubeRenderRescale, stacDocQuery, type StacDoc } from "@/stac";
+import { type CubeStep, cubeRenderRescale } from "@/stac/datacube";
+import { stacDocQuery, type StacDoc } from "@/stac";
 import { makeLocalEpsgResolver } from "./epsg";
 import { openZarr, sampleStretch, type Stretch, type ZarrSource } from "./store";
 import { makeGetTileData, makeRenderTile } from "./tile";
@@ -68,7 +69,7 @@ function useColormapTexture(device: Device | null) {
 
 /** Opening a cube, as one query definition: the overlay draws from it and the layer list reads its
  *  status from the same cache entry, so neither opens the store twice. */
-export const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
+const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
   queryKey: qk.zarrSource(s.href, s.variable),
   queryFn: async () => {
     const src = await openZarr(s.href, s.variable);

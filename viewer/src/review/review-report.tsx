@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { useMemo } from "react";
-import { type Comment, listAllComments } from "./comments";
+import { type Comment, listAllComments, threadReplies } from "./comments";
 
 // Print-styled report of every review comment, grouped by item. "Export PDF" = the browser print
 // dialog (Save as PDF); "Email draft" = a mailto: with a text summary. Review deploy only.
@@ -30,11 +30,7 @@ export function ReviewReport({ onClose, onOpen }: { onClose: () => void; onOpen?
   }, [comments]);
 
   // Replies keyed by their thread root, for nesting in the report.
-  const repliesByRoot = useMemo(() => {
-    const m = new Map<number, Comment[]>();
-    for (const c of comments) if (c.parent_id != null) (m.get(c.parent_id) ?? m.set(c.parent_id, []).get(c.parent_id)!).push(c);
-    return m;
-  }, [comments]);
+  const repliesByRoot = useMemo(() => threadReplies(comments), [comments]);
 
   const open = comments.filter((c) => c.status !== "resolved").length;
   const resolved = comments.length - open;

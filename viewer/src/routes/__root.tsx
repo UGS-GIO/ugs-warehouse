@@ -11,7 +11,7 @@ import { AppLayout } from "@/app";
 
 // The index signature is the passthrough contract, and it is what lets `useSearch` stay typed
 // without a cast: the four known keys are narrowed, everything else survives as unknown.
-export type ViewerSearch = {
+type ViewerSearch = {
   c?: string;
   i?: string;
   l?: string;

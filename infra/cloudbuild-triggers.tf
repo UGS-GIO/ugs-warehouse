@@ -64,7 +64,7 @@ variable "ci_trigger_service_account" {
 variable "deploy_included_files" {
   type = list(string)
   default = [
-    "src/**", "service/**", "api/**", "admin/**", "featureserv/**", "tiles/**",
+    "src/**", "service/**", "api/**", "admin/**", "featureserv/**",
     "scripts/**", "Dockerfile*", "pyproject.toml", "cloudbuild.yaml",
   ]
   description = "included_files for ugs-warehouse-deploy."
@@ -76,7 +76,7 @@ variable "deploy_included_files" {
 variable "dev_included_files" {
   type = list(string)
   default = [
-    "src/**", "api/**", "admin/**", "featureserv/**", "tiles/**",
+    "src/**", "api/**", "admin/**", "featureserv/**",
     "Dockerfile.admin", "pyproject.toml", "cloudbuild-dev.yaml",
   ]
   description = "included_files for ugs-warehouse-dev."
@@ -228,27 +228,6 @@ resource "google_cloudbuild_trigger" "viewer_preview" {
 
   filename       = "cloudbuild-viewer-preview.yaml"
   included_files = ["viewer/**"]
-}
-
-resource "google_cloudbuild_trigger" "tiles_preview" {
-  count = local.manage_preview_triggers
-
-  project         = var.build_project
-  location        = var.region
-  name            = "ugs-warehouse-tiles-preview"
-  description     = "Per-PR tagged Cloud Run revision of the tiles service."
-  service_account = var.preview_trigger_service_account
-
-  repository_event_config {
-    repository = var.build_repository
-    pull_request {
-      branch          = "^(main|develop)$"
-      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
-    }
-  }
-
-  filename       = "cloudbuild-service-preview.yaml"
-  included_files = ["tiles/**"]
 }
 
 # Monthly basemap build; its topic, schedule and SA grants are in basemap-refresh.tf.

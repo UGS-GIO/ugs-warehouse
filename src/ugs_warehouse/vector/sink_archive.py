@@ -249,20 +249,23 @@ def _overview_table(con: duckdb.DuckDBPyConnection, view: str, tolerance: float)
 
 
 def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
-                    written: dict[str, gcs.FileMeta]) -> None:
+                    written: dict[str, gcs.FileMeta], listed: set[str] = frozenset()) -> None:
     """Write `{stem}_overview_{n}.parquet` per OVERVIEW_TOLERANCES when the layer is heavy enough,
-    recording each in `written` under its asset key, and remove the ones not written.
+    recording each in `written` under its asset key.
 
-    One level at a time. A level that fails is removed and the next is still tried; the call
+    The catalog index refreshes after the run, so a file it lists must outlive the run. This
+    removes only the overview files the published item does not list (`listed`); a level this run
+    leaves out drops from the item now and from storage on the next run.
+
+    One level at a time. A level that fails is left out and the next is still tried; the call
     raises after the last so the sink reports the failure."""
     paths = [config.overview_path(topic.stem, n) for n in range(1, len(OVERVIEW_TOLERANCES) + 1)]
-    gcs.delete(f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}_overview.parquet")  # pre-levels
+    prefix = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}_overview"
+    gcs.delete_many([p for p in gcs.list_paths(prefix) if p not in listed], strict=False)
     vertices, points = con.execute(
         f"SELECT sum(ST_NPoints(geom)), bool_and(ST_GeometryType(geom)::VARCHAR LIKE '%POINT') "
         f"FROM {view}").fetchone()
     if points or (vertices or 0) < OVERVIEW_MIN_VERTICES:
-        for path in paths:
-            gcs.delete(path)
         return
     previous, failed = written["data"].size, []
     for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):
@@ -278,7 +281,6 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                 if size >= OVERVIEW_MIN_SHRINK * previous:
                     print(f"[{topic.fqn}] overview {n}: {size:,} B, not under "
                           f"{OVERVIEW_MIN_SHRINK:.0%} of {previous:,} B; skipped")
-                    gcs.delete(path)
                     continue
                 written[f"overview_{n}"] = gcs.upload(local, path, content_type=PARQUET_MIME,
                                                       cache_control=gcs.CACHE_MUTABLE)
@@ -286,7 +288,6 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                 print(f"[{topic.fqn}] overview {n} ({tolerance} deg): {config.public_url(path)}")
         except Exception:
             log.exception("[%s] overview %d FAILED", topic.fqn, n, extra={"topic": topic.fqn})
-            gcs.delete(path)   # the old one is of the old archive; the item must not list it
             failed.append(n)
     if failed:
         raise RuntimeError(f"overview levels {failed} failed")

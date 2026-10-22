@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.12.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.3...v1.12.0) (2026-10-22)
+
+
+### Features
+
+* **ingest:** write a gzipped GeoJSON copy of small vector layers ([#630](https://github.com/UGS-GIO/ugs-warehouse/issues/630)) ([6dd378f](https://github.com/UGS-GIO/ugs-warehouse/commit/6dd378f5adf4552d6f20afb8ce9566967ddb79af))
+* **pubs:** publications as STAC collections with layer, table and plate items, PMTiles and related tables [ALL-6049] ([#571](https://github.com/UGS-GIO/ugs-warehouse/issues/571)) ([6e48c9a](https://github.com/UGS-GIO/ugs-warehouse/commit/6e48c9a0b5ceb70bcd56602dca70af238bab130f))
+
+
+### Bug Fixes
+
+* **ingest:** keep overview files until the published catalog stops listing them ([#627](https://github.com/UGS-GIO/ugs-warehouse/issues/627)) ([1dda75e](https://github.com/UGS-GIO/ugs-warehouse/commit/1dda75eda3af43a5bd521d67db9164969135d5e5))
+
 ## [1.11.3](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.2...v1.11.3) (2026-10-19)
 
 

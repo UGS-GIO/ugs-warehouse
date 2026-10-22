@@ -24,7 +24,7 @@ HEAVY = ("SELECT i + 1 AS feature_id, 'w' || i AS name, CASE WHEN i < 200 "
 
 @pytest.fixture
 def uploads(monkeypatch, tmp_path):
-    calls = {"upload": {}, "delete": []}
+    calls = {"upload": {}, "delete": [], "stored": [LEGACY, *PATHS]}
 
     def upload(local, path, **_):
         kept = tmp_path / path.replace("/", "_")
@@ -33,7 +33,9 @@ def uploads(monkeypatch, tmp_path):
         return gcs.FileMeta(kept.stat().st_size)
 
     monkeypatch.setattr(sink_archive.gcs, "upload", upload)
-    monkeypatch.setattr(sink_archive.gcs, "delete", lambda path: calls["delete"].append(path))
+    monkeypatch.setattr(sink_archive.gcs, "list_paths", lambda prefix: calls["stored"])
+    monkeypatch.setattr(sink_archive.gcs, "delete_many",
+                        lambda paths, **_: calls["delete"].extend(paths))
     monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_VERTICES", 1)
     monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001, 0.01, 0.1))
     return calls
@@ -46,9 +48,9 @@ def _con(sql: str):
     return con
 
 
-def _write(sql: str = HEAVY, archive_size: int = 10**9) -> dict:
+def _write(sql: str = HEAVY, archive_size: int = 10**9, listed: set[str] = frozenset()) -> dict:
     written = {"data": gcs.FileMeta(archive_size)}
-    sink_archive.write_overviews(TOPIC, _con(sql), "v", written)
+    sink_archive.write_overviews(TOPIC, _con(sql), "v", written, listed)
     return written
 
 
@@ -80,7 +82,7 @@ def test_a_level_not_much_smaller_than_the_last_is_skipped(uploads, monkeypatch)
     monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001, 0.00101, 0.1))
     written = _write()
     assert set(written) == {"data", "overview_1", "overview_3"}
-    assert PATHS[1] in uploads["delete"] and PATHS[1] not in uploads["upload"]
+    assert PATHS[1] not in uploads["upload"]
 
 
 def test_a_layer_of_only_specks_keeps_some(uploads):
@@ -99,16 +101,21 @@ def test_a_channel_narrower_than_the_tolerance_keeps_its_bends(uploads):
     assert bends >= 8   # its bends; the full tolerance leaves a 4-point dash
 
 
-def test_points_and_light_layers_remove_stale_overviews(uploads, monkeypatch):
+def test_points_and_light_layers_write_no_overviews(uploads, monkeypatch):
     monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_VERTICES", 10**6)
     for sql in ("SELECT 1 AS feature_id, ST_Point(0, 0) AS geom",
                 "SELECT 1 AS feature_id, ST_Buffer(ST_Point(0, 0), 1) AS geom"):
-        _write(sql)
+        assert set(_write(sql)) == {"data"}
     assert not uploads["upload"]
-    assert uploads["delete"] == [LEGACY, *PATHS] * 2
 
 
-def test_a_failed_level_leaves_the_others_and_removes_its_stale_file(uploads, monkeypatch):
+def test_only_files_the_published_item_does_not_list_are_removed(uploads):
+    """The catalog index refreshes after the run, so a file it lists must still be there."""
+    _write(listed={PATHS[0], PATHS[2]})
+    assert uploads["delete"] == [LEGACY, PATHS[1]]
+
+
+def test_a_failed_level_leaves_the_others_and_is_not_listed(uploads, monkeypatch):
     """The old file is of the old archive, so the item must not go on listing it."""
     real = sink_archive.gcs.upload
 
@@ -122,15 +129,36 @@ def test_a_failed_level_leaves_the_others_and_removes_its_stale_file(uploads, mo
     with pytest.raises(RuntimeError, match=r"\[2\]"):
         sink_archive.write_overviews(TOPIC, _con(HEAVY), "v", written)
     assert set(written) == {"data", "overview_1", "overview_3"}
-    assert PATHS[1] in uploads["delete"]
+
+
+def _overview_assets(monkeypatch, file_meta: dict, published: dict, present: set[str]) -> dict:
+    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: p in present)
+    monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [])
+    monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: published)
+    assets = sink_stac._assets(TOPIC, None, "v", "x.pmtiles", {}, file_meta)
+    return {k: a for k, a in assets.items() if k.startswith("overview")}
+
+
+def test_a_rewritten_archive_lists_only_the_levels_written_with_it(monkeypatch):
+    """A level left out stays in storage until the next run, but the item stops listing it."""
+    written = {"data": gcs.FileMeta(9), "overview_1": gcs.FileMeta(5), "overview_3": gcs.FileMeta(2)}
+    assets = _overview_assets(monkeypatch, written, {"overview_2": {"file:size": 4}}, set(PATHS))
+    assert set(assets) == {"overview_1", "overview_3"}
+
+
+def test_an_unchanged_archive_keeps_the_published_levels(monkeypatch):
+    published = {"overview_1": {"file:size": 5}, "overview_2": {"file:size": 4}}
+    assets = _overview_assets(monkeypatch, {}, published, {PATHS[0], PATHS[2]})
+    assert set(assets) == {"overview_1"}
+    assert sink_stac.published_overviews(TOPIC) == {PATHS[0], PATHS[1]}
 
 
 def test_stac_lists_each_level_with_its_role_and_tolerance(monkeypatch):
-    present = {PATHS[0], PATHS[2]}
-    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: p in present)
+    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: True)
     monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [])
     monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
-    assets = sink_stac._assets(TOPIC, None, "v", "x.pmtiles", {}, {"overview_1": gcs.FileMeta(5)})
+    written = {"data": gcs.FileMeta(9), "overview_1": gcs.FileMeta(5), "overview_3": gcs.FileMeta(2)}
+    assets = sink_stac._assets(TOPIC, None, "v", "x.pmtiles", {}, written)
     tols = sink_archive.OVERVIEW_TOLERANCES
     assert {k: (a["roles"], a["ugs:simplify_tolerance"]) for k, a in assets.items() if k.startswith("overview")} \
         == {"overview_1": (["ugs:overview"], tols[0]), "overview_3": (["ugs:overview"], tols[2])}

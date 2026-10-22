@@ -29,6 +29,15 @@ def _in_memory_gcs(monkeypatch):
     monkeypatch.setattr(gcs, "get_file_meta", lambda _path: None)
 
 
+@pytest.fixture(autouse=True)
+def _crossref_registry(monkeypatch):
+    """Serve a fixed DOI registry, so an ingest never reaches Crossref. A test of pubs.dois
+    restores the real `_fetch` and stubs the HTTP call itself."""
+    from ugs_warehouse.pubs import dois
+
+    monkeypatch.setattr(dois, "_fetch", lambda: frozenset({"10.34191/ofr-784dm"}))
+
+
 class FakeIap:
     """Mints ES256 tokens shaped like IAP's and serves the matching public key, so the verifiers run
     their real signature/audience/issuer checks against a key the test controls."""

@@ -133,6 +133,11 @@ def overview_path(stem: str, level: int) -> str:
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}_overview_{level}.parquet"
 
 
+def geojson_path(stem: str) -> str:
+    """The topic's GeoJSON copy, written beside a small archive (vector/sink_archive.py)."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}.geojson"
+
+
 def topic_thumbnail_path(stem: str) -> str:
     """The topic's styled preview (WEBP_MIME). The thumbs job writes it and the ingest stamps it, so
     both take the path from here."""

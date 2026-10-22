@@ -1,0 +1,612 @@
+{
+ "layers": [
+  {
+   "label": "ss_152__Copperton_Boundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "xid",
+     "type": "integer"
+    },
+    {
+     "name": "name",
+     "type": "string"
+    },
+    {
+     "name": "location",
+     "type": "string"
+    },
+    {
+     "name": "ohio_code",
+     "type": "string"
+    },
+    {
+     "name": "tile",
+     "type": "string"
+    },
+    {
+     "name": "path",
+     "type": "string"
+    },
+    {
+     "name": "ext",
+     "type": "string"
+    },
+    {
+     "name": "size",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Areas_Not_Mapped",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "OBJECTID",
+     "type": "integer"
+    },
+    {
+     "name": "Area_Name",
+     "type": "string"
+    },
+    {
+     "name": "Descriptio",
+     "type": "string"
+    },
+    {
+     "name": "CreationDa",
+     "type": "datetime"
+    },
+    {
+     "name": "Creator",
+     "type": "string"
+    },
+    {
+     "name": "EditDate",
+     "type": "datetime"
+    },
+    {
+     "name": "Editor",
+     "type": "string"
+    },
+    {
+     "name": "GlobalID",
+     "type": "string"
+    },
+    {
+     "name": "Shape__Are",
+     "type": "number"
+    },
+    {
+     "name": "Shape__Len",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Collapsible_Soil_Susceptability",
+   "spatial": true,
+   "rows": 132,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "CSSHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "CSSUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "CSSHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "CSSMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Expansive_Soil_and_Rock_Susceptibility",
+   "spatial": true,
+   "rows": 84,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "EXSHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "EXSUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "EXSHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "EXSMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Flood_Hazard",
+   "spatial": true,
+   "rows": 192,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "FLHHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "FLHUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "FLHHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "FLHMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Geologic_Radon_Susceptibility",
+   "spatial": true,
+   "rows": 22,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "GRSHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "GRSUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "GRSHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "GRSMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Landslide_Inventory",
+   "spatial": true,
+   "rows": 5,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "category",
+     "type": "string"
+    },
+    {
+     "name": "d_material",
+     "type": "integer"
+    },
+    {
+     "name": "d_move_type",
+     "type": "integer"
+    },
+    {
+     "name": "d_name",
+     "type": "integer"
+    },
+    {
+     "name": "d_thickness",
+     "type": "integer"
+    },
+    {
+     "name": "d_move_dir",
+     "type": "number"
+    },
+    {
+     "name": "d_landform",
+     "type": "integer"
+    },
+    {
+     "name": "s_name",
+     "type": "integer"
+    },
+    {
+     "name": "activity",
+     "type": "string"
+    },
+    {
+     "name": "confidence",
+     "type": "integer"
+    },
+    {
+     "name": "mapper",
+     "type": "integer"
+    },
+    {
+     "name": "peer_rev",
+     "type": "integer"
+    },
+    {
+     "name": "comments",
+     "type": "integer"
+    },
+    {
+     "name": "feature_id",
+     "type": "integer"
+    },
+    {
+     "name": "rev_date",
+     "type": "datetime"
+    },
+    {
+     "name": "d_h_move1",
+     "type": "number"
+    },
+    {
+     "name": "d_h_move2",
+     "type": "number"
+    },
+    {
+     "name": "d_h_move3",
+     "type": "number"
+    },
+    {
+     "name": "d_geologic_unit1",
+     "type": "integer"
+    },
+    {
+     "name": "d_geologic_unit2",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "LSFHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Landslide_Susceptibility",
+   "spatial": true,
+   "rows": 80,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "LSSHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "LSSUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "LSSHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "LSSMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "LSSCriticalAngle",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Liquefaction_Susceptibility",
+   "spatial": true,
+   "rows": 16,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "LQSHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "LQSHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "LQSUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "LQSMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Rockfall_Hazard",
+   "spatial": true,
+   "rows": 65,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "RFHHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "RFHHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "RFHMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "RFHUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Shallow_Bedrock_Potential",
+   "spatial": true,
+   "rows": 115,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "SBPHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "SBPUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "SBPHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "SBPMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Shallow_Groundwater_Susceptibility",
+   "spatial": true,
+   "rows": 82,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "SGSHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "SGSUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "SGSHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "SGSMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Hazard_Symbology_Text",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ss_152__Surface_Fault_Rupture_Hazard_Special_Study_Zone",
+   "spatial": true,
+   "rows": 4,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ss_152",
+   "columns": [
+    {
+     "name": "SFRHazardUnit",
+     "type": "string"
+    },
+    {
+     "name": "SFRUpdateDate",
+     "type": "datetime"
+    },
+    {
+     "name": "SFRHazardLabel",
+     "type": "string"
+    },
+    {
+     "name": "SFRMappedScale",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

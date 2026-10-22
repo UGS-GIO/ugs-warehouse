@@ -144,12 +144,69 @@ def test_an_undated_publication_has_a_valid_flagged_interval():
     """STAC has no "unknown" date: a pub with no year gets the source's interval and a flag."""
     from ugs_warehouse.pubs import sink_stac as pubs_sink
 
-    item = _drop_private(pubs_sink.build_item(
+    coll, items = pubs_sink.build_publication(
         {"series_id": "MD-134-6", "series": "MD", "pub_year": "",
-         "pub_name": "List of Beaver County Properties"}, [], override={}))
-    props = item["properties"]
+         "pub_name": "List of Beaver County Properties"}, [], override={}, has_units=True,
+        vector_layers=["a"], registered_dois=frozenset())
+    start, end = coll["extent"]["temporal"]["interval"][0]
+    assert start == pubs_sink.EARLIEST_RECORD and end > start
+    assert coll["ugs:date_unknown"] is True
+    _validate(_drop_private(coll))
+    props = items[0]["properties"]
     assert props["datetime"] is None
     assert props["start_datetime"] == pubs_sink.EARLIEST_RECORD
     assert props["end_datetime"] > props["start_datetime"]
     assert props["ugs:date_unknown"] is True
-    _validate(item)
+    _validate(_drop_private(items[0]))
+
+
+def test_a_publication_whose_series_id_has_a_space_validates():
+    """The scientific extension's DOI pattern forbids whitespace, so such an id carries no sci:doi."""
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "557.92 UT1CO", "pub_year": "1990", "pub_name": "Utah coal",
+         "full_citation": "Someone, 1990, Utah coal."}, [], override={}, has_units=True,
+        vector_layers=["a"], registered_dois=frozenset({"10.34191/557.92 ut1co"}))
+    assert items
+    _validate(_drop_private(coll))
+    for it in items:
+        _validate(_drop_private(it))
+
+
+def test_a_publication_with_a_table_and_no_footprint_validates():
+    """A companion table carries the Utah placeholder as geometry and bbox; a Collection on the Utah placeholder keeps
+    its required extent and flags it with `ugs:footprint_source`."""
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "OFR-1", "pub_year": "2020", "pub_name": "A map"}, [], override={},
+        has_units=True, layers={"geo__DMU": {"rows": 2}},
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}], registered_dois=frozenset())
+    assert coll["ugs:footprint_source"] == pubs_sink.FOOTPRINT_FALLBACK
+    _validate(_drop_private(coll))
+    table = next(it for it in items if it["id"].endswith("geo__DMU"))
+    assert table["geometry"] == stac.bbox_polygon(stac.UTAH_BBOX) and table["bbox"] == stac.UTAH_BBOX
+    assert table["properties"]["ugs:footprint_source"] == pubs_sink.FOOTPRINT_FALLBACK
+    for it in items:
+        _validate(_drop_private(it))
+
+
+def test_publication_items_joined_by_a_relationship_validate():
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "OFR-1", "pub_year": "2020", "pub_name": "A map"}, [], override={},
+        vector_layers=["geo__Polys", "geo__Faults"],
+        layers={"geo__Polys": {"rows": 2, "bbox": [-112.0, 40.0, -111.0, 41.0]},
+                "geo__Faults": {"rows": 2, "bbox": [-112.0, 40.0, -111.0, 41.0]},
+                "geo__DMU": {"rows": 2}},
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}],
+        relationships=[
+            {"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
+             "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100},
+            {"origin": "geo__Faults", "origin_cols": ["PolyID"], "destination": "geo__Polys",
+             "destination_cols": ["Polys_ID"], "detected_by": "declared"}], registered_dois=frozenset())
+    _validate(_drop_private(coll))
+    for it in items:
+        _validate(_drop_private(it))

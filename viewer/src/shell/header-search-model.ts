@@ -1,7 +1,7 @@
 import type { ItemRef } from "@/catalog/browse";
 import { validBbox } from "@/map/map-model";
 import type { Bounds } from "@/map/place-locator";
-import { idOf, type StacDoc } from "@/stac";
+import { idOf, layerLabel, type StacDoc } from "@/stac";
 
 export type ItemHit = {
   kind: "layer" | "publication"; href: string; id: string; label: string; sub: string; bbox?: Bounds;
@@ -19,7 +19,7 @@ function toHit(r: ItemRef & { data: StacDoc }, layer: boolean): ItemHit {
   const year = String(p.datetime ?? "").slice(0, 4);
   return {
     kind: layer ? "layer" : "publication", href: r.href, id,
-    label: String(p.title ?? id),
+    label: layerLabel(r.data, id),
     sub: [layer ? undefined : id, kindLabel, layer ? undefined : year].filter(Boolean).join(" · "),
     bbox: validBbox(r.data.bbox),
   };

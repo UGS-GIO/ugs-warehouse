@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { CommentsPanel } from "@/review/comments-panel";
-import { IS_REVIEW, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
+import { ReferenceTables } from "./reference-tables";
+import { describeData, IS_REVIEW, partitionRelated, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
 
 // One related child table's peek for the clicked feature: 0 rows → hidden; 1 → the row inline
 // (description clamped); many → a hand-off button. Never a table — the full rows live in the panel/dock.
@@ -20,6 +21,11 @@ function PeekRow({ join, value, onOpen }: {
   });
   if (v === undefined) return null;
   const total = data?.total ?? 0;
+  const text = describeData({ table: true, rows: join.rows });
+  const descriptor = text && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{text}</span>;
+  // Beside "N related", the table's size reads "of 41 rows" so it isn't taken for the per-feature count.
+  const tableSize = text && <span className="text-[11px] text-muted-foreground">
+    {text.replace(/^table · /, "of ")}</span>;
   if (isFetching && !data) return <div className="py-0.5 text-xs text-muted-foreground">{join.title}…</div>;
   if (error) return <div className="py-0.5 text-xs text-destructive">{join.title}: couldn't load</div>;
   if (total === 0) return null;
@@ -27,7 +33,7 @@ function PeekRow({ join, value, onOpen }: {
     const row = data!.rows[0];
     return (
       <div className="py-1">
-        <div className="text-xs font-semibold">{join.title}</div>
+        <div className="text-xs font-semibold">{join.title}{descriptor}</div>
         {data!.columns.filter((k) => k !== join.childField && row[k] != null && row[k] !== "").slice(0, 6).map((k) => (
           <div key={k} className="text-xs" style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
             <span className="text-muted-foreground">{k}:</span> {String(row[k])}
@@ -37,10 +43,13 @@ function PeekRow({ join, value, onOpen }: {
     );
   }
   return (
-    <button type="button" onClick={() => onOpen?.(join.key, v)}
-      className="block w-full text-left text-xs font-medium text-primary hover:underline">
-      {total} related in {join.title} →
-    </button>
+    <div className="flex flex-wrap items-baseline gap-x-2">
+      <button type="button" onClick={() => onOpen?.(join.key, v)}
+        className="text-left text-xs font-medium text-primary hover:underline">
+        {total} related in {join.title} →
+      </button>
+      {tableSize}
+    </div>
   );
 }
 
@@ -75,6 +84,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
   onZoom?: () => void;   // zoomed out, one lit line is too small to see, so offer to fly to it
 }) {
   const joins = relatedJoins(item);
+  const { own: primary, reference: refs } = partitionRelated(joins, (j) => Boolean(j.reference));
   const summary = summaryFieldsOf(item);
   const idFields = (summary.length ? summary : Object.keys(props)).filter((k) => props[k] != null && props[k] !== "").slice(0, 5);
   const title = String(props[summary[0]] || props[idFields[0]] || item.properties?.title || "Feature");
@@ -98,11 +108,19 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
           <div key={k} className="contents"><div className="text-muted-foreground">{k}</div><div className="break-words min-w-0">{String(props[k])}</div></div>
         ))}
       </div>
-      {joins.length > 0 && (
+      {primary.length > 0 && (
         <div className="mt-2 border-t border-border pt-2">
           <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related</div>
-          {joins.map((j) => <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />)}
+          {primary.map((j) => <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />)}
         </div>
+      )}
+      {refs.length > 0 && (
+        <ReferenceTables className="mt-2 border-t border-border pt-2" titles={refs.map((j) => j.title)}
+          defaultOpen={!primary.length}>
+          {/* Rows are read only once the section is open, so a click costs no extra reads for it. */}
+          {(open) => open && refs.map((j) => (
+            <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />))}
+        </ReferenceTables>
       )}
       {IS_REVIEW && <ReviewComment item={item} props={props} />}
     </section>

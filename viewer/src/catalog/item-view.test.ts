@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
-  dateOf, fmtDate, formatsOf, hasGeometry, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  series, title, typeOf, year,
+  dateOf, fmtDate, formatBadgeAssets, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
+  assetEntries, groupParts, groupPartsByFile, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
+import { collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
 
 // Minimal item factory — the fields the view-model reads (collId, id, bbox, properties, assets).
 const item = (
@@ -47,9 +48,9 @@ describe("field getters", () => {
     expect(fmtDate("")).toBe("");
   });
 
-  it("hasGeometry reads a valid bbox, rejects a missing one", () => {
-    expect(hasGeometry(item("c", "1", {}, { bbox: [-114, 37, -109, 42] }))).toBe(true);
-    expect(hasGeometry(item("c", "1"))).toBe(false);
+  it("hasFootprint reads a valid bbox, rejects a missing one", () => {
+    expect(hasFootprint(item("c", "1", {}, { bbox: [-114, 37, -109, 42] }).data)).toBe(true);
+    expect(hasFootprint(item("c", "1").data)).toBe(false);
   });
 
   it("rowCount / recordCountLabel only when a count is published", () => {
@@ -123,7 +124,104 @@ describe("formatsOf", () => {
   it("is empty for a bare item", () => {
     expect(formatsOf(item("c", "1"))).toEqual([]);
   });
+  it("skips a metadata record, the way it skips a thumbnail", () => {
+    const it = item("c", "1", {}, { assets: {
+      pub: { href: "x.pdf", type: "application/pdf" },
+      metadata: { href: "x.xml", type: "application/xml", roles: ["metadata"], title: "ISO 19139 metadata" },
+    } });
+    expect(formatsOf(it)).toEqual(["PDF"]);
+  });
 });
+
+// A publication layer Item carries a `pmtiles` asset (role visual) and a `rel=pmtiles` link naming
+// its tile layer, as a serving topic does, with no `ugs:renders` style; a plate Item carries a COG.
+const COG = "image/tiff; application=geotiff; profile=cloud-optimized";
+const pubLayer: StacDoc = {
+  type: "Feature", id: "M-246DM__UtahLandslideMaps__DebrisFlowPaths",
+  properties: { title: "Debris Flow Paths", "ugs:series_id": "M-246DM" },
+  assets: {
+    data: { href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.parquet", type: "application/vnd.apache.parquet", roles: ["data"] },
+    pmtiles: { href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.pmtiles", type: "application/vnd.pmtiles", roles: ["visual"] },
+  },
+  links: [{ rel: "pmtiles", href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.pmtiles",
+            type: "application/vnd.pmtiles", "pmtiles:layers": ["UtahLandslideMaps__DebrisFlowPaths"] }],
+};
+const plate: StacDoc = {
+  type: "Feature", id: "M-246DM_plate", properties: { title: "Map plate" },
+  assets: {
+    cog: { href: "https://x/M-246DM.cog.tif", type: COG, roles: ["data", "cloud-optimized"], "proj:code": "EPSG:3857" },
+    thumbnail: { href: "https://x/M-246DM.webp", type: "image/webp", roles: ["thumbnail"] },
+  },
+};
+
+describe("previewKindOf", () => {
+  it("gives a publication layer with PMTiles the vector preview, like a serving topic", () => {
+    expect(previewKindOf(pubLayer)).toBe("vector");
+    expect(previewKindOf({ ...pubLayer, links: [] })).toBe("assets");
+    expect(previewKindOf({ type: "Collection", assets: { publication: { href: "x.pdf", type: "application/pdf" } } }))
+      .toBe("assets");
+  });
+});
+
+describe("the publication's asset tabs", () => {
+  const pubAssets: StacDoc = { type: "Collection", id: "M-246DM", assets: {
+    thumbnail: { href: "c.webp", type: "image/webp", roles: ["thumbnail"] },
+    gis_data_zip: { href: "a.zip", type: "application/zip", roles: ["source"] },
+    publication: { href: "m.pdf", type: "application/pdf", title: "Publication" },
+  } };
+
+  it("adds the plate's COG as a Map tab, the PDF staying first", () => {
+    const tabs = assetEntries(pubAssets, plateEntry(plate)).filter((e) => e.kind !== "other");
+    expect(tabs.map((e) => [e.key, e.kind])).toEqual([["publication", "pdf"], ["plate", "cog"]]);
+    const tab = tabs[1];
+    expect(tab.asset.href).toBe("https://x/M-246DM.cog.tif");
+    expect(tab.asset.title).toBe("Map plate");
+    expect(tab.doc).toBe(plate);   // drawn with the plate Item, for its projection
+  });
+
+  it("has no Map tab without a plate (a report, or before the plate loads)", () => {
+    expect(plateEntry(undefined)).toBeUndefined();
+    expect(plateEntry({ type: "Feature", id: "x_plate", assets: {} })).toBeUndefined();
+    expect(assetEntries(pubAssets).map((e) => e.key)).toEqual(["publication", "gis_data_zip"]);
+  });
+});
+
+describe("overview parquets stay out of the asset lists", () => {
+  const overview = { href: "x_overview_1.parquet", type: "application/vnd.apache.parquet", roles: ["ugs:overview"] };
+  const data = { href: "x.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
+  const doc = { type: "Feature", id: "x", assets: { data, overview_1: overview } } as unknown as StacDoc;
+
+  it("are not an asset tab", () => {
+    expect(assetEntries(doc).map((e) => e.key)).toEqual(["data"]);
+  });
+
+  it("are not a format chip or facet", () => {
+    const ref = { collId: "c", id: "x", data: doc } as unknown as ItemRef;
+    expect(formatBadgeAssets(ref).map(([k]) => k)).toEqual(["data"]);
+    expect(formatsOf({ ...ref, data: { ...doc, assets: { overview_1: overview } } } as unknown as ItemRef)).toEqual([]);
+  });
+});
+
+describe("footprints and spatial data", () => {
+  it("does not count the statewide placeholder as a footprint", () => {
+    const onUtah = item("ugs-publications/C", "C-139", { "ugs:footprint_source": "utah-bbox" },
+      { bbox: [-114.05, 37, -109.04, 42] });
+    expect(hasFootprint(onUtah.data)).toBe(false);
+    expect(hasFootprint(item("c", "1", { "ugs:footprint_source": "cog" }, { bbox: [-112, 40, -111, 41] }).data))
+      .toBe(true);
+  });
+  it("treats null geometry, or a schema with no geometry column, as a plain table", () => {
+    const cols = (c: { name: string; type?: string }[]) => ({ data: { href: "x.parquet", "table:columns": c } });
+    expect(isSpatialData({ geometry: null })).toBe(false);
+    expect(isSpatialData({ geometry: { type: "Point", coordinates: [0, 0] },
+      assets: cols([{ name: "MapUnit", type: "string" }]) })).toBe(false);
+    expect(isSpatialData({ assets: cols([{ name: "MapUnit" }, { name: "geometry", type: "geometry" }]) })).toBe(true);
+    expect(isSpatialData({ assets: cols([{ name: "geom", type: "blob" }]) })).toBe(true);
+    // No schema published: assume spatial, as before.
+    expect(isSpatialData({ geometry: { type: "Point", coordinates: [0, 0] }, assets: {} })).toBe(true);
+  });
+});
+
 
 describe("bylineParts", () => {
   it("joins imprint · author · scale · date, only present parts", () => {
@@ -132,6 +230,37 @@ describe("bylineParts", () => {
       "ugs:scale": "1:24,000", datetime: "2020-01-01T00:00:00Z",
     }))).toEqual(["Geologic Map GQ-1560", "Doe, J.", "Scale 1:24,000", "2020"]);
     expect(bylineParts(item("c", "1"))).toEqual([]);
+  });
+});
+
+// The publication page renders a publication Collection through the same getters, once
+// collectionAsItem has lifted its top-level metadata into properties.
+describe("a publication Collection on the item page", () => {
+  const coll = collectionAsItem({
+    type: "Collection", id: "OFR-9", title: "Geologic map of somewhere", description: "Citation.",
+    "ugs:series_id": "OFR-9", "ugs:pub_type": "Open-File Report", "ugs:author": "Doe, J.",
+    extent: { spatial: { bbox: [[-112, 40, -111, 41]] }, temporal: { interval: [["2020-06-01T00:00:00Z", null]] } },
+    assets: { publication: { href: "https://x/ofr-9.pdf", type: "application/pdf" } },
+  } as StacDoc);
+  const it_: ItemRef = { collId: "ugs-publications/OFR", href: "", data: coll };
+
+  it("reads title, byline, kind, format and published date", () => {
+    expect(title(it_)).toBe("Geologic map of somewhere");
+    expect(seriesLabel(it_)).toBe("OFR-9");
+    expect(bylineParts(it_)).toEqual(["Open-File Report OFR-9", "Doe, J.", "Jun 2020"]);
+    expect(kindLabel(it_)).toBe("Publication");
+    expect(categorize(it_).key).toBe("publications");
+    expect(formatsOf(it_)).toEqual(["PDF"]);
+    expect(hasFootprint(it_.data)).toBe(true);
+    const { curated } = curatedDerived(coll.properties ?? {});
+    expect(curated.find((r) => r.label === "Published")?.value).toBe("Jun 2020");
+  });
+
+  it("shows no date for an undated publication", () => {
+    const undated = collectionAsItem({ ...coll, type: "Collection", properties: undefined,
+      title: "Undated", "ugs:series_id": "OFR-10", "ugs:date_unknown": true,
+      extent: { temporal: { interval: [["1850-01-01T00:00:00Z", "2026-01-01T00:00:00Z"]] } } } as StacDoc);
+    expect(dateOf({ collId: "ugs-publications/OFR", href: "", data: undated })).toBe("");
   });
 });
 
@@ -201,5 +330,93 @@ describe("seriesLabel", () => {
   it("keeps an id carrying something the title does not say", () => {
     expect(seriesLabel(item("ugs-serving-topics/hazards", "qfaults_2024", { title: "Quaternary Faults" })))
       .toBe("qfaults_2024");
+  });
+});
+
+describe("groupParts (the publication page's layers and tables)", () => {
+  const map = [{ id: "P_plate", title: "Map plate" }, { id: "P_units", title: "Geologic unit polygons" }];
+  const of = (source: string, kind: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${source}-${kind}-${i}`, title: `${kind} ${i}`, kind, source }));
+
+  it("is one flat list when the links carry no kind (older publications)", () => {
+    const parts = [...map, { id: "P__x", title: "X" }];
+    expect(groupParts(parts)).toEqual([{ count: 3, collapsed: false, groups: [{ parts, collapsed: false }] }]);
+    expect(groupParts([])).toEqual([]);
+  });
+
+  it("puts the plate, units and fence first under Map, then kinds in order, for one source", () => {
+    const parts = [...of("Mills", "supporting", 1), ...of("Mills", "table", 2), ...map, ...of("Mills", "layer", 3)];
+    const sections = groupParts(parts);
+    expect(sections.map((s) => s.label)).toEqual([undefined, undefined]);
+    expect(sections[0].groups.map((g) => [g.label, g.parts.map((p) => p.id)])).toEqual([["Map", ["P_plate", "P_units"]]]);
+    expect(sections[1].groups.map((g) => [g.label, g.parts.length])).toEqual(
+      [["Map layers", 3], ["Tables", 2], ["Supporting tables", 1]]);
+  });
+
+  it("groups by source dataset first when there are several (quads), then by kind", () => {
+    const sections = groupParts([...map, ...of("Quad B", "layer", 2), ...of("Quad A", "layer", 1), ...of("Quad A", "table", 1)]);
+    expect(sections.map((s) => [s.label, s.count])).toEqual([[undefined, 2], ["Quad A", 2], ["Quad B", 2]]);
+    expect(sections[1].groups.map((g) => g.label)).toEqual(["Map layers", "Tables"]);
+  });
+
+  it(`collapses a group of more than ${PART_GROUP_OPEN} entries, and keeps Map and small groups open`, () => {
+    const big = groupParts([...map, ...of("Mills", "layer", PART_GROUP_OPEN + 1), ...of("Mills", "table", 2)]);
+    expect(big[0].groups[0].collapsed).toBe(false);
+    expect(big[1].groups.map((g) => [g.label, g.collapsed])).toEqual([["Map layers", true], ["Tables", false]]);
+    const quads = groupParts([...of("Quad A", "layer", PART_GROUP_OPEN + 1), ...of("Quad B", "layer", 2)]);
+    expect(quads.map((s) => [s.label, s.collapsed])).toEqual([["Quad A", true], ["Quad B", false]]);
+  });
+
+  it("keeps two raw sources apart when their titles read the same, and shows the title", () => {
+    const tag = (sourceKey: string) => (p: ReturnType<typeof of>[number]) => ({ ...p, id: `${sourceKey}-${p.id}`, sourceKey });
+    const sections = groupParts([...of("Mills Junction", "layer", 2).map(tag("MillsJunction")),
+                                 ...of("Mills Junction", "layer", 1).map(tag("Mills_Junction"))]);
+    expect(sections.map((s) => [s.label, s.count])).toEqual([["Mills Junction", 2], ["Mills Junction", 1]]);
+    expect(sections[1].groups[0].parts[0].id).toMatch(/^Mills_Junction-/);
+  });
+
+  it("groups by the title when the links carry no raw source key", () => {
+    expect(groupParts([...of("Quad A", "layer", 1), ...of("Quad B", "layer", 1)]).map((s) => s.label)).toEqual(["Quad A", "Quad B"]);
+  });
+
+  it("files an unknown kind after the known ones under its own name", () => {
+    expect(groupParts(of("Mills", "annotation", 1).concat(of("Mills", "layer", 1)))[0].groups.map((g) => g.label))
+      .toEqual(["Map layers", "annotation"]);
+  });
+});
+
+describe("groupPartsByFile (source file, then dataset, then kind)", () => {
+  const part = (id: string, kind: string, sourceFile?: string, source = "Geo") =>
+    ({ id, title: id, kind, source, ...(sourceFile ? { sourceFile } : {}) });
+  const plate = { id: "P_plate", title: "Map plate" };
+
+  it("groups by file, keeps the plate on top, and nests dataset then kind", () => {
+    const zip = "GIS Data - Zip";
+    const xl = "Appendix A - Excel";
+    const out = groupPartsByFile([plate, part("a", "layer", zip, "Quad A"), part("b", "table", zip, "Quad B"),
+      part("c", "table", xl), part("d", "layer", zip, "Quad A")]);
+    expect(out.map((f) => [f.label, f.count])).toEqual([[undefined, 1], [zip, 3], [xl, 1]]);
+    expect(out[0].sections[0].groups[0].label).toBe("Map");
+    // The zip holds two datasets; the Excel file has one, so its dataset level collapses.
+    expect(out[1].sections.map((s) => s.label)).toEqual(["Quad A", "Quad B"]);
+    expect(out[2].sections.map((s) => s.label)).toEqual([undefined]);
+    expect(out[2].sections[0].groups.map((g) => g.label)).toEqual(["Tables"]);
+  });
+
+  it("has no file level when every part came from one file", () => {
+    const out = groupPartsByFile([part("a", "layer", "GIS Data - Zip"), part("b", "table", "GIS Data - Zip")]);
+    expect(out.map((f) => f.label)).toEqual([undefined]);
+    expect(out[0].sections[0].groups.map((g) => g.label)).toEqual(["Map layers", "Tables"]);
+  });
+
+  it("files parts with no source file under Other files beside the named ones", () => {
+    const out = groupPartsByFile([part("a", "layer", "GIS Data - Zip"), part("b", "table")]);
+    expect(out.map((f) => f.label)).toEqual(["GIS Data - Zip", "Other files"]);
+  });
+
+  it("falls back to groupParts for parts that carry no source file (older catalogs)", () => {
+    const parts = [plate, part("a", "layer"), part("b", "table")];
+    expect(groupPartsByFile(parts)).toEqual([{ count: 3, collapsed: false, sections: groupParts(parts) }]);
+    expect(groupPartsByFile([])).toEqual([]);
   });
 });

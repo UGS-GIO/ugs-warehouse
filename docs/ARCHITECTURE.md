@@ -82,7 +82,9 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   `overview_1..3` assets (role `ugs:overview`): the same rows simplified to just under a pixel at
   ArcGIS LOD 11, 9 and 7 (a quarter of that for polygons narrower than a pixel), one sub-pixel
   speck kept per pixel. The FeatureServer draws small scales from the coarsest one under the
-  request's `maxAllowableOffset`. Downloads and tables read `data`.
+  request's `maxAllowableOffset`. Downloads and tables read `data`. A layer whose GeoParquet is
+  1 MB or less also gets a `geojson` asset, gzipped on the CDN, for web maps that load the whole
+  layer in one request.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.
@@ -97,21 +99,318 @@ Cartographers work in the `ugs-styles` repo; styles bind into the catalog **by S
 STAC emit, a matching style attaches a `renders` block (MapLibre GL style URL). A `restyle` job
 rebinds renders without a reingest.
 
+Publication layers have no ugs-styles style of their own. The vectors job generates one per layer
+(`<label>.style.json`, the viewer's default look; see ⑤) and records it in the manifest; the pubs
+ingest puts a pointer, `ugs:generated_style`, on the layer's Item. `attach_renders` then binds by
+precedence: the ugs-styles style for the Item's id, then (a plate only) the one for its
+publication's id, then the generated file. The generated one binds the same way as the others, a
+`ugs:renders` default (marked `generated`, so the viewer draws the layer in its own per-layer
+colour) plus a `roles:["style"]` `style` asset, so the `restyle` job rebinds it and an ugs-styles
+style added later replaces it without a reingest. A single-file publication has no layer Item: its
+one layer rides the Collection, so the pointer, `ugs:renders` and the `style` asset sit on the
+Collection (top-level members), which `restyle --collection all` rebinds too. The style is never
+written into the Item.
+
 ### ⑤ Publications 🟧
 
 Publications are a second producer into the same STAC catalog: scanned geologic maps become COGs +
-footprints, routed into three collections (`ugs-publications`, `ugs-mining-district-files`,
+footprints, routed into three groups (`ugs-publications`, `ugs-mining-district-files`,
 `ugs-external`).
+
+Each group is a Catalog of series Catalogs (`<group>/<SERIES>/catalog.json`), and each publication
+is a Collection under its series (`<group>/<SERIES>/<SID>/collection.json`). The Collection holds
+the documents (PDF, cover, original zips) as assets and the DOI as `cite-as` +
+`sci:doi`, written only when `10.34191/<id>` is registered. The ingest fetches the registered set
+from Crossref once per run (`pubs/dois.py`), keeps a snapshot at `pubs/doi-registry.json`, and
+falls back to it with a warning when Crossref cannot be reached (it fails only when there is no
+snapshot). The plate COG, units, extracted layers and tables, and the 3D fence are its Items at
+`<SID>/<ITEM_ID>/<ITEM_ID>.json`: `<SID>_plate`, `<SID>_units`, `<SID>_fence`, and `<SID>__<label>`
+for each layer and table (the double underscore keeps a layer id off another publication's id,
+since publication ids can hold `_`). A publication with one data file keeps it on the Collection and
+has no Items. The pubs ingest writes the Collections and Items; `refresh_catalog` writes the series
+and group catalogs over them. The ingest lists each group once before it writes, and after the
+pool deletes, in one batched call, the Item directories no publication's current build produces.
+
+The refresh reads each publication's `collection.json` once and keeps only its id, title, pub
+type, whether it is mappable and its index row, so memory does not grow with the single-file
+publications' `table:columns` and `proj:wkt2`; the restyle and retire jobs (2Gi) run it too. It
+also writes `pub-coverage.json` beside the catalog root: per group and series, the publications
+indexed, whether the series is `migrated`, how many publications are `pending`, and the Items and
+COG ids counted. The ops console's coverage panel reads that file, not the root `items.json`.
+
+A series switches to this layout as a whole, once every publication in it has a `collection.json`.
+Until then the refresh indexes it as before, one series `collection.json` over `<SID>/<SID>.json`
+items, ignores its new-layout objects, and prints the publications still pending. Publications the
+feed does not list (mostly mining district files) hold their series in the old layout. After a
+series switches, `pubs.prune --legacy --apply` deletes its old files, only where the replacement
+exists.
 
 Metadata comes from the publications app's live feed (`publications.pubs_feed_v1`); `PUBS_DB_URL`
 is required. The ops console's **Full refresh** runs the jobs in order: cover thumbnails, 3D,
-map layers from each new pub's GIS zip, a prune of items the feed no longer lists, the pubs
+map layers and tables from each new pub's data attachments, a prune of items the feed no longer lists, the pubs
 ingest, and the full-text search index. New map plates need **Harvest COGs** first. GeoParquet is
-written with geoparquet-io, and COG band metadata is read with rio-stac. A publisher's plain TIFF
+written with geoparquet-io, and COG band metadata is read with rio-stac. A new plate COG embeds each
+band's statistics (`STATISTICS_MINIMUM/MAXIMUM/MEAN/STDDEV`, alpha included), computed over the
+8-bit raster it is made from before rio-cogeo copies them in. A publisher's plain TIFF
 scan is a `source` asset, and a pub with no year gets a `start_datetime`/`end_datetime` interval
 flagged `ugs:date_unknown`.
 
-Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
+The vectors job opens every data attachment of a publication: each zip that is not a GeoTIFF
+zip (the plate harvest's), whatever its label ("GIS", "Data", "Appendix A"), and each `.xlsx`,
+`.xls` and `.csv` file. The zip labelled GIS comes first, so the layers it held keep their labels.
+Each attachment is downloaded into its own folder in one work dir, and the 4 GiB unzip limit
+covers the whole publication. A URL the feed lists twice is one file, and attachments are taken in
+URL order (the GIS zip first), so a repeated layer name gets the same `_2` on every run.
+`__MACOSX/` and `._*` entries are skipped, inside nested zips too. Shapefiles and
+geodatabases become layers and tables. A sheet of a workbook with a header row becomes a table
+(`<workbook>__<sheet>`; a CSV is `<file>`), written as Parquet with `table:columns`. The header
+is the first of the first 10 rows that is mostly distinct, non-numeric text and about as wide as
+the sheet, and units (`%`, `ppm`, `mg/L`) or labels in the one or two text rows under it are folded into it. Cell
+values stay typed, a column mixing numbers and text is kept as text and named in a warning, and
+an empty sheet or one with no header row is a warning, not extracted. A sheet with a column named by the word `lat` or `latitude` and one by `lon`, `long` or `longitude`
+(`Latitude WGS846`, `Surf Lon`; digits and text in parentheses are ignored) also yields `<table>_points`, a point layer
+in EPSG:4326 (GeoParquet and PMTiles); rows whose coordinates are blank or outside Utah plus a
+1 degree margin are counted in a warning and left out, never moved. Longitudes stored as positive
+west values (a column named with a `W`/`WEST` word, or every value positive and inside Utah once
+negated) are negated, with a warning; a sheet that looks lat/long swapped stays a table and says so.
+UTM easting/northing columns
+are used only when the sheet names both a zone and a datum (otherwise the sheet is a table and a
+warning says so); any coordinate-looking column left unused is named in a warning. A workbook is opened once (openpyxl read-only for `.xlsx`, xlrd for `.xls`) and a CSV is parsed by
+Arrow; a file over `MAX_SHEET_BYTES` (500 MB) is an error naming it. Column
+names that repeat ignoring case are suffixed `_2`, `_3` with a warning naming the renames. A
+shapefile whose attribute text is not UTF-8 is read again as cp1252 with an `encoding_fallback`
+warning; any other read error still fails the layer. An attachment that cannot be fetched or
+unzipped is an error named for its label and the others still extract. Each manifest layer records
+`source_file` `{key, title, path}`: the attachment's Collection asset key (left out when the feed
+lists no such asset) and label, and the path
+inside the zip (the file name for a bare attachment). Its Item carries `ugs:source_file` (the
+title) beside `ugs:source_key`, and the Collection's `rel=item` link repeats it. The manifest's
+`extract_version` (2 now; 1 only opened the GIS zip and read no spreadsheets) is bumped like
+`relations_version`, but a clean manifest below it is extracted again by the next regular `--all`
+run rather than healed; those pubs go after the pubs never tried. A pub that ends as `skip` keeps
+its warnings on `_attempt.json`.
+
+Collection asset keys for attachments (`identity.attachment_keys`) are unique: repeated URLs are
+one asset, and keys that collide ignoring case, or equal `publication`, `thumbnail` or `overview`,
+are numbered `_2`, `_3` in (key, URL) order, so the vectors job and the ingest agree whatever order
+the feed returns rows in.
+
+Each map layer extracted from a data attachment is written as GeoParquet in its own CRS plus PMTiles in
+EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with the serving topics'
+tippecanoe flags and one tile layer named for the label. DuckDB reads the layer's GeoParquet,
+drops rows with no geometry, reprojects from the CRS the manifest recorded (`ST_Transform`
+with `always_xy`, so coordinates stay lon/lat) and streams GeoJSONSeq to tippecanoe through
+`vector/sink_pmtiles.py`, so no layer is held in memory as a GeoDataFrame. TIME and zoned timestamp columns are cast to strings first (the GDAL writer would drop them or the zone); a column still missing from the tiles gets a `tile_columns_dropped` warning naming it. The series' `_manifest.json` records
+`pmtiles` and `pmtiles_layer` per layer. A layer whose tiling fails keeps its GeoParquet and gets
+a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
+again; the next run's self-heal retries it (below). A tiled layer's Item carries the same `pmtiles`
+asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it and the Map page
+can add it. Beside the tiles each tiled layer gets `<label>.style.json` (`pubs/layer_style.py`), the viewer's
+default look (`defaultVectorLayers`) as a MapLibre style holding only `layers`, like the ugs-styles
+files; the viewer supplies the PMTiles source and `source-layer`. The manifest layer records `style`
+(the file name) and the manifest `style_version`. Matching unit polygons to the DMU's `AreaFillRGB`
+colours is not done, because the source data carries no colours. A pub's `_units` Item
+(`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own. No statewide
+`geolmap/units/units.pmtiles` is published: `pubs/units_pmtiles.py` can write one, but it is a manual
+script outside the pipeline, and nothing here reads it. The units that sit under the maps come from
+the unit product and identify layers below.
+
+**Unit product and identify layers.** Publications carry their unit polygons in three attribute
+schemas: GeMS (`MapUnitPolys.MapUnit`, with name, age and description in `DescriptionOfMapUnits`),
+the 2010s template (`*GeologicUnits`: `UnitSymbol`, `UnitName`, `Age_Strat`, `Descriptio`) and the
+coverage era (`geounits`, `units`, `geology_poly(s)`: `UNITSYMBOL`, `UNITNAME`, `AGE`).
+`pubs/unit_polys.py` picks the unit layer from the manifest by layer name (anchored at the end, so a
+quad name in the label never excludes it) and the schema's unit-code column; landslide, owner, glacial,
+vegetation and wetland polygon layers never match. Columns match ignoring case and
+underscores, from candidate lists (code `UnitSymbol|UNITSYMBOL|Unit_Symbol|MapUnit`, name
+`UnitName|UNITNAME|Unit_Name`, age `Age_Strat|Age|AGE`, description
+`Descriptio|Description`; a `NOTES` column holds editors' remarks and is not read as one). Ties go to GeMS, then the template, then the coverage era,
+then the most rows, then the copy with fewer 10-character column names (a shapefile copy truncates
+them, a geodatabase copy does not), with a `unit_layer_ambiguous` warning when the candidates differ. The manifest records
+`unit_layer` {label, schema, code_column}. For GeMS the DMU is joined on the recorded relationship
+(on `MapUnit` with a `unit_dmu_unrelated` warning when none is recorded). The product is
+`<SID>/unit_polys.parquet` (EPSG:4326; `series_id, unit_code, unit_name, age, description,
+source_label`, trimmed, blanks null) and `<SID>/unit_polys.pmtiles` (tile layer `units`), recorded as
+`unit_polys` {rows, bytes, checksum, pmtiles}. It is built at extraction and by the self-heal for
+manifests below `unit_polys.UNIT_POLYS_VERSION` (`unit_polys_version`); a pub with no unit layer
+records the version alone. The plate Item gets a `units` asset (`application/vnd.pmtiles`, role
+`data`, "Geologic units (identify)") pointing at that PMTiles, only when the pub has the product.
+
+The vectors job runs as `--tasks=5`. Each task owns the series ids whose stable hash falls to it,
+and extracts and heals only those (manifests and units files), so no two tasks touch one series
+even though each lists the bucket at its own moment. A targeted run is split the same way: each
+named pub is handled by its owning task, and a task that owns none of them exits 0. Within a task,
+never-tried pubs still go first. Time budget, summary and exit code are per task. The identify
+build below is catalog-wide, so only task 0 runs it, from what is extracted so far; the next run
+picks up the rest.
+
+After the self-heal an `--all` vectors run builds one identify layer per mosaic tier
+(`pubs/identify.py`): `<vectors prefix>/_identify/units-<tier>.pmtiles`, tile layer `units`, the same
+attributes. Members and their order are the mosaic bake's (`geolmap_mosaics._group_by_tier`, then
+`tier_members`: the 8-bit COGs in draw order, which the bake uses too; band types are cached in
+`_identify/cog_bands.json` by COG etag). Each polygon carries `rank`, its member's draw-order index
+(the viewer takes the highest rank at a point). Each member contributes its `unit_polys`, and a member without them contributes its polygons
+from the seamless `geolmap/units/units.parquet` (`unit_symbol`, `unit_name`, `age`; no description),
+filtered by `series_id`. The 24k layer is built although its mosaic is not published. Tiling uses
+the pub-layer flags (`sink_pmtiles.TILE_OPTS`: no feature or tile-size limit, no drop rate) plus
+`--no-tiny-polygon-reduction`, so no polygon is dropped. Tiles run from the mosaics' minimum zoom
+(`MOSAIC_MINZOOM`) to identify's own top zoom (`identify.TOP_ZOOM`: z14 for 24k, z12 above), and
+the map overzooms them past that. `_identify/<tier>.state.json` holds the
+membership, each member's `unit_polys` checksum and the seamless file's etag; a tier is built only
+when one changed. The mosaic Item's `units` asset is added by the mosaics job's item writer
+(`_write_item`) and, for a mosaic already published, patched in place (`stac.patch_published`,
+`target="assets"`) by the vectors run that built the layer. The state file is written only after
+that patch, and a run that finds the state current checks the Item again, so a failed patch is
+retried. The collection's `items.json` asset summary catches up at the next catalog refresh. The
+mosaic job reads the state from the source bucket and, for a review bake into another bucket, links
+the file by the public catalog's site.
+
+The viewer loads a plate or mosaic's `units` asset as an invisible fill layer (`fill-opacity: 0.001`)
+beside the raster, on the Map page and in the item preview. A click on the raster queries it and
+shows the feature with the highest `rank`, which is the one drawn on top where quads overlap. The
+card resolves `series_id` to the publication through the root index. A unit with no description
+and no Description of Map Units table says its descriptions are in the publication and links the
+PDF (the booklet or text asset when there is one). A click on the raster's footprint with no unit
+under it reads "No unit data for this map (scan only)". A vector layer's feature wins over identify.
+
+The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
+classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships
+cannot be read gets a `relationships_not_read` warning and inference still runs. Attachment
+relationships (`__ATTACH`, media) are not joins and are skipped. Most GeMS databases declare none,
+so joins are also inferred within one source dataset with ugs-ingest's FK scoring: a column-name
+score (`scoreNameMatch`, with singular/plural folded) plus the share of the column's distinct
+values (up to 5,000 sampled) found in another table's unique key, times 0.6. A join is kept when
+the name score is at least 25, the overlap at least 90% and the total at least 80; or, for a source
+with only a generic `*ID` name (score 10), when every sampled value, at least 3 of them, is in a key
+named `*_ID` or `*ID` and the column shares a word of 4+ letters with the target table or key
+(DefinitionSourceID and DataSources share "source"). Only the best join per pair of tables is kept. An inferred join targets only
+a non-spatial table; a spatial layer is a target only when declared. A key needs at least 3
+distinct values, an integer key numbering its rows 0..N or 1..N counts only when named for its
+table, and `OBJECTID`, `OBJECTID_n`, `FID`, `FID_*`, `Id` and `Shape_*` are never keys or foreign
+keys. Integer columns with nulls arrive from GDAL as float64, so they are never candidates. Each
+relationship runs from the table holding the foreign key (`origin`, e.g. MapUnitPolys) to the keyed
+table (`destination`, e.g. DescriptionOfMapUnits) and says whether it was `declared` or `inferred`
+(with its `confidence` and `overlap`). Each layer entry records its `source` dataset, which is also
+its inference scope: a geodatabase layer's label prefix (the stem, after its folder when the name
+collided), or a shapefile's folder. A column that cannot be profiled gets one
+`relationships_not_inferred` warning per layer, and the layer's other columns are still used.
+
+The pubs ingest publishes them in the serving topics' shape. A non-spatial destination is a
+`roles: ["data", "related"]` asset on the origin Item, keyed by the destination's label, pointing at
+its existing parquet, with `ugs:foreign_keys` flipped to destination → origin so the viewer's
+click-join filters the table by the clicked feature. A spatial destination is a `related` link, and
+every destination links back to its origin. The origin's `data` asset carries its own foreign keys.
+Each foreign key has `ugs:detected_by` and, when inferred, `ugs:confidence`. A table that at least
+max(3, half the pub's map layers) of those layers point at (DataSources on a GeMS map) is a shared
+lookup, and its related assets carry `roles: ["data", "related", "reference"]`. Layer and table
+Items carry `ugs:layer_kind`, `ugs:source_key` (the source dataset, the grouping key) and
+`ugs:source_dataset` (its title, read from the whole folder path with generic names such as
+`Shapefiles` or `GIS_Data` dropped). A layer Item also carries `ugs:geometry_kind` (points, lines,
+polygons or mixed, from the manifest's `geometry_types`) and every one `table:row_count`; the
+Collection's `rel=item` links repeat these with `ugs:source_file`, so the viewer groups and
+describes a pub's items without fetching them. A related-table asset carries `table:row_count`.
+The kind is `layer` for a spatial layer, `table` for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A table or
+supporting Item has no geometry of its own, so it carries its publication's footprint (the Utah
+bbox when the pub has none) as geometry and bbox, with `ugs:footprint_source: "publication"`. It is
+an area of interest, not a place: the root index leaves their bbox out and the viewer's
+`hasFootprint` returns false for them, so Discover's coverage overlay, "On the map" count and map
+footprints skip them, and they stay searchable. A
+relationship to a GeMS validation layer or an empty layer is skipped, since neither is published;
+one naming any other label the manifest does not publish fails the pub. A relationship must say
+whether it was `declared` or `inferred` (with an integer `confidence`), or the pub fails.
+
+**GeoPackage.** Each pub with extracted layers also gets one `geolmap/vectors/<SID>/<SID>.gpkg`
+holding every layer in its own CRS, every table without geometry, and a `ugs_relationships` table
+(`origin_table`, `origin_columns`, `destination_table`, `destination_columns`, `detected_by`,
+`confidence`) listing the manifest's relationships. A layer labelled `ugs_relationships` is an
+extraction error, since it would collide with that table. The Related Tables Extension
+(`gpkgext_relations`) is not written: the image's GDAL Python bindings are not installed and
+pyogrio has no relationship API, so the relationships ride in a plain attribute table. The vectors
+job builds it after extraction and in the self-heal, one layer at a time: each GeoParquet is
+downloaded, appended in 20,000-row record batches with pyogrio (`write_arrow` for layers, the bbox
+covering column dropped; `write_dataframe` for tables), and deleted, so no layer is held whole. The
+file is built on the job's RAM-backed disk, uploaded with `application/geopackage+sqlite3`, then
+deleted.
+Layers are created with the feature id column `gpkg_fid`, so a source column named `fid` stays
+data. A table with 2,000 or more columns (SQLite's limit) is left out with a
+`geopackage_table_skipped` warning naming it and its column count; the rest of the file still builds.
+
+The manifest records `geopackage` {`bytes`, `checksum`, `version`, `inputs`}. `inputs` digests every
+layer's GeoParquet checksum (recorded per layer at upload, filled in for older manifests) and the
+relationships, so the file is rebuilt only when a layer file or a relationship changes, or
+`GEOPACKAGE_VERSION` is bumped. A pub whose GeoParquet totals over `MAX_GPKG_BYTES` (1 GiB, a module
+constant) gets a `geopackage_skipped` warning naming the size and no file. A pub that grows over the
+cap loses the asset, and its old `.gpkg` stays in the bucket until a prune. GeMS validation layers
+(and relationships to them) are left out, as in the catalog. A failed first build gets
+`geopackage_failed` and no record; a failed rebuild keeps the previous file and record with a
+`geopackage_stale` warning. Either is listed, fails the run and is retried.
+
+The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role `data`, `file:size`,
+`file:checksum`) to the pub's Collection, only when the manifest records one, single-file pubs
+included. The publication page links it as "Download all data". The ingest does not build it.
+
+**Self-heal.** After extracting new pubs and retrying failed ones, every vectors run (`--all`, or
+`python -m ugs_warehouse.pubs.vectors SID ...` for those SIDs) fills in what extracted pubs
+are missing, from their GeoParquet on GCS and without downloading a zip. A pub with errors (a failed
+layer, an unreadable `.mpk`/`.mdb`) gets its products from the layers that did extract, at extraction and
+here; its errors stay in the manifest and the run summary, and the failed layers are retried:
+
+- PMTiles for each spatial layer with none that is not `no_geometry`, including layers with a
+  `pmtiles_failed` warning (the warning clears once the layer tiles). The GeoParquet is downloaded
+  to the job's disk and tiled the same way as at extraction;
+- relationships for each manifest with no `relations_version`, or one older than
+  `relations.RELATIONS_VERSION`. Only the string and integer columns are range-read from GCS,
+  never the geometry. Bumping that number with a change to the inference rules makes the
+  next runs recompute every pub's relationships. Declared relationships already recorded are kept,
+  since the geodatabase is not at hand, and nothing is written for a pub with a layer that cannot
+  be read. Scopes come from the labels, as at extraction. When a label carries a folder prefix
+  because its name was taken, the bundle has several folders and a bare shapefile label's folder is
+  unknown: it is left out of inference with a `relationships_scope_unknown` warning until `--force`
+  re-extracts;
+- the publication's GeoPackage (below), when it has none or its inputs changed. It runs last,
+  since the relationships are one of its inputs;
+- the style file of each tiled layer that has none, or of every layer when `style_version` is older
+  than `layer_style.STYLE_VERSION` (bump it when the generator changes what it writes). It runs
+  after tiling and relationships. A style that cannot be written is a `style_failed` warning and a
+  listed failure, and is tried again next run;
+- the unit product (above) for each manifest below `unit_polys.UNIT_POLYS_VERSION`, after the
+  relationships it joins on. The pubs ingest heal leaves it to the vectors job, which has the
+  memory for it;
+- each per-pub units file (`geolmap/units/<SID>/<SID>.units.parquet`) whose Parquet footer, read by
+  range, says GeoParquet older than 1.1 or no bbox covering is rewritten through
+  `pubs.geoparquet.write` to the same path, with a mutable cache header.
+
+A run keeps only `{series id: what it lacks}` (the layers without tiles, and whether relationships
+or styles are missing, or the GeoPackage is stale) for the whole catalog, and reads a series' manifest again, with `put_bytes_if_unchanged`,
+only when it heals it. Series whose only work is retrying a failed layer go last. In a regular `--all` run, extraction and
+the self-heal share one time budget, `VECTORS_TIME_BUDGET_S` (default 2700 s, inside the job's
+7200 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
+the pubs left for the next run, so the self-heal only runs once the backlog of new pubs is cleared.
+The self-heal stops starting series, finishes the one in progress, and prints `Self-heal: N layers
+tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written, G GeoPackages built, N pubs' unit polygons built; K layers,
+J pubs and P units files still pending, the next run continues`. Targeted and forced runs extract
+every pub they are given; a forced run re-extracts everything, so nothing is left to heal.
+
+The run exits 1 only for work that failed in that run: a pub that failed to extract, a layer whose
+tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
+time budget left pending is not a failure. In a batch run, a pub whose layers fail on bad source
+data (no projection, an unreadable or corrupt file, a broken zip, invalid geometry, a dead link:
+`vectors.DATA_ERRORS`) with exactly the errors of its last attempt is listed as a known data
+problem instead and retried every run; its first such failure, or any change to it, still fails
+the run. A code error, server error or timeout always fails it.
+
+The pubs ingest (4Gi) heals relationships and units files before it writes the items (stopping new
+series after 600 s), so any refresh catches those up and publishes them in the same run. It does
+not tile, style or package: tiling reads whole layers and belongs to the vectors job, and so do the
+style files and the GeoPackage. **Rebuild pubs STAC** alone therefore does not build missing PMTiles; a **Full refresh**
+does, because it runs the vectors job before the ingest. The ingest reads each vector manifest once, on 16 threads, keeps the reduced
+form the items are built from plus the small needs index, and reads again only the series the heal
+changed. Pubs extracted before PMTiles and relationships were recorded catch up this way: repeat a
+refresh until it reports 0 pending. After the units files have caught up, purge the CDN
+cache for `geolmap/units/` once: the old files were served as immutable, so the edge keeps them until
+purged.
+
+Publication **files** (PDFs, plate/GIS/data zips, spreadsheets) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps
 the publisher's URL as an `alternate`; unmirrored files stay linked to the publisher.

@@ -14,7 +14,17 @@ from django.conf import settings
 
 log = logging.getLogger(__name__)
 
-PUB_COLLECTIONS = ["ugs-publications", "ugs-mining-district-files", "ugs-external"]
+# The small per-series summary `refresh_catalog` writes beside the catalog root. The panel reads it
+# instead of the root items.json, which lists every publication and every publication Item.
+COVERAGE_SUMMARY = "pub-coverage.json"
+
+
+def pub_collections() -> tuple[str, ...]:
+    """The publication groups, defined once in core.stac (imported lazily: ugs_warehouse is not on
+    the path during a local `manage.py check`)."""
+    from ugs_warehouse.core.stac import PUB_GROUPS
+
+    return PUB_GROUPS
 
 
 def _get(url: str):
@@ -29,7 +39,7 @@ def _get(url: str):
                 raw = gzip.decompress(raw)
             except OSError:
                 pass
-        return json.loads(raw.decode())
+        return json.loads(raw)
     except Exception:
         # The dashboard degrades to "unknown" rather than erroring, but a catalog that has moved
         # or stopped decoding must not do that silently.
@@ -86,28 +96,56 @@ def cog_coverage() -> dict:
     return _cached("cog_coverage", _cog_coverage)
 
 
+def _publication_series_coverage(summary: dict, coll: str,
+                                 series: set[str]) -> tuple[int, list[str]] | None:
+    """Coverage of collection-layout series from the refresh's summary: (publication Items, ids
+    of those with a COG; a single-file publication keeps its plate on the Collection and counts the
+    same way). None when the summary has no entry for the group or one of its series."""
+    rows = (summary.get("groups") or {}).get(coll) or {}
+    if not series <= rows.keys():
+        return None
+    return (sum(rows[s]["items"] for s in series),
+            [cid for s in sorted(series) for cid in rows[s]["cog_ids"]])
+
+
 def _cog_coverage() -> dict:
     base = settings.STAC_BASE
     out = {"collections": [], "total_items": 0, "total_cogs": 0}
-    for coll in PUB_COLLECTIONS:
+    summary: dict | None = None
+    for coll in pub_collections():
         cat = _get(f"{base}/{coll}/catalog.json")
         if not cat:
             out["collections"].append({"id": coll, "items": 0, "cogs": 0, "cog_ids": [], "error": True})
             continue
-        series = [lnk["href"].split("/")[-2] for lnk in cat.get("links", []) if lnk.get("rel") == "child"]
+        kids = [lnk["href"] for lnk in cat.get("links", []) if lnk.get("rel") == "child"]
+        # A series in the collection layout is a catalog whose items.json lists publications, not
+        # plates; its coverage comes from the root index instead.
+        old = [h.split("/")[-2] for h in kids if not h.endswith("/catalog.json")]
+        migrated = {h.split("/")[-2] for h in kids if h.endswith("/catalog.json")}
 
         def scan(s):
             idx = _get(f"{base}/{coll}/{s}/items.json") or {}
             items = idx.get("items", [])
             return len(items), [it["id"] for it in items if _has_cog(it)]
 
-        total, cog_ids = 0, []
+        total, cog_ids, error, message = 0, [], False, ""
         with cf.ThreadPoolExecutor(max_workers=16) as ex:
-            for n, ids in ex.map(scan, series):
+            for n, ids in ex.map(scan, old):
                 total += n
                 cog_ids += ids
+        if migrated:
+            summary = summary if summary is not None else (_get(f"{base}/{COVERAGE_SUMMARY}") or {})
+            covered = _publication_series_coverage(summary, coll, migrated)
+            error = covered is None  # no summary yet, or one older than the series' migration
+            if covered:
+                total += covered[0]
+                cog_ids += covered[1]
+            else:
+                message = f"{COVERAGE_SUMMARY} missing or stale for {coll}; run Refresh catalog"
+                log.warning(message)
         cog_ids.sort()
-        out["collections"].append({"id": coll, "items": total, "cogs": len(cog_ids), "cog_ids": cog_ids})
+        row = {"id": coll, "items": total, "cogs": len(cog_ids), "cog_ids": cog_ids}
+        out["collections"].append({**row, "error": True, "message": message} if error else row)
         out["total_items"] += total
         out["total_cogs"] += len(cog_ids)
     return out

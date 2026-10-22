@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ActiveLayer, boundsOf, clampSize, colorForId, hasFootprint, LAYER_COLORS, layerParam,
+import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, GEOM_FILTER, LAYER_COLORS, layerParam, mapDefaultLayers, NEUTRAL_VECTOR_COLOR, previewDefaultLayers,
   mapKindOf, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
@@ -67,19 +67,6 @@ describe("mapKindOf", () => {
     expect(mapKindOf({ raster: true, cog: true, footprint: true })).toBe("raster");
     expect(mapKindOf({ cog: true, footprint: true })).toBe("cog");
     expect(mapKindOf({ footprint: true })).toBe("footprint");
-  });
-});
-
-describe("hasFootprint", () => {
-  it("is true for geometry or a real (>=4) bbox", () => {
-    expect(hasFootprint({ geometry: { type: "Point", coordinates: [-111, 39] } } as StacDoc)).toBe(true);
-    expect(hasFootprint({ bbox: [-114, 37, -109, 42] } as StacDoc)).toBe(true);
-  });
-
-  it("is false for aspatial items / too-short bbox / undefined", () => {
-    expect(hasFootprint(undefined)).toBe(false);
-    expect(hasFootprint({} as StacDoc)).toBe(false);
-    expect(hasFootprint({ bbox: [1, 2] } as StacDoc)).toBe(false);
   });
 });
 
@@ -230,5 +217,33 @@ describe("orderedSublayerIds", () => {
       { styledCount: () => undefined, cogReady: false }))
       .toEqual(["rpm-a_b_c-raster", "pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
     expect(slugOf("a.b:c")).toBe("a_b_c");
+  });
+});
+
+describe("the unstyled renders on the preview and the Map page", () => {
+  it("are both defaultVectorLayers: neutral in the preview, the layer's swatch on the Map page", () => {
+    const strip = (ls: ReturnType<typeof defaultVectorLayers>) => ls.map(({ type, filter, paint }) => ({ type, filter, paint }));
+    expect(previewDefaultLayers()).toEqual(strip(defaultVectorLayers(NEUTRAL_VECTOR_COLOR)));
+    expect(mapDefaultLayers("hazards_qfaults")).toEqual(defaultVectorLayers(colorForId("hazards_qfaults")));
+    // Same layers, same filters, same paint properties: only the colour differs.
+    expect(strip(mapDefaultLayers("x")).map((l) => [l.type, l.filter, Object.keys(l.paint)]))
+      .toEqual(previewDefaultLayers().map((l) => [l.type, l.filter, Object.keys(l.paint)]));
+  });
+});
+
+describe("defaultVectorLayers", () => {
+  it("draws every geometry type visibly when there is no style: fill + outline, line, circle", () => {
+    const layers = defaultVectorLayers("#123456");
+    expect(layers.map((l) => [l.kind, l.type])).toEqual([["fill", "fill"], ["line", "line"], ["circle", "circle"]]);
+    expect(layers.map((l) => l.filter)).toEqual([GEOM_FILTER.fill, GEOM_FILTER.line, GEOM_FILTER.point]);
+    const [fill, line, circle] = layers;
+    expect(fill.paint["fill-color"]).toBe("#123456");
+    expect(fill.paint["fill-opacity"]).toBeGreaterThan(0);
+    expect(fill.paint["fill-outline-color"]).toBe("#123456");
+    // The line layer's filter takes polygons too, so a polygon gets a real outline.
+    expect(GEOM_FILTER.line).toContainEqual(expect.arrayContaining(["Polygon"]));
+    expect(line.paint["line-width"]).toBeGreaterThan(0);
+    expect(circle.paint["circle-radius"]).toBeGreaterThan(0);
+    expect(circle.paint["circle-opacity"]).toBeGreaterThan(0);
   });
 });

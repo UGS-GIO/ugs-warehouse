@@ -348,10 +348,45 @@ def test_report_records_produced_cog(monkeypatch, tmp_path):
     assert cog["compress"].lower() == "deflate"  # lossless master, not webp
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_new_units_file_uploads_mutable_and_its_cog_immutable(monkeypatch, tmp_path):
+    """The self-heal can rewrite a units file in place, so it is never cached as immutable; a COG
+    is write-once and stays immutable."""
+    from ugs_warehouse.pubs import harvest
+
+    pub = identity.Pub(series_id="M-1")
+    harvest._report_begin("M-1")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates",
+                        lambda zips, work, **_: (str(tmp_path / "plate.tif"), str(tmp_path / "units.shp")))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)
+    monkeypatch.setattr(harvest.geoparquet, "write", lambda src, path: open(path, "wb").close())
+    _stub_8bit(monkeypatch, harvest)
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    headers = {}
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda local, obj, **k: headers.__setitem__(obj, k["cache_control"]))
+    monkeypatch.setattr(harvest.gcs, "upload", lambda local, obj, **k: headers.__setitem__(obj, k["cache_control"]))
+
+    assert _harvest_attempt(pub, ["http://x/m-1.zip"]) == "ok"
+    assert headers == {pub.cog_object: harvest.gcs.CACHE_IMMUTABLE,
+                       f"{identity.UNITS_PREFIX}/M-1/M-1.units.parquet": harvest.gcs.CACHE_MUTABLE}
+
+
 def _stub_8bit(monkeypatch, harvest):
     """_harvest_attempt tests fake the plate and COG files; treat both as already 8-bit."""
     monkeypatch.setattr(harvest, "_plate_kind", lambda p: "byte")
     monkeypatch.setattr(harvest, "_band_types", lambda p: ["Byte"] * 4)
+    monkeypatch.setattr(harvest, "_embed_band_statistics", lambda p: None)  # the plate is a fake
 
 
 # --- color source selection (ALL-5995) --------------------------------------------------------
@@ -619,7 +654,10 @@ def test_cog_zoom_strategy_reaches_cog_translate(monkeypatch, tmp_path):
 
     assert _harvest_attempt(pub, ["http://x/m-z.zip"]) == "ok"
     assert seen["zoom_level_strategy"] == "upper"
-    assert seen["web_optimized"] is True   # still web-optimized, only the zoom rounding changed
+    # Still web-mercator tiled (`tms`, which rio-cogeo wants in place of web_optimized), carrying
+    # the band statistics embedded on its input.
+    assert seen["tms"].id == "WebMercatorQuad" and "web_optimized" not in seen
+    assert seen["forward_band_tags"] is True
 
 
 @pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
@@ -767,6 +805,7 @@ def _attempt_with(monkeypatch, tmp_path, kind, cog_types=("Byte",) * 4):
     monkeypatch.setattr(harvest, "_plate_kind", lambda p: kind)
     monkeypatch.setattr(harvest, "_lineart_to_byte", lambda p, work: str(tmp_path / "plate.lineart.tif"))
     monkeypatch.setattr(harvest, "_band_types", lambda p: list(cog_types))
+    monkeypatch.setattr(harvest, "_embed_band_statistics", lambda p: None)  # the plate is a fake
 
     def fake_cog_translate(src, dst, prof, **k):
         with open(dst, "wb") as f:
@@ -1058,3 +1097,75 @@ def test_units_only_extracts_the_units_and_picks_no_plate(monkeypatch, tmp_path)
     assert shp == str(tmp_path / "work" / "gis/GeologicUnits.shp")
     assert os.path.exists(shp)
     render.assert_not_called()
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_stale_statistics_on_the_input_never_reach_the_cog(tmp_path):
+    """Every input band tag is forwarded, so older statistics must not survive the recompute."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+
+    tif = str(tmp_path / "plate.tif")
+    with rasterio.open(tif, "w", driver="GTiff", width=10, height=10, count=1, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12_400_000, 4_900_000, 30, 30)) as ds:
+        ds.write(np.full((1, 10, 10), 7, dtype="uint8"))
+        ds.update_tags(1, STATISTICS_APPROXIMATE="YES", STATISTICS_VALID_PERCENT="12",
+                       STATISTICS_MEAN="99", OTHER="kept")
+
+    harvest._embed_band_statistics(tif)
+
+    with rasterio.open(tif) as ds:
+        tags = ds.tags(1)
+    assert "STATISTICS_APPROXIMATE" not in tags
+    assert float(tags["STATISTICS_VALID_PERCENT"]) == 100 and float(tags["STATISTICS_MEAN"]) == 7
+    assert tags["OTHER"] == "kept"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_plate_cog_carries_band_statistics_with_the_web_mercator_tiling(tmp_path):
+    """The real path on a tiny RGBA plate: statistics embedded on the input reach every COG band,
+    the alpha band included, the COG validates, and `tms` tiles exactly as `web_optimized` did."""
+    import warnings
+
+    import morecantile
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rasterio.transform import from_origin
+    from rio_cogeo.cogeo import cog_translate, cog_validate
+    from rio_cogeo.profiles import cog_profiles
+
+    from ugs_warehouse.pubs import harvest
+
+    src = str(tmp_path / "rgba.tif")
+    data = np.zeros((4, 300, 400), dtype="uint8")
+    data[0, :, :200], data[0, :, 200:] = 50, 250  # the half the alpha masks out carries 250
+    data[1], data[2] = 100, 150
+    data[3, :, :200] = 255
+    with rasterio.open(src, "w", driver="GTiff", width=400, height=300, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12_400_000, 4_900_000, 30, 30)) as ds:
+        ds.write(data)
+        ds.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+
+    harvest._embed_band_statistics(src)
+    cog, old = str(tmp_path / "new.tif"), str(tmp_path / "old.tif")
+    prof = cog_profiles.get("deflate")
+    cog_translate(src, cog, dict(prof), tms=morecantile.tms.get("WebMercatorQuad"),
+                  forward_band_tags=True, quiet=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        cog_translate(src, old, dict(prof), web_optimized=True, quiet=True)
+
+    assert cog_validate(cog)[0]
+    with rasterio.open(cog) as new, rasterio.open(old) as was:
+        stats = [{k: float(new.tags(b)[f"STATISTICS_{k}"]) for k in ("MINIMUM", "MAXIMUM", "MEAN", "STDDEV")}
+                 for b in new.indexes]
+        assert (new.transform, new.shape, new.block_shapes, new.overviews(1)) == (
+            was.transform, was.shape, was.block_shapes, was.overviews(1))
+        assert {k: new.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")} == {
+            k: was.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")}
+    assert stats[0] == {"MINIMUM": 50.0, "MAXIMUM": 50.0, "MEAN": 50.0, "STDDEV": 0.0}  # masked out
+    assert stats[3]["MINIMUM"] == 0.0 and stats[3]["MAXIMUM"] == 255.0  # the alpha band too

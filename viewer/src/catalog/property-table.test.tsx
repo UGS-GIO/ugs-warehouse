@@ -17,3 +17,11 @@ describe("PropertyTable's datetime row", () => {
     expect(screen.getByText("2026-09-12")).toBeTruthy();
   });
 });
+
+describe("PropertyTable's structural rows", () => {
+  it("does not list the pointer to a generated style file", () => {
+    render(<PropertyTable properties={{ "ugs:series_id": "OFR-1", "ugs:generated_style": "https://cdn.example/a.style.json" }} />);
+    expect(screen.getByText("series id")).toBeTruthy();
+    expect(screen.queryByText("generated style")).toBeNull();
+  });
+});

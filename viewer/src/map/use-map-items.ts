@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 import { type CollectionSummary, type ItemRef } from "@/catalog/browse";
+import { layerRowsOf } from "@/catalog/catalog";
 import { useIndexedItems } from "@/catalog/use-catalog";
 import { type LayerRow } from "@/map/layer-list";
 import { drawsAsLayer, toLayer } from "@/map/to-layer";
 import { useOffline } from "@/offline/store";
 import type { View } from "@/shell/nav";
-import { idOf, zarrAsset } from "@/stac";
+import { zarrAsset } from "@/stac";
 import { hasItemsIndex, rootIndexItems, useRootIndex } from "@/stac/items-index";
 
 // The Map and Discover views load every leaf collection's index (all items → the map, the facets
@@ -40,14 +41,12 @@ export function useMapItems(view: View, leafColls: CollectionSummary[], layerCol
   const layerIds = urlLayerIds ?? (savedLayerIds.length ? savedLayerIds : undefined);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
-  const layerRows: LayerRow[] = useMemo(() => mapItems
-    .filter((r) => drawsAsLayer(r.data))
+  const layerRows: LayerRow[] = useMemo(() => layerRowsOf(mapItems, {
+    draws: drawsAsLayer, collTitle,
     // A datacube is a data layer whatever catalog it came from — the sub-catalog allowlist only
     // knows our own ids, so a federated cube would otherwise file under publication plates.
-    .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
-                   group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) || !!zarrAsset(r.data) }))
-    .sort((a, b) => Number(b.layer) - Number(a.layer)
-                    || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
+    isLayer: (r) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data),
+  }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mapLoadKey]);
   return { mapItems, mapLoadKey, mapItemsLoading, layerIds, layerRows };

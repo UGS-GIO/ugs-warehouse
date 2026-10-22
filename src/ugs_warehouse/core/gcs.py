@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import sys
 import time
 from collections.abc import Iterator
@@ -23,7 +24,7 @@ from typing import NamedTuple
 import obstore as obs
 from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
-from obstore.exceptions import AlreadyExistsError, PreconditionError
+from obstore.exceptions import AlreadyExistsError, NotFoundError, PreconditionError
 from obstore.store import GCSStore
 
 from . import config
@@ -288,6 +289,45 @@ def download(object_path: str, dest: str, *, bucket: str | None = None) -> None:
             f.write(chunk)
 
 
+class _ObjectReader(io.RawIOBase):
+    """A seekable file object over an obstore reader, which pyarrow needs (`closed`, `readable`)."""
+
+    def __init__(self, reader) -> None:
+        super().__init__()
+        self._reader = reader
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def readinto(self, buf) -> int:
+        data = self._reader.read(len(buf))
+        buf[: len(data)] = data
+        return len(data)
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        return self._reader.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._reader.tell()
+
+    def close(self) -> None:
+        # Not every obstore reader can be closed; those are released with the last reference.
+        closer = getattr(self._reader, "close", None)
+        if closer is not None:
+            closer()
+        super().close()
+
+
+def open_reader(object_path: str) -> io.RawIOBase:
+    """A seekable file object over an object, read with range requests. `pq.ParquetFile` over it
+    fetches the footer and only the column chunks asked for, so a few columns of a large file are
+    read without downloading it."""
+    return _ObjectReader(obs.open_reader(_store(), object_path))
+
+
 def get_tail(object_path: str, length: int) -> bytes:
     """The last `length` bytes of an object, such as a Parquet footer, without the rest of it."""
     size = obs.head(_store(), object_path)["size"]
@@ -313,6 +353,34 @@ def delete(object_path: str) -> None:
         obs.delete(_store(), object_path)
     except Exception:  # noqa: BLE001 — already gone / race → nothing to clean
         pass
+
+
+# Paths per batched delete call. GCS has no bulk delete; obstore runs these as concurrent requests.
+DELETE_BATCH = 1000
+
+
+def delete_many(paths: list[str], *, strict: bool = True) -> None:
+    """Delete objects, one batched `obs.delete` per DELETE_BATCH paths. A missing object is not an
+    error. With `strict`, any other failure raises once every path has been tried; without it,
+    failures are ignored like `delete`'s."""
+    failed: list[str] = []
+    for start in range(0, len(paths), DELETE_BATCH):
+        batch = list(paths[start:start + DELETE_BATCH])
+        try:
+            obs.delete(_store(), batch)
+            continue
+        except Exception:  # noqa: BLE001 - one error per batch: retried path by path to classify
+            pass
+        # A path the batch already deleted reads as not found here.
+        for path in batch:
+            try:
+                obs.delete(_store(), path)
+            except (FileNotFoundError, NotFoundError):
+                pass
+            except Exception as e:  # noqa: BLE001 - collected and raised below when strict
+                failed.append(f"{path}: {type(e).__name__}: {e}")
+    if failed and strict:
+        raise RuntimeError(f"{len(failed)} object(s) not deleted: {failed}")
 
 
 class LeaseTimeout(RuntimeError):
@@ -369,11 +437,11 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
             print(f"[gcs] lease release failed for {object_path}: {e}", file=sys.stderr)
 
 
-def list_etags(prefix: str) -> dict[str, str]:
-    """{path: etag} for every object under `prefix`. An etag changes whenever the object is
-    rewritten, so this fingerprints a prefix without reading any object."""
+def list_etags(prefix: str, *, bucket: str | None = None) -> dict[str, str]:
+    """{path: etag} for every object under `prefix` in `bucket` (default BUCKET). An etag changes
+    whenever the object is rewritten, so this fingerprints a prefix without reading any object."""
     out: dict[str, str] = {}
-    for batch in obs.list(_store(), prefix=prefix):
+    for batch in obs.list(_store(bucket), prefix=prefix):
         out.update((m["path"], m.get("e_tag") or "") for m in batch)
     return out
 

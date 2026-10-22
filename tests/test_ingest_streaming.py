@@ -29,6 +29,7 @@ def test_streaming_path_runs_sinks_once():
     with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
          patch("ugs_warehouse.vector.sink_ducklake.write") as ducklake, \
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
+         patch("ugs_warehouse.vector.sink_archive.write_geojson") as geojson, \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -41,6 +42,7 @@ def test_streaming_path_runs_sinks_once():
     backend.iter_chunks.assert_not_called()      # streaming, not chunked
     ducklake.assert_called_once()
     archive.assert_called_once()
+    geojson.assert_called_once()
     pmtiles.assert_called_once()
     stac_write.assert_called_once()
     refresh.assert_called_once()
@@ -109,6 +111,7 @@ def _run_unchanged(**kwargs):
          patch("ugs_warehouse.vector.fingerprint.is_unchanged", return_value=True), \
          patch("ugs_warehouse.vector.sink_ducklake.write") as ducklake, \
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
+         patch("ugs_warehouse.vector.sink_archive.write_geojson"), \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -155,6 +158,7 @@ def _run_with_failing(failing=None, published="old-hash"):
          patch("ugs_warehouse.vector.sink_archive.write", side_effect=effect("archive")), \
          patch("ugs_warehouse.vector.sink_archive.write_overviews",
                side_effect=effect("overview")) as overview, \
+         patch("ugs_warehouse.vector.sink_archive.write_geojson", side_effect=effect("geojson")), \
          patch("ugs_warehouse.vector.sink_pmtiles.build", side_effect=effect("pmtiles")), \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -165,7 +169,7 @@ def _run_with_failing(failing=None, published="old-hash"):
     return rc, stac_write.call_args.kwargs["content_hash"], overview.call_count
 
 
-@pytest.mark.parametrize("failing", ["ducklake", "archive", "overview", "pmtiles"])
+@pytest.mark.parametrize("failing", ["ducklake", "archive", "overview", "geojson", "pmtiles"])
 def test_a_failed_data_sink_keeps_the_published_hash(failing):
     """The hash vouches for the published artifacts. If it moved while an old one stayed, the next
     --skip-unchanged run would skip the rebuild."""

@@ -4,13 +4,14 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
-import { type ExportFormat, FORMATS } from "@/data/export-formats";
+import { type ExportFormat, exportFormatsFor } from "@/data/export-formats";
 import { parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
 import { Panel } from "./panel";
 import { exportFindings, type Finding, findingsHeading } from "./export-findings";
+import { isSpatialData } from "./item-view";
 import { to2d } from "@/lib/bbox";
 
 const EPSG_ITEMS = [
@@ -32,16 +33,6 @@ const BBOX_LABELS = ["W", "S", "E", "N"];
 
 // Carries its own format, so rendering it never reaches back into the mutation's variables.
 type Warning = { fmt: ExportFormat; findings: Finding[] };
-
-// What each export is, by file, without naming an application.
-const FILE_HINTS: Record<ExportFormat, string> = {
-  shp: ".shp in a zip",
-  gpkg: ".gpkg",
-  gdb: ".gdb in a zip",
-  fgb: ".fgb",
-  geojson: ".geojson · always WGS 84",
-  csv: ".csv · geometry as WKT",
-};
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
@@ -95,11 +86,13 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const tooBig = warn?.findings.some((f) => f.level === "too-big");
 
   if (!parquet) return null;
+  // A plain table has no geometry to write, so it gets CSV only and no projection or clip.
+  const spatial = isSpatialData(item);
 
   return (
     <Panel title="Export" note="Converted from the GeoParquet in your browser when you click.">
       <div className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
-        {FORMATS.map((f) => (
+        {exportFormatsFor(spatial).map((f) => (
           <button key={f.id} type="button" aria-disabled={run.isPending} aria-busy={busy === f.id}
             onClick={(e) => {
               if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
@@ -109,7 +102,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             aria-label={`Download ${f.label}`} className={ROW}>
             <span className="font-medium">
               {f.label}
-              <span className={ROW_SUB}>{FILE_HINTS[f.id]}</span>
+              <span className={ROW_SUB}>{f.hint}</span>
             </span>
             <span aria-hidden className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
           </button>
@@ -136,7 +129,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         </button>
       ))}
 
-      <details className="mt-2 border-t border-border pt-2">
+      {spatial && <details className="mt-2 border-t border-border pt-2">
         <summary className="cursor-pointer text-sm text-muted-foreground">Projection &amp; area</summary>
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
           <label className="flex items-center gap-1">
@@ -178,7 +171,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             )}
           </div>
         )}
-      </details>
+      </details>}
 
       {warn && (
         <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}

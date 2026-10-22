@@ -25,8 +25,9 @@ import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, searchCatalog } from "./search-index";
-import { idOf, type StacDoc } from "@/stac";
-import { ItemDetail } from "@/catalog/item-detail";
+import { hasFootprint, idOf, type StacDoc } from "@/stac";
+import type { Crumb } from "@/catalog/breadcrumb";
+import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
 import { useIsWide } from "@/ui/use-breakpoint";
@@ -51,10 +52,12 @@ const DRAWER = { initial: 560, min: 360, max: 1100 };
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, loading = false, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, searchItems, itemsKey, loading = false, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError,
+  selectedMissing, selectedPartOf, selectedCollectionId, selectedCrumbs, onCloseItem, onViewOnMap, onExplore,
   renderSearch,
 }: {
   items: ItemRef[];
+  searchItems?: ItemRef[];             // the set the shared search index covers (a superset of items)
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
   loading?: boolean; // the catalog is still streaming in, so category counts are not final yet
   onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
@@ -62,7 +65,10 @@ export function DiscoveryView({
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
   selectedItemError?: unknown;         // that doc's request error (e.g. offline and never cached)
+  selectedPartOf?: PartOf;             // the publication the selected Item belongs to
+  selectedMissing?: string;            // the selected id when this catalog has no such item
   selectedCollectionId?: string;
+  selectedCrumbs?: Crumb[];            // the selected item's trail; a crumb never closes the drawer
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
@@ -106,8 +112,10 @@ export function DiscoveryView({
   // items array is rebuilt every render, so rebuilding the index each keystroke would re-index
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The shared index is built over `searchItems` (the header search's set) so both keep one index
+  // under one key; hits outside `items` drop out below.
   const { index, docs: itemDocs } = useMemo(
-    () => catalogIndex(itemsKey, withData),
+    () => catalogIndex(itemsKey, searchItems ? searchItems.filter((it) => it.data) : withData),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // Survey Notes articles, in a SECOND index, built in a worker. Not merged into the item index: an
@@ -143,7 +151,7 @@ export function DiscoveryView({
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
     const m = new Map<string, number[] | undefined>();
-    for (const it of withData) m.set(it.href, it.data?.bbox);
+    for (const it of withData) if (hasFootprint(it.data)) m.set(it.href, it.data?.bbox);
     return m;
   }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -179,6 +187,7 @@ export function DiscoveryView({
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
   const footprints = useMemo<Footprint[]>(() => results
+    .filter((it) => hasFootprint(it.data))
     .map((it) => ({ href: it.href, id: idOf(it.href), title: discoveryTitle(it), bbox: it.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4), [results]);
   const hoverBbox = hoverHref ? bboxByHref.get(hoverHref) : undefined;
@@ -503,7 +512,7 @@ export function DiscoveryView({
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} layout="drawer"
+              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} missing={selectedMissing} partOf={selectedPartOf} crumbs={selectedCrumbs} layout="drawer"
                 onBack={onCloseItem} onMap={onViewOnMap} onExplore={onExplore} />
             </div>
           </aside>

@@ -1,0 +1,2101 @@
+{
+ "layers": [
+  {
+   "label": "hotspotSumGrid",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "SumBankSta",
+     "type": "integer"
+    },
+    {
+     "name": "SumCarbSeq",
+     "type": "integer"
+    },
+    {
+     "name": "SumSedRet",
+     "type": "integer"
+    },
+    {
+     "name": "SumStreamM",
+     "type": "integer"
+    },
+    {
+     "name": "SumAquInv",
+     "type": "integer"
+    },
+    {
+     "name": "SumFishHab",
+     "type": "integer"
+    },
+    {
+     "name": "SumShoreHa",
+     "type": "integer"
+    },
+    {
+     "name": "SumWaterfo",
+     "type": "integer"
+    },
+    {
+     "name": "SumSurfDet",
+     "type": "integer"
+    },
+    {
+     "name": "SumAllCNHP",
+     "type": "integer"
+    },
+    {
+     "name": "SumPhysCNH",
+     "type": "integer"
+    },
+    {
+     "name": "SumHabCNHP",
+     "type": "integer"
+    },
+    {
+     "name": "CountFunct",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "AllCNHP_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgAllCNHP",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "AllCNHP_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisAllCNHP",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "AquInv_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgAquInv",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "AquInv_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisAquInv",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "BankSta_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgBankSta",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "BankSta_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisBankSta",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "CarbSeq_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgCarbSeq",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "CarbSeq_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisCarbSeq",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "HabCNHP_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgHabCNHP",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "HabCNHP_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisHabCNHP",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "PhysCNH_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgPhysCNH",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "PhysCNH_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisPhysCNH",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "SedRet_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgSedRet",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "SedRet_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisSedRet",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ShoreHa_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgShoreHa",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "ShoreHa_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisShoreHa",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "StreamM_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgStreamM",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "StreamM_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisStreamM",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "SurfDet_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgSurfDet",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "SurfDet_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisSurfDet",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "Waterfo_AvgHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "AvgWaterfo",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "Waterfo_DisHotspot",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "DisWaterfo",
+     "type": "number"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "Working_withScores",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__FunctionAnalyses__utahLake_modified_20250829",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "SumBankSta",
+     "type": "integer"
+    },
+    {
+     "name": "SumCarbSeq",
+     "type": "integer"
+    },
+    {
+     "name": "SumSedRet",
+     "type": "integer"
+    },
+    {
+     "name": "SumStreamM",
+     "type": "integer"
+    },
+    {
+     "name": "SumAquInv",
+     "type": "integer"
+    },
+    {
+     "name": "SumFishHab",
+     "type": "integer"
+    },
+    {
+     "name": "SumShoreHa",
+     "type": "integer"
+    },
+    {
+     "name": "SumWaterfo",
+     "type": "integer"
+    },
+    {
+     "name": "SumSurfDet",
+     "type": "integer"
+    },
+    {
+     "name": "SumAllCNHP",
+     "type": "integer"
+    },
+    {
+     "name": "SumPhysCNH",
+     "type": "integer"
+    },
+    {
+     "name": "SumHabCNHP",
+     "type": "integer"
+    },
+    {
+     "name": "CountFunct",
+     "type": "integer"
+    },
+    {
+     "name": "AvgBankSta",
+     "type": "number"
+    },
+    {
+     "name": "AvgCarbSeq",
+     "type": "number"
+    },
+    {
+     "name": "AvgSedRet",
+     "type": "number"
+    },
+    {
+     "name": "AvgStreamM",
+     "type": "number"
+    },
+    {
+     "name": "AvgAquInv",
+     "type": "number"
+    },
+    {
+     "name": "AvgShoreHa",
+     "type": "number"
+    },
+    {
+     "name": "AvgWaterfo",
+     "type": "number"
+    },
+    {
+     "name": "AvgSurfDet",
+     "type": "number"
+    },
+    {
+     "name": "AvgAllCNHP",
+     "type": "number"
+    },
+    {
+     "name": "AvgPhysCNH",
+     "type": "number"
+    },
+    {
+     "name": "AvgHabCNHP",
+     "type": "number"
+    },
+    {
+     "name": "DisBankSta",
+     "type": "number"
+    },
+    {
+     "name": "DisCarbSeq",
+     "type": "number"
+    },
+    {
+     "name": "DisSedRet",
+     "type": "number"
+    },
+    {
+     "name": "DisStreamM",
+     "type": "number"
+    },
+    {
+     "name": "DisAquInv",
+     "type": "number"
+    },
+    {
+     "name": "DisShoreHa",
+     "type": "number"
+    },
+    {
+     "name": "DisWaterfo",
+     "type": "number"
+    },
+    {
+     "name": "DisSurfDet",
+     "type": "number"
+    },
+    {
+     "name": "DisAllCNHP",
+     "type": "number"
+    },
+    {
+     "name": "DisPhysCNH",
+     "type": "number"
+    },
+    {
+     "name": "DisHabCNHP",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_UW21_proj",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__analysisUnits",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_ninetiesUpdate",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__analysisUnits",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "Municipalities_UW21_proj_filled",
+   "spatial": true,
+   "rows": 165,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__analysisUnits",
+   "columns": [
+    {
+     "name": "FID_Munici",
+     "type": "integer"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "FIPS",
+     "type": "string"
+    },
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "LabelYN",
+     "type": "string"
+    },
+    {
+     "name": "Label",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "Municipalities_UW21_proj_filled_ninetiesUpdate",
+   "spatial": true,
+   "rows": 151,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__analysisUnits",
+   "columns": [
+    {
+     "name": "FID_Munici",
+     "type": "integer"
+    },
+    {
+     "name": "NAME",
+     "type": "string"
+    },
+    {
+     "name": "FIPS",
+     "type": "string"
+    },
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "80sto2021_wetToImp_kernelContours_350",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__clusters__clusterChange_80sto2021_projectArea",
+   "columns": [
+    {
+     "name": "ContourMin",
+     "type": "number"
+    },
+    {
+     "name": "ContourMax",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "80sto2001_wetToImp_kernelContours_150",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__clusters__clusterChange_80to2001_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "ContourMin",
+     "type": "number"
+    },
+    {
+     "name": "ContourMax",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "98to2021_wetToImp_kernelContours_50",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__clusters__clusterChange_98to2021_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "ContourMin",
+     "type": "number"
+    },
+    {
+     "name": "ContourMax",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_updateArea_80sto2001_CornersHotspot_wetlandToImpervious",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_80sto2001_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_updateArea_80sto2001_OptimizedHotspot_wetlandToImpervious",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_80sto2001_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_updateArea_80sto2001_summarizedLoss",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_80sto2001_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "WETTOIMP_C",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOWAT_C",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOWAT_S",
+     "type": "integer"
+    },
+    {
+     "name": "UPLTOWAT_C",
+     "type": "integer"
+    },
+    {
+     "name": "UPLTOWAT_S",
+     "type": "integer"
+    },
+    {
+     "name": "LOSS_C",
+     "type": "integer"
+    },
+    {
+     "name": "LOSS_S",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_UW21_80sto2021_CornersHotspot_wetlandToImpervious",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_80sto2021_wholeProject",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_UW21_80sto2021_OptimizedHotspot_wetlandToImpervious",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_80sto2021_wholeProject",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_UW21_80sto2021_summarizedLoss",
+   "spatial": true,
+   "rows": 3334,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_80sto2021_wholeProject",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "WETTOIMP_C",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOWAT_C",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOWAT_S",
+     "type": "integer"
+    },
+    {
+     "name": "UPLTOWAT_C",
+     "type": "integer"
+    },
+    {
+     "name": "UPLTOWAT_S",
+     "type": "integer"
+    },
+    {
+     "name": "LOSS_C",
+     "type": "integer"
+    },
+    {
+     "name": "LOSS_S",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_updateArea_98to2021_CornersHotspot_wetlandToImpervious",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_98to2021_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_updateArea_98to2021_OptimizedHotspot_wetlandToImpervious",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_98to2021_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "SOURCE_ID",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "GiZScore",
+     "type": "number"
+    },
+    {
+     "name": "GiPValue",
+     "type": "number"
+    },
+    {
+     "name": "NNeighbors",
+     "type": "integer"
+    },
+    {
+     "name": "Gi_Bin",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "1kmGrid_updateArea_98to2021_summarizedLoss",
+   "spatial": true,
+   "rows": 1748,
+   "geometry_types": [
+    "MultiPolygon",
+    "Polygon"
+   ],
+   "source": "UW21_FinalData__LossAnalyses__summaries__hotspots__1kmGrid_98to2021_ninetiesUpdate",
+   "columns": [
+    {
+     "name": "Cell_ID",
+     "type": "string"
+    },
+    {
+     "name": "WETTOIMP_C",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOIMP_S",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOWAT_C",
+     "type": "integer"
+    },
+    {
+     "name": "WETTOWAT_S",
+     "type": "integer"
+    },
+    {
+     "name": "UPLTOWAT_C",
+     "type": "integer"
+    },
+    {
+     "name": "UPLTOWAT_S",
+     "type": "integer"
+    },
+    {
+     "name": "LOSS_C",
+     "type": "integer"
+    },
+    {
+     "name": "LOSS_S",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "UW21_FinalData__UtahValley_FinalProjectArea",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData",
+   "columns": [
+    {
+     "name": "TNMID",
+     "type": "integer"
+    },
+    {
+     "name": "MetaSourceID",
+     "type": "integer"
+    },
+    {
+     "name": "SourceDataDesc",
+     "type": "integer"
+    },
+    {
+     "name": "SourceOriginator",
+     "type": "integer"
+    },
+    {
+     "name": "SourceFeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "LoadDate",
+     "type": "datetime"
+    },
+    {
+     "name": "GNIS_ID",
+     "type": "number"
+    },
+    {
+     "name": "AreaAcres",
+     "type": "number"
+    },
+    {
+     "name": "AreaSqKm",
+     "type": "number"
+    },
+    {
+     "name": "States",
+     "type": "integer"
+    },
+    {
+     "name": "HUC8",
+     "type": "integer"
+    },
+    {
+     "name": "Name",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UW21_FinalData__LLWWandNWI_simple",
+   "spatial": true,
+   "rows": 7294,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData",
+   "columns": [
+    {
+     "name": "CowAttribute",
+     "type": "string"
+    },
+    {
+     "name": "WaterSource",
+     "type": "string"
+    },
+    {
+     "name": "LLWW_Base",
+     "type": "string"
+    },
+    {
+     "name": "LLWW_Modifiers",
+     "type": "string"
+    },
+    {
+     "name": "LLWW_Join",
+     "type": "string"
+    },
+    {
+     "name": "Landscape",
+     "type": "string"
+    },
+    {
+     "name": "Landform_Waterbody",
+     "type": "string"
+    },
+    {
+     "name": "Flowpath",
+     "type": "string"
+    },
+    {
+     "name": "LLWW_Join_old",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UW21_FinalData__NWI_rip_poly",
+   "spatial": true,
+   "rows": 872,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData",
+   "columns": [
+    {
+     "name": "ATTRIBUTE",
+     "type": "string"
+    },
+    {
+     "name": "QAQC_CODE",
+     "type": "string"
+    },
+    {
+     "name": "WETLAND_TYPE",
+     "type": "string"
+    },
+    {
+     "name": "ACRES",
+     "type": "number"
+    },
+    {
+     "name": "GLOBALID",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UW21_FinalData__NWI_wet_poly",
+   "spatial": true,
+   "rows": 6389,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData",
+   "columns": [
+    {
+     "name": "ATTRIBUTE",
+     "type": "string"
+    },
+    {
+     "name": "QAQC_CODE",
+     "type": "string"
+    },
+    {
+     "name": "WETLAND_TYPE",
+     "type": "string"
+    },
+    {
+     "name": "ACRES",
+     "type": "number"
+    },
+    {
+     "name": "GLOBALID",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "UW21_FinalData__UW21_Functions_20240327",
+   "spatial": true,
+   "rows": 7294,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "UW21_FinalData",
+   "columns": [
+    {
+     "name": "ULT_Join",
+     "type": "string"
+    },
+    {
+     "name": "CowAttribute",
+     "type": "string"
+    },
+    {
+     "name": "CowClass",
+     "type": "string"
+    },
+    {
+     "name": "CowRegime",
+     "type": "string"
+    },
+    {
+     "name": "CowMod",
+     "type": "string"
+    },
+    {
+     "name": "FeatureType",
+     "type": "string"
+    },
+    {
+     "name": "Landscape",
+     "type": "string"
+    },
+    {
+     "name": "Landform_Waterbody",
+     "type": "string"
+    },
+    {
+     "name": "Flowpath",
+     "type": "string"
+    },
+    {
+     "name": "LLWW_Base",
+     "type": "string"
+    },
+    {
+     "name": "LLWW_Modifiers",
+     "type": "string"
+    },
+    {
+     "name": "ag_mod",
+     "type": "string"
+    },
+    {
+     "name": "al_mod",
+     "type": "string"
+    },
+    {
+     "name": "aq_mod",
+     "type": "string"
+    },
+    {
+     "name": "ar_mod",
+     "type": "string"
+    },
+    {
+     "name": "au_mod",
+     "type": "string"
+    },
+    {
+     "name": "ay_mod",
+     "type": "string"
+    },
+    {
+     "name": "ba_mod",
+     "type": "string"
+    },
+    {
+     "name": "bg_mod",
+     "type": "string"
+    },
+    {
+     "name": "bk_mod",
+     "type": "string"
+    },
+    {
+     "name": "bv_mod",
+     "type": "string"
+    },
+    {
+     "name": "ch_mod",
+     "type": "string"
+    },
+    {
+     "name": "dr_mod",
+     "type": "string"
+    },
+    {
+     "name": "ds_mod",
+     "type": "string"
+    },
+    {
+     "name": "ex_mod",
+     "type": "string"
+    },
+    {
+     "name": "fm_mod",
+     "type": "string"
+    },
+    {
+     "name": "fn_mod",
+     "type": "string"
+    },
+    {
+     "name": "fs_mod",
+     "type": "string"
+    },
+    {
+     "name": "gf_mod",
+     "type": "string"
+    },
+    {
+     "name": "gl_mod",
+     "type": "string"
+    },
+    {
+     "name": "go_mod",
+     "type": "string"
+    },
+    {
+     "name": "gr_mod",
+     "type": "string"
+    },
+    {
+     "name": "gw_mod",
+     "type": "string"
+    },
+    {
+     "name": "gz_mod",
+     "type": "string"
+    },
+    {
+     "name": "hf_mod",
+     "type": "string"
+    },
+    {
+     "name": "hs_mod",
+     "type": "string"
+    },
+    {
+     "name": "hw_mod",
+     "type": "string"
+    },
+    {
+     "name": "hy_mod",
+     "type": "string"
+    },
+    {
+     "name": "id_mod",
+     "type": "string"
+    },
+    {
+     "name": "il_mod",
+     "type": "string"
+    },
+    {
+     "name": "im_mod",
+     "type": "string"
+    },
+    {
+     "name": "ir_mod",
+     "type": "string"
+    },
+    {
+     "name": "it_mod",
+     "type": "string"
+    },
+    {
+     "name": "kt_mod",
+     "type": "string"
+    },
+    {
+     "name": "ld_mod",
+     "type": "string"
+    },
+    {
+     "name": "lg_mod",
+     "type": "string"
+    },
+    {
+     "name": "ml_mod",
+     "type": "string"
+    },
+    {
+     "name": "mm_mod",
+     "type": "string"
+    },
+    {
+     "name": "mr_mod",
+     "type": "string"
+    },
+    {
+     "name": "ox_mod",
+     "type": "string"
+    },
+    {
+     "name": "pd_mod",
+     "type": "string"
+    },
+    {
+     "name": "pf_mod",
+     "type": "string"
+    },
+    {
+     "name": "pl_mod",
+     "type": "string"
+    },
+    {
+     "name": "pp_mod",
+     "type": "string"
+    },
+    {
+     "name": "re_mod",
+     "type": "string"
+    },
+    {
+     "name": "rf_mod",
+     "type": "string"
+    },
+    {
+     "name": "rn_mod",
+     "type": "string"
+    },
+    {
+     "name": "rr_mod",
+     "type": "string"
+    },
+    {
+     "name": "sa_mod",
+     "type": "string"
+    },
+    {
+     "name": "sf_mod",
+     "type": "string"
+    },
+    {
+     "name": "sl_mod",
+     "type": "string"
+    },
+    {
+     "name": "sn_mod",
+     "type": "string"
+    },
+    {
+     "name": "sr_mod",
+     "type": "string"
+    },
+    {
+     "name": "sv_mod",
+     "type": "string"
+    },
+    {
+     "name": "sw_mod",
+     "type": "string"
+    },
+    {
+     "name": "ts_mod",
+     "type": "string"
+    },
+    {
+     "name": "wm_mod",
+     "type": "string"
+    },
+    {
+     "name": "ww_mod",
+     "type": "string"
+    },
+    {
+     "name": "BankStabilization",
+     "type": "number"
+    },
+    {
+     "name": "CarbonSeq",
+     "type": "number"
+    },
+    {
+     "name": "SedRetention",
+     "type": "number"
+    },
+    {
+     "name": "StreamMain",
+     "type": "number"
+    },
+    {
+     "name": "AquaticInv",
+     "type": "number"
+    },
+    {
+     "name": "FishHabitat",
+     "type": "number"
+    },
+    {
+     "name": "Shorebird",
+     "type": "number"
+    },
+    {
+     "name": "Waterfowl",
+     "type": "number"
+    },
+    {
+     "name": "SurfaceDetention",
+     "type": "number"
+    },
+    {
+     "name": "ULT_type",
+     "type": "integer"
+    },
+    {
+     "name": "ULT_quality",
+     "type": "number"
+    },
+    {
+     "name": "AVG_TWI",
+     "type": "number"
+    },
+    {
+     "name": "AVG_Elev",
+     "type": "number"
+    },
+    {
+     "name": "AVG_Dist",
+     "type": "number"
+    },
+    {
+     "name": "AVG_Slope",
+     "type": "number"
+    },
+    {
+     "name": "HM_All_CNHP",
+     "type": "integer"
+    },
+    {
+     "name": "HM_Physical_CNHP",
+     "type": "integer"
+    },
+    {
+     "name": "HM_Habitat_CNHP",
+     "type": "integer"
+    },
+    {
+     "name": "Count_CNHP",
+     "type": "integer"
+    },
+    {
+     "name": "HGM_class",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "acres",
+     "type": "number"
+    },
+    {
+     "name": "watersource",
+     "type": "string"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

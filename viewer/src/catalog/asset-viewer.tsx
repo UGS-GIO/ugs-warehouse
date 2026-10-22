@@ -7,11 +7,15 @@ import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
-import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
-import { type Asset, type AssetKind, assetKind, isDrawableCog, isOverview, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
+import { unitsHrefOf } from "@/map/identify";
+import { IdentifyCard } from "@/map/unit-card";
+import { footprintSpecOf, PreviewMapSlot, usePreviewMap } from "@/map/preview-map";
+import { vectorSpecOf } from "@/map/preview-spec";
+import { type Asset, type AssetKind, geopackageAsset, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
+  summaryFieldsOf, tableColumns, thumbnailAsset, usePlate } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
+import { type AssetEntry, assetEntries, plateEntry, previewKindOf } from "./item-view";
 
 // deck.gl's mesh layers and the terrain builder: only items with a 3D asset need them, so they load
 // with the first one rather than with every catalog page.
@@ -51,7 +55,12 @@ export function FieldsPanel({ item }: { item: StacDoc }) {
 // Raster mosaic (per-scale geologic-map tiles) preview — publishes a spec to the shared persistent map.
 function RasterMosaicPreview({ item }: { item: StacDoc }) {
   const asset = rasterTilesAsset(item);
-  return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
+  return (
+    <>
+      <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href, unitsHref: unitsHrefOf(item) } : null} />
+      <IdentifyResultCard />
+    </>
+  );
 }
 
 // Directly under the preview map, above the fields/table, so a click's result is in view without
@@ -68,17 +77,20 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
   return <div ref={ref}><FeatureCard item={item} props={props} onOpenRelated={openRelated} onClear={clearSelection} onZoom={zoom} /></div>;
 }
 
+// A click on a plate or mosaic preview: the unit under it, or the scan-only notice.
+function IdentifyResultCard() {
+  const { identify, clearIdentify } = usePreviewMap();
+  return identify ? <IdentifyCard result={identify} onClose={clearIdentify} /> : null;
+}
+
 // Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
 // linked — click a table row → map flies to that feature; click a map feature → table pages to it,
 // and its detail docks in the card directly below the map. The map instance lives in
 // PreviewMapProvider (mounted once); this publishes the vector spec and wires the table↔map state.
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
-  const pm = pmtilesLink(item);
   const { setFocus, pick, mapMismatch } = usePreviewMap();
-  const spec: PreviewSpec = pm
-    ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "") }
-    : null;
+  const spec = vectorSpecOf(item);
   return (
     <>
       <PreviewMapSlot spec={spec} />
@@ -118,7 +130,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
       // A COG in the source projection has no preview here: the renderer cannot reproject, and
       // mounting it throws. Say so, and leave the download to the asset link.
       return isDrawableCog(asset, item)
-        ? <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />
+        ? <><PreviewMapSlot spec={{ kind: "cog", item, href: asset.href, unitsHref: unitsHrefOf(item) }} /><IdentifyResultCard /></>
         : (
           <p className="mt-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
             No preview: this is the source raster, in its own projection. The Web Mercator copy on
@@ -187,19 +199,12 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
 // Tabbed viewer over every asset on an item: previewable files (PDF, image, COG, parquet, text)
 // get a tab + inline pane; the rest are listed as download links. The default tab is the
 // highest-priority file (map > pdf > data > image > text).
-function AssetViewer({ item }: { item: StacDoc }) {
-  const entries = useMemo(() => Object.entries(item.assets ?? {})
-    // thumbnails are redundant with the real image/cog; skip as their own tab
-    .filter(([, a]) => !a.roles?.includes("thumbnail") && !isOverview(a))
-    .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
-    .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
-      || KIND_RANK[x.kind] - KIND_RANK[y.kind]
-      // A raster item carries the canonical COG in its source projection AND a web-mercator
-      // derivative. Both are kind "cog", so a stable sort left whichever came first as the default
-      // tab — the native one, which this client cannot draw (warehouse#84).
-      || Number(isDrawableCog(y.asset, item)) - Number(isDrawableCog(x.asset, item))), [item]);
+function AssetViewer({ item, extra }: { item: StacDoc; extra?: AssetEntry }) {
+  const entries = useMemo(() => assetEntries(item, extra), [item, extra]);
   const tabs = entries.filter((e) => e.kind !== "other");
-  const others = entries.filter((e) => e.kind === "other");
+  // The GeoPackage has its own "Download all data" link on the publication page.
+  const gpkg = geopackageAsset(item);
+  const others = entries.filter((e) => e.kind === "other" && e.asset !== gpkg);
   // No reset-on-item-change effect: `active` below falls back to the first tab whenever the
   // remembered key isn't in this item's tabs.
   const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);
@@ -227,7 +232,7 @@ function AssetViewer({ item }: { item: StacDoc }) {
           ))}
         </div>
       )}
-      <AssetPane kind={active.kind} asset={active.asset} item={item} />
+      <AssetPane kind={active.kind} asset={active.asset} item={active.doc ?? item} />
       {others.length > 0 && (
         <div className="mt-2 text-xs text-muted-foreground">
           Other files: <AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} />
@@ -237,13 +242,31 @@ function AssetViewer({ item }: { item: StacDoc }) {
   );
 }
 
-// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer;
-// geologic map mosaics → interactive raster PMTiles map; everything else (publications) →
-// the tabbed asset viewer so users can peruse every file in-page.
+// Preview (previewKindOf): vector tiles (serving topics, publication layers) → interactive PMTiles
+// map + linked dataset explorer; geologic map mosaics → interactive raster PMTiles map; everything
+// else (publications, with their plate as a Map tab) → the tabbed asset viewer.
 export function Preview({ item }: { item: StacDoc }) {
-  if (pmtilesLink(item)) return <VectorPreview item={item} />;
-  if (rasterTilesAsset(item)) return <RasterMosaicPreview item={item} />;
-  return <AssetViewer item={item} />;
+  const kind = previewKindOf(item);
+  if (kind === "vector") return <VectorPreview item={item} />;
+  if (kind === "mosaic") return <RasterMosaicPreview item={item} />;
+  return <PlatedAssetViewer item={item} />;
+}
+
+// A publication's assets plus its plate's map, the PDF staying the default tab.
+function PlatedAssetViewer({ item }: { item: StacDoc }) {
+  const { plate, error } = usePlate(item);
+  const extra = useMemo(() => plateEntry(plate), [plate]);
+  return (
+    <>
+      <AssetViewer item={item} extra={extra} />
+      {/* A plate that failed to load is said, not silently missing from the tabs. */}
+      {error != null && (
+        <div role="alert" className="mt-2 text-xs text-destructive">
+          Map plate could not be loaded: {error instanceof Error ? error.message : String(error)}
+        </div>
+      )}
+    </>
+  );
 }
 
 // ---- API & data endpoints ----

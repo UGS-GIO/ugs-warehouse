@@ -25,7 +25,6 @@ from .topics import Topic
 # title is that name prettified; nothing else is authored for it (see core.stac).
 CATALOG = stac.SERVING_TOPICS_CATALOG
 PARQUET_MIME = config.PARQUET_MIME
-PMTILES_MIME = config.PMTILES_MIME
 
 
 def collection_path(schema: str) -> str:
@@ -46,29 +45,9 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {view}").fetchone()[0])
 
 
-def _table_type(duck_type: str) -> str:
-    """DuckDB column type → STAC Table extension type string."""
-    t = duck_type.upper()
-    if t.startswith("GEOMETRY"):
-        return "geometry"
-    if "INT" in t or t == "HUGEINT":
-        return "integer"
-    if t in ("DOUBLE", "FLOAT", "REAL") or t.startswith("DECIMAL"):
-        return "number"
-    if t in ("BOOLEAN", "BOOL"):
-        return "boolean"
-    if t.startswith("TIMESTAMP"):
-        return "datetime"
-    if t == "DATE":
-        return "date"
-    if "CHAR" in t or t in ("VARCHAR", "TEXT", "STRING"):
-        return "string"
-    return duck_type.lower()
-
-
 def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
     """`table:columns` describing the GeoParquet — the real materialized columns + their types."""
-    return [{"name": r[0], "type": _table_type(str(r[1]))}
+    return [{"name": r[0], "type": stac.table_type(str(r[1]))}
             for r in con.execute(f"DESCRIBE {view}").fetchall()]
 
 
@@ -161,6 +140,18 @@ def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, 
     return props
 
 
+def published_overviews(topic: Topic) -> set[str]:
+    """Object paths of the overview levels the published item lists."""
+    listed = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    return {config.overview_path(topic.stem, n)
+            for n in range(1, len(sink_archive.OVERVIEW_TOLERANCES) + 1) if f"overview_{n}" in listed}
+
+
+def published_geojson(topic: Topic) -> bool:
+    """The published item lists the GeoJSON copy."""
+    return "geojson" in stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+
+
 def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmtiles_url: str,
             rel: dict, file_meta: dict[str, gcs.FileMeta] | None) -> dict:
     """The item's assets, each stamped with this run's or the published file fields."""
@@ -180,24 +171,30 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
 
     assets = {
         "data": data_asset,
-        "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
-                    "roles": ["visual"], "title": "PMTiles vector tiles",
-                    "description": stac.USAGE_PMTILES},
+        "pmtiles": stac.pmtiles_asset(pmtiles_url),
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
         # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
-    # Generalized copies of a heavy layer, one per drawing scale (vector/sink_archive.py). Presence-
-    # driven like the thumbnail: the archive sink writes or removes them with the archive. Their own
+    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
+    # sink, the thumbnail another job renders) keeps what the published item already carries.
+    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    # Generalized copies of a heavy layer, one per drawing scale (vector/sink_archive.py). A run that
+    # rewrote the archive lists the levels it wrote; otherwise the published ones stand. Their own
     # role keeps them out of downloads; the FeatureServer finds them by key prefix and tolerance.
+    rewritten = "data" in (file_meta or {})
     for n, tolerance in enumerate(sink_archive.OVERVIEW_TOLERANCES, 1):
-        path = config.overview_path(topic.stem, n)
-        if gcs.exists(path):
-            assets[f"overview_{n}"] = {
+        key, path = f"overview_{n}", config.overview_path(topic.stem, n)
+        if (key in file_meta) if rewritten else (key in carried and gcs.exists(path)):
+            assets[key] = {
                 "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:overview"],
                 "title": f"GeoParquet generalized to {tolerance} deg for small-scale display",
                 "ugs:simplify_tolerance": tolerance}
+    path = config.geojson_path(topic.stem)
+    if ("geojson" in file_meta) if rewritten else ("geojson" in carried and gcs.exists(path)):
+        assets["geojson"] = {"href": config.public_url(path), "type": sink_archive.GEOJSON_MIME,
+                             "roles": ["data"], "title": "GeoJSON (small layers only)"}
     # DuckLake table locator — REVIEW CATALOG ONLY. It's a gs:// table id, not a fetchable object:
     # a browser can't open gs://, the bucket is private (IAM-gated), and even with the parquet
     # chunks a consumer can't materialise the table without the private DuckLake catalog DSN. So the
@@ -215,9 +212,6 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
     # publishing (vector/ingest.py).
     if gcs.exists(config.topic_thumbnail_path(topic.stem)):
         assets["thumbnail"] = stac.topic_thumbnail_asset(topic.stem)
-    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
-    # sink, the thumbnail another job renders) keeps what the published item already carries.
-    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
     for key, asset in assets.items():
         if "file:size" in asset:      # a related table stamps its own — it did the upload
             continue
@@ -245,10 +239,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     props = _properties(topic, con, view, md, title, description, rc, content_hash)
     assets = _assets(topic, con, view, pmtiles_url, rel, file_meta)
 
-    # Table extension is in play iff any asset describes its columns.
     exts = [stac.WEB_MAP_LINKS_EXT]
-    if any("table:columns" in a for a in assets.values()):
-        exts.append(stac.TABLE_EXT)
 
     item = stac.build_item(
         item_id=topic.stem, collection=topic.schema,

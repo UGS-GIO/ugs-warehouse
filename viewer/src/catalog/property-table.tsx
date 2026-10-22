@@ -5,7 +5,7 @@ import { datetimeLabel, fmtDatetime } from "./item-view";
 
 // Structural properties with their own UI elsewhere (the style, the legend, the contents list).
 // Their raw JSON is long enough to bury everything else in the table.
-const SKIP = new Set(["ugs:renders", "ugs:contents", "classification:classes"]);
+const SKIP = new Set(["ugs:renders", "ugs:generated_style", "ugs:contents", "classification:classes"]);
 
 /** Drop the `ugs:` prefix, underscores → spaces. */
 const prettyKey = (k: string) => k.replace(/^ugs:/, "").replace(/_/g, " ");

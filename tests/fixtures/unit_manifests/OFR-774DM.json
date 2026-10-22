@@ -1,0 +1,403 @@
+{
+ "layers": [
+  {
+   "label": "OFR-774DM_NorthOgden__MapUnitPolys",
+   "spatial": true,
+   "rows": 1796,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-774DM_NorthOgden",
+   "columns": [
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "MapUnit",
+     "type": "string"
+    },
+    {
+     "name": "IdentityConfidence",
+     "type": "string"
+    },
+    {
+     "name": "Label",
+     "type": "string"
+    },
+    {
+     "name": "Symbol",
+     "type": "string"
+    },
+    {
+     "name": "DataSourceID",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "MapUnitPolys_ID",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "OFR-774DM_NorthOgden__UtahStateBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-774DM_NorthOgden",
+   "columns": [
+    {
+     "name": "STATE",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "OFR-774DM_NorthOgden__DescriptionOfMapUnits",
+   "spatial": false,
+   "rows": 87,
+   "source": "OFR-774DM_NorthOgden",
+   "columns": [
+    {
+     "name": "MapUnit",
+     "type": "string"
+    },
+    {
+     "name": "Name",
+     "type": "string"
+    },
+    {
+     "name": "FullName",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "string"
+    },
+    {
+     "name": "Description",
+     "type": "string"
+    },
+    {
+     "name": "HierarchyKey",
+     "type": "string"
+    },
+    {
+     "name": "ParagraphStyle",
+     "type": "string"
+    },
+    {
+     "name": "Label",
+     "type": "string"
+    },
+    {
+     "name": "Symbol",
+     "type": "string"
+    },
+    {
+     "name": "AreaFillRGB",
+     "type": "null"
+    },
+    {
+     "name": "AreaFillPatternDescription",
+     "type": "null"
+    },
+    {
+     "name": "DescriptionSourceID",
+     "type": "string"
+    },
+    {
+     "name": "GeoMaterial",
+     "type": "string"
+    },
+    {
+     "name": "GeoMaterialConfidence",
+     "type": "string"
+    },
+    {
+     "name": "DescriptionOfMapUnits_ID",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "OFR-774DM_NorthOgden__GeologicFeatures_labels",
+   "spatial": true,
+   "rows": 586,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-774DM_NorthOgden",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Quadrangle",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "FontStyle",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "OFR-774DM_NorthOgden__MapUnitPolys_labels",
+   "spatial": true,
+   "rows": 1130,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-774DM_NorthOgden",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontStyle",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "OFR-774DM_NorthOgden__T_1_DirtyAreas",
+   "spatial": true,
+   "rows": 2,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-774DM_NorthOgden",
+   "columns": [
+    {
+     "name": "IsRetired",
+     "type": "integer"
+    },
+    {
+     "name": "DirtyArea_Length",
+     "type": "number"
+    },
+    {
+     "name": "DirtyArea_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": [
+  {
+   "origin": "OFR-774DM_NorthOgden__MapUnitPolys",
+   "origin_cols": [
+    "MapUnit"
+   ],
+   "destination": "OFR-774DM_NorthOgden__DescriptionOfMapUnits",
+   "destination_cols": [
+    "MapUnit"
+   ],
+   "cardinality": "many_to_one",
+   "detected_by": "inferred",
+   "confidence": 100,
+   "overlap": 100.0
+  }
+ ]
+}

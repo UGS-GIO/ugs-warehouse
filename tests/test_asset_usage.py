@@ -125,7 +125,7 @@ def _store(monkeypatch) -> dict:
 
 
 def test_refresh_wires_the_query_endpoint_note_to_served_collections_only(monkeypatch):
-    """End-to-end: a serving-topic collection's AGENTS.md names OGC API Features; a pubs one
+    """End-to-end: a serving-topic collection's AGENTS.md names OGC API Features; a static-only one
     (static-only, no featureserv) must not — the `service` flag has to reach agents() correctly."""
     store = _store(monkeypatch)
     stac.write_item(stac.build_item(
@@ -136,7 +136,7 @@ def test_refresh_wires_the_query_endpoint_note_to_served_collections_only(monkey
         assets={"data": {"href": "https://x/q.parquet", "type": config.PARQUET_MIME,
                          "roles": ["data"]}}))
     stac.write_item(stac.build_item(
-        item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+        item_id="DS-8", collection="DS", collection_path="ugs-rasters/DS",
         geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
         datetime_iso="2026-01-01T00:00:00Z", properties={"title": "A publication"},
         assets={"data": {"href": "https://x/a.parquet", "type": config.PARQUET_MIME,
@@ -144,6 +144,6 @@ def test_refresh_wires_the_query_endpoint_note_to_served_collections_only(monkey
     stac.refresh_catalog()
     p = config.STAC_PREFIX
     serving = store[f"{p}/ugs-serving-topics/hazards/AGENTS.md"].decode().lower()
-    pubs = store[f"{p}/ugs-publications/DS/AGENTS.md"].decode().lower()
+    pubs = store[f"{p}/ugs-rasters/DS/AGENTS.md"].decode().lower()
     assert "ogc api features" in serving
     assert "ogc api features" not in pubs

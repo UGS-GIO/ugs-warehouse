@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from typing import NamedTuple
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -272,9 +273,9 @@ def manifest_urls(series_id):
 _attachments_cache: dict[str, list[dict]] = {}
 
 
-def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
-    """Resolve GeoTIFF and GIS zip URLs from local attachments database (high performance)."""
-    global _attachments_cache
+def _attachments_of(series_id: str) -> list[dict] | None:
+    """The publication's rows of the local attachments database, loaded once for all pubs (high
+    performance). None when the database cannot be read, which is logged."""
     from . import source
     if not _attachments_cache:
         try:
@@ -285,16 +286,28 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
             hlog(f"pre-loaded attachments for {len(_attachments_cache)} publications", step="startup")
         except Exception as e:
             hlog(f"WARN failed to load attachments: {e}", step="startup", level="WARNING")
-            return None, None
+            return None
+    return _attachments_cache.get(series_id.strip().upper(), [])
+
+
+def _attachment_url(a: dict) -> str:
+    url = (a.get("pub_url") or "").strip()
+    if url and not url.startswith(("http://", "https://")):
+        url = f"https://ugspub.nr.utah.gov/publications/{url}"
+    return url
+
+
+def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
+    """Resolve GeoTIFF and GIS zip URLs from local attachments database (high performance)."""
+    rows = _attachments_of(series_id)
+    if rows is None:
+        return None, None
 
     gt = gis = None
-    sid_upper = series_id.strip().upper()
-    for a in _attachments_cache.get(sid_upper, []):
-        url = (a.get("pub_url") or "").strip()
+    for a in rows:
+        url = _attachment_url(a)
         if not url.lower().endswith(".zip"):
             continue
-        if not url.startswith(("http://", "https://")):
-            url = f"https://ugspub.nr.utah.gov/publications/{url}"
 
         desc = (a.get("extra_data") or "").lower()
         if "geotiff" in desc or "geotiff" in url.lower():
@@ -307,6 +320,52 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
             elif not gis:
                 gis = url
     return gt, gis
+
+
+class DataFile(NamedTuple):
+    """A data attachment the vectors job extracts: its Collection asset key (None when the
+    publication has no such asset), its label and its URL."""
+    key: str | None
+    title: str
+    url: str
+
+
+def _asset_keys(series_id: str) -> dict[str, str]:
+    """{url: Collection asset key} for every attachment of the publication, the keys the STAC ingest
+    gives its assets (`identity.attachment_keys`)."""
+    from . import sink_stac
+    return identity.attachment_keys([(h, a.get("extra_data"))
+                                     for a in _attachments_of(series_id) or []
+                                     if (h := sink_stac.href(a.get("pub_url")))])
+
+
+def asset_key_of(series_id: str, url: str) -> str | None:
+    """The Collection asset key of the attachment at `url`, None when the feed lists none."""
+    return _asset_keys(series_id).get(url)
+
+
+def data_files(series_id: str) -> list[DataFile]:
+    """The publication's attachments that can hold tables or layers: every zip that is not a
+    GeoTIFF zip (the plate harvest's), whatever its label, and every .xlsx, .xls or .csv file. A
+    URL the feed lists twice is one file. The zip labelled GIS comes first, so the layers it held
+    keep their labels; each group is in URL order, so a repeated layer name gets the same `_2`
+    on every run."""
+    from . import sheets, sink_stac
+    pairs = [(h, a.get("extra_data")) for a in _attachments_of(series_id) or []
+             if (h := sink_stac.href(a.get("pub_url")))]
+    keys, labels = identity.attachment_keys(pairs), identity.attachment_labels(pairs)
+    out: dict[str, tuple[bool, DataFile]] = {}
+    for url, label in labels.items():
+        low = url.lower()
+        desc = (label or "").strip()
+        if not low.endswith((".zip", *sheets.SHEET_EXTS)):
+            continue
+        if low.endswith(".zip") and ("geotiff" in desc.lower() or "geotiff" in low):
+            continue
+        gis = low.endswith(".zip") and ("gis" in desc.lower() or "gis" in low
+                                        or "plates" in desc.lower())
+        out[url] = (not gis, DataFile(keys[url], desc or low.rsplit("/", 1)[-1], url))
+    return [f for _, f in sorted(out.values(), key=lambda t: (t[0], t[1].url))]
 
 
 def zip_urls(series_id: str) -> tuple[str | None, str | None]:
@@ -477,6 +536,24 @@ def ensure_rgb(tif):
             run(["gdal_translate", "-co", "COMPRESS=DEFLATE"] + args + ["-colorinterp", ci_list, tif, out])
         return out
     return tif
+
+
+def _embed_band_statistics(tif: str) -> None:
+    """Store each band's exact statistics (alpha included) as STATISTICS_* band tags on `tif`, the
+    8-bit raster a COG is made from; `cog_translate(forward_band_tags=True)` copies them into the
+    COG. GDAL leaves pixels the alpha band masks out of the color bands' statistics. Every band tag
+    is forwarded, so no older statistic may survive: GDAL's exact computation rewrites
+    STATISTICS_VALID_PERCENT and removes STATISTICS_APPROXIMATE, and a band still marked approximate
+    raises rather than reach the COG. Written to the input, never the finished COG, since updating a
+    COG in place breaks its layout."""
+    import rasterio
+
+    with rasterio.open(tif, "r+") as ds:
+        for bidx, st in zip(ds.indexes, ds.stats(approx=False)):
+            ds.update_tags(bidx, STATISTICS_MINIMUM=st.min, STATISTICS_MAXIMUM=st.max,
+                           STATISTICS_MEAN=st.mean, STATISTICS_STDDEV=st.std)
+            if "STATISTICS_APPROXIMATE" in ds.tags(bidx):
+                raise RuntimeError(f"{tif} band {bidx}: a stale STATISTICS_APPROXIMATE tag survived")
 
 
 def _gdalinfo(path, *flags) -> dict:
@@ -950,8 +1027,13 @@ def _cog_profile() -> dict:
 
 
 def _write_cog(src, cog, prof) -> None:
-    """Write `src` as a web-optimized COG, retrying a failed or undersized webp encode as lzw."""
+    """Write `src` as a web-mercator-tiled COG with its band tags (the statistics
+    `_embed_band_statistics` stored), retrying a failed or undersized webp encode as lzw."""
+    import morecantile
     from rio_cogeo.cogeo import cog_translate
+
+    # The tiling `web_optimized=True` selected, which rio-cogeo deprecates in favour of `tms`.
+    web_mercator = morecantile.tms.get("WebMercatorQuad")
 
     def _to_lzw(why: str) -> None:
         hlog(f"webp COG {why} → retry with lzw", step="cog", level="WARNING")
@@ -959,14 +1041,14 @@ def _write_cog(src, cog, prof) -> None:
             os.remove(cog)
         prof["compress"] = "lzw"
         prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
-        cog_translate(src, cog, prof, web_optimized=True,
+        cog_translate(src, cog, prof, tms=web_mercator, forward_band_tags=True,
                       zoom_level_strategy=COG_ZOOM_STRATEGY,
                       overview_resampling="bilinear", quiet=True)
 
-    # webp can still fail to encode a plate; lossless lzw keeps web_optimized
+    # webp can still fail to encode a plate; lossless lzw keeps the web-mercator tiling
     # so the result is still tiled + overviewed for range reads.
     try:
-        cog_translate(src, cog, prof, web_optimized=True,
+        cog_translate(src, cog, prof, tms=web_mercator, forward_band_tags=True,
                       zoom_level_strategy=COG_ZOOM_STRATEGY,
                       overview_resampling="bilinear", quiet=True)
     except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
@@ -1022,7 +1104,7 @@ def _publish(pub: identity.Pub, cog, shp, prof, work) -> None:
         gpq = os.path.join(work, f"{series_id}.units.parquet")
         geoparquet.write(shp, gpq)
         units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
-        gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
         _report("produced", units_parquet=units_obj)
     if THUMBS:
         _write_previews(pub, cog, work)
@@ -1062,6 +1144,7 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
         prof = _cog_profile()
 
         rgb_clipped = ensure_rgb(clipped)
+        _embed_band_statistics(rgb_clipped)
         _write_cog(rgb_clipped, cog, prof)
 
         # Free up tmpfs RAM by deleting the intermediate clipped/rgb images

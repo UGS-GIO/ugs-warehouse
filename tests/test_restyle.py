@@ -1,6 +1,8 @@
 """Restyle (manifest → STAC render rebind) — hermetic, in-memory GCS + fake styles manifest."""
+import pytest
+
 from ugs_warehouse import restyle as R
-from ugs_warehouse.core import gcs, stac, styles
+from ugs_warehouse.core import config, gcs, stac, styles
 
 
 def _mem_gcs(monkeypatch):
@@ -203,6 +205,15 @@ def test_restyle_verify_reports_drift_when_the_item_holds_an_older_legend(monkey
     assert R._verify(R._scoped_groups("ugs-serving-topics")) == ["ugs-serving-topics/enmin_ucrc_wells"]
 
 
+def test_restyle_fails_the_run_when_written_renders_drift(monkeypatch):
+    """A drifted render fails the job, whatever number of items changed."""
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    monkeypatch.setattr(R, "_verify", lambda groups: ["ugs-serving-topics/enmin_ucrc_wells"])
+    with pytest.raises(RuntimeError, match="1 render"):
+        R.restyle()
+
+
 def _styled_wells(monkeypatch) -> list:
     """A styled wells item in an in-memory bucket; returns the recorded thumbnail-job starts."""
     store = _mem_gcs(monkeypatch)
@@ -262,3 +273,25 @@ def test_a_restyle_with_nothing_styled_starts_nothing(monkeypatch):
     monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
     R.restyle()
     assert kicked == []
+
+
+def test_restyle_rebinds_a_publication_collection_but_not_a_serving_topic_layer_collection(monkeypatch):
+    import json
+
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "OFR-1", "render": "default", "kind": "vector",
+                                  "assets": ["pmtiles"], "path": "styles/ofr1/default.json"}])
+    prefix = config.STAC_PREFIX
+    pub = f"{prefix}/ugs-publications/OFR/OFR-1/collection.json"
+    topic = f"{prefix}/ugs-serving-topics/hazards/hazards_qfaults/collection.json"
+    store[pub] = json.dumps({"type": "Collection", "id": "OFR-1", "links": [],
+                             "assets": {"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}}).encode()
+    topic_doc = json.dumps({"type": "Collection", "id": "hazards_qfaults", "links": [],
+                            "ugs:renders": {"default": {"style_url": "gone"}}}).encode()
+    store[topic] = topic_doc
+
+    assert R.restyle(collection="all") == 1
+
+    assert "default" in json.loads(store[pub])["ugs:renders"]
+    assert store[topic] == topic_doc
+    assert R._single_file_collections("all", {}, [pub, topic]) == ["ugs-publications/OFR/OFR-1"]

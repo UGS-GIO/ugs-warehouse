@@ -5,11 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CopyBtn } from "./endpoints-panel";
-import type { StacDoc } from "@/stac";
-
-// The item's own STAC URL (rel=self) — an "open .json" target where the catalog carries one.
-const selfHrefOf = (item: StacDoc): string | undefined =>
-  item.links?.find((l) => l.rel === "self")?.href;
+import { selfHrefOf, type StacDoc } from "@/stac";
 
 export function StacJson({ item, title = "STAC item JSON" }: { item: StacDoc; title?: string }) {
   const [open, setOpen] = useState(false);

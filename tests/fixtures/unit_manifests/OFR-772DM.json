@@ -1,0 +1,338 @@
+{
+ "layers": [
+  {
+   "label": "ofr-772dm_huntsville__GeologicFeatures_labels",
+   "spatial": true,
+   "rows": 322,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ofr-772dm_huntsville",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Quadrangle",
+     "type": "integer"
+    },
+    {
+     "name": "FontStyle",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ofr-772dm_huntsville__MapUnitPolys_labels",
+   "spatial": true,
+   "rows": 563,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ofr-772dm_huntsville",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "integer"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "FontStyle",
+     "type": "string"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ofr-772dm_huntsville__MapUnitPolys",
+   "spatial": true,
+   "rows": 1758,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "ofr-772dm_huntsville",
+   "columns": [
+    {
+     "name": "MapUnit",
+     "type": "string"
+    },
+    {
+     "name": "IdentityConfidence",
+     "type": "string"
+    },
+    {
+     "name": "Label",
+     "type": "string"
+    },
+    {
+     "name": "Symbol",
+     "type": "string"
+    },
+    {
+     "name": "DataSourceID",
+     "type": "string"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "MapUnitPolys_ID",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "ofr-772dm_huntsville__DescriptionOfMapUnits",
+   "spatial": false,
+   "rows": 99,
+   "source": "ofr-772dm_huntsville",
+   "columns": [
+    {
+     "name": "MapUnit",
+     "type": "string"
+    },
+    {
+     "name": "Name",
+     "type": "string"
+    },
+    {
+     "name": "FullName",
+     "type": "string"
+    },
+    {
+     "name": "Age",
+     "type": "string"
+    },
+    {
+     "name": "Description",
+     "type": "string"
+    },
+    {
+     "name": "HierarchyKey",
+     "type": "string"
+    },
+    {
+     "name": "ParagraphStyle",
+     "type": "string"
+    },
+    {
+     "name": "Label",
+     "type": "string"
+    },
+    {
+     "name": "Symbol",
+     "type": "string"
+    },
+    {
+     "name": "AreaFillRGB",
+     "type": "null"
+    },
+    {
+     "name": "AreaFillPatternDescription",
+     "type": "null"
+    },
+    {
+     "name": "DescriptionSourceID",
+     "type": "string"
+    },
+    {
+     "name": "GeoMaterial",
+     "type": "string"
+    },
+    {
+     "name": "GeoMaterialConfidence",
+     "type": "string"
+    },
+    {
+     "name": "DescriptionOfMapUnits_ID",
+     "type": "string"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

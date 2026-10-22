@@ -29,7 +29,7 @@ the [viewer](viewer/), QGIS, STAC Browser, DuckDB, or OGC API Features through
 
 ```
 vector producer                         pubs producer
-  Pub/Sub {schema, topic}                 publications feed (Postgres) + GIS zips
+  Pub/Sub {schema, topic}                 publications feed (Postgres) + data zips, spreadsheets
    ↓ push → service/main.py                ↓ Cloud Run Job (sharded)
   source → transform (4326·h3·hilbert)    harvest zip→COG · map layers · covers · search
    ↓                                       ↓
@@ -89,3 +89,10 @@ viewer/          React + MapLibre STAC viewer, on Firebase Hosting
 scripts/         bootstrap catalog, manual ingest, provision Pub/Sub
 docs/            MkDocs site
 ```
+
+## AI use
+
+Portions of this repository (code, infrastructure and docs) are developed with AI assistance
+under human direction. AI is a supporting tool, not an author: every commit and merge is
+authored, reviewed and approved by a person, who is accountable for it. This note will be
+replaced with a link to UGS's survey-wide AI-use circular once it is published.

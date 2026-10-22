@@ -50,6 +50,10 @@ PAGE_ROWS = 1024
 OVERVIEW_TOLERANCES = (0.00068, 0.0027, 0.0108)
 OVERVIEW_MIN_VERTICES = 1_000_000  # about 16 MB of WKB
 OVERVIEW_MIN_SHRINK = 0.7   # a level must be under 70% of the file before it, or it is not written
+# A small layer also gets a GeoJSON copy, which a web map loads in one request from the CDN with no
+# server in the path. The cap is on the GeoParquet, about a fifth of the GeoJSON's size.
+GEOJSON_MAX_BYTES = 1_000_000
+GEOJSON_MIME = "application/geo+json"
 # Bump when write or write_overviews changes what they write in a way the settings below miss.
 ARCHIVE_BUILD_VERSION = 1
 
@@ -249,20 +253,23 @@ def _overview_table(con: duckdb.DuckDBPyConnection, view: str, tolerance: float)
 
 
 def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
-                    written: dict[str, gcs.FileMeta]) -> None:
+                    written: dict[str, gcs.FileMeta], listed: set[str] = frozenset()) -> None:
     """Write `{stem}_overview_{n}.parquet` per OVERVIEW_TOLERANCES when the layer is heavy enough,
-    recording each in `written` under its asset key, and remove the ones not written.
+    recording each in `written` under its asset key.
 
-    One level at a time. A level that fails is removed and the next is still tried; the call
+    The catalog index refreshes after the run, so a file it lists must outlive the run. This
+    removes only the overview files the published item does not list (`listed`); a level this run
+    leaves out drops from the item now and from storage on the next run.
+
+    One level at a time. A level that fails is left out and the next is still tried; the call
     raises after the last so the sink reports the failure."""
     paths = [config.overview_path(topic.stem, n) for n in range(1, len(OVERVIEW_TOLERANCES) + 1)]
-    gcs.delete(f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}_overview.parquet")  # pre-levels
+    prefix = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}_overview"
+    gcs.delete_many([p for p in gcs.list_paths(prefix) if p not in listed], strict=False)
     vertices, points = con.execute(
         f"SELECT sum(ST_NPoints(geom)), bool_and(ST_GeometryType(geom)::VARCHAR LIKE '%POINT') "
         f"FROM {view}").fetchone()
     if points or (vertices or 0) < OVERVIEW_MIN_VERTICES:
-        for path in paths:
-            gcs.delete(path)
         return
     previous, failed = written["data"].size, []
     for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):
@@ -278,7 +285,6 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                 if size >= OVERVIEW_MIN_SHRINK * previous:
                     print(f"[{topic.fqn}] overview {n}: {size:,} B, not under "
                           f"{OVERVIEW_MIN_SHRINK:.0%} of {previous:,} B; skipped")
-                    gcs.delete(path)
                     continue
                 written[f"overview_{n}"] = gcs.upload(local, path, content_type=PARQUET_MIME,
                                                       cache_control=gcs.CACHE_MUTABLE)
@@ -286,10 +292,30 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                 print(f"[{topic.fqn}] overview {n} ({tolerance} deg): {config.public_url(path)}")
         except Exception:
             log.exception("[%s] overview %d FAILED", topic.fqn, n, extra={"topic": topic.fqn})
-            gcs.delete(path)   # the old one is of the old archive; the item must not list it
             failed.append(n)
     if failed:
         raise RuntimeError(f"overview levels {failed} failed")
+
+
+def write_geojson(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
+                  written: dict[str, gcs.FileMeta], listed: bool = False) -> None:
+    """Write `{stem}.geojson` when the archive is at most GEOJSON_MAX_BYTES, recording it in
+    `written`. A larger layer gets none, and its old file is removed once the published item does
+    not list it (`listed`), as write_overviews does."""
+    path = config.geojson_path(topic.stem)
+    if written["data"].size > GEOJSON_MAX_BYTES:
+        if not listed:
+            gcs.delete_many([path])
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, os.path.basename(path))
+        con.execute(f"COPY (SELECT * FROM {view}) TO '{local}' (FORMAT GDAL, DRIVER 'GeoJSON', "
+                    "LAYER_CREATION_OPTIONS ('RFC7946=YES', 'ID_FIELD=feature_id'))")
+        with open(local, "rb") as f:
+            written["geojson"] = gcs.put_bytes(f.read(), path, content_type=GEOJSON_MIME,
+                                               cache_control=gcs.CACHE_MUTABLE, compress=True)
+    print(f"[{topic.fqn}] geojson: {config.public_url(path)}")
+
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:
     """Write `{stem}.parquet` (latest) + dated archive to GCS. DuckDB streams the COPY (with the

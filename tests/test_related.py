@@ -8,6 +8,44 @@ from ugs_warehouse.vector import related, sink_stac
 from ugs_warehouse.vector.topics import Topic
 
 
+def test_both_producers_build_links_and_foreign_keys_through_core_stac(monkeypatch):
+    """Serving topics and publications share `stac.related_link` / `stac.foreign_key`, so the
+    shapes cannot drift: each producer's output is exactly what the shared builder returned."""
+    from ugs_warehouse.core import stac
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    monkeypatch.setattr(stac, "prior_collection_field", lambda *a, **k: None)
+    monkeypatch.setattr(stac, "prior_property", lambda *a, **k: None)
+    built: dict[str, list] = {"related_link": [], "foreign_key": []}
+    for name in built:
+        real = getattr(stac, name)
+
+        def spy(*a, _real=real, _name=name, **k):
+            out = _real(*a, **k)
+            built[_name].append(out)
+            return out
+
+        monkeypatch.setattr(stac, name, spy)
+
+    fk = related._foreign_key({"sourceColumn": "a", "targetDomainTopic": "t", "targetColumn": "b"})
+    link = related._related_link("t", "hazards")
+    assert built == {"related_link": [link], "foreign_key": [fk]}
+
+    built["related_link"].clear()
+    built["foreign_key"].clear()
+    _, items = pubs_sink.build_publication(
+        {"series_id": "OFR-1", "pub_year": "2020", "pub_name": "A map"}, [], override={},
+        vector_layers=["geo__Polys"], layers={"geo__Polys": {"rows": 2}, "geo__DMU": {"rows": 2}},
+        companion_tables=[{"label": "geo__DMU", "columns": None}],
+        relationships=[{"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
+                        "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}], registered_dois=frozenset())
+    by_id = {it["id"]: it for it in items}
+    polys, dmu = by_id["OFR-1__geo__Polys"], by_id["OFR-1__geo__DMU"]
+    assert polys["assets"]["data"]["ugs:foreign_keys"][0] is built["foreign_key"][0]
+    assert polys["assets"]["geo__DMU"]["ugs:foreign_keys"][0] is built["foreign_key"][1]
+    assert [lk for lk in dmu["links"] if lk["rel"] == "related"][0] is built["related_link"][0]
+
+
 class _FakeCon:
     def execute(self, *a, **k):
         raise AssertionError("resolve() must not run real SQL in tests")
@@ -240,10 +278,17 @@ def test_sink_stac_wires_related(monkeypatch):
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
     monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
-    monkeypatch.setattr(sink_stac.stac, "build_item",
-                        lambda **k: captured.update(k) or {"assets": k["assets"]})
+    real_build = sink_stac.stac.build_item
+
+    def build(**k):
+        captured.update(k)
+        captured["item"] = real_build(**k)
+        return captured["item"]
+
+    monkeypatch.setattr(sink_stac.stac, "build_item", build)
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "stamp_file_meta", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 
     related_info = {
@@ -266,7 +311,7 @@ def test_sink_stac_wires_related(monkeypatch):
     assert "related" in assets["boxes"]["roles"]
     # related link appended to the item's links; Table ext declared (boxes has table:columns).
     assert any(lk.get("rel") == "related" for lk in captured["extra_links"])
-    assert sink_stac.stac.TABLE_EXT in captured["stac_extensions"]
+    assert sink_stac.stac.TABLE_EXT in captured["item"]["stac_extensions"]
 
 
 def test_sink_stac_ducklake_review_only(monkeypatch):

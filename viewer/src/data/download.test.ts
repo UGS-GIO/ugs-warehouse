@@ -3,7 +3,7 @@ import {
   buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
   estimateReadBytes, evictionVictim, featureSeqSql, filterClause, holdsOneGeomType,
   needsMeasuredWidth, orderExpr, safeEpsg, sanitize, shapefileFieldChecks, wrapFeatureSeqInPlace,
-  SHP_FILE_LIMIT, baseGeometryTypes, geomColumn, WASM_HEAP_BUDGET,
+  SHP_FILE_LIMIT, baseGeometryTypes, csvSelectSql, geomColumn, WASM_HEAP_BUDGET,
 } from "./download";
 
 describe("sanitize", () => {
@@ -400,5 +400,15 @@ describe("estimateReadBytes", () => {
 
   it("counts a group the AOI only touches at the edge", () => {
     expect(estimateReadBytes([wasatch], [-112.5, 40.5, -112.0, 41.0])).toBe(50_000_000);
+  });
+});
+
+describe("csvSelectSql", () => {
+  it("writes the geometry as WKT for a spatial table", () => {
+    expect(csvSelectSql("t", "geom", "ST_AsText(geom)", ["bbox"]))
+      .toBe(`SELECT * EXCLUDE ("bbox") REPLACE (ST_AsText(geom) AS "geom") FROM t`);
+  });
+  it("copies a plain table as it is", () => {
+    expect(csvSelectSql("t", undefined, "ST_AsText(geom)")).toBe("SELECT * FROM t");
   });
 });

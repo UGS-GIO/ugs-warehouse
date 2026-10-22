@@ -109,7 +109,8 @@ def build() -> int:
     work = tempfile.mkdtemp(prefix="vss_")
     db_path = os.path.join(work, "pubs-vss.duckdb")
     try:
-        con = duckdb.connect(db_path)
+        # The viewer reads this file with duckdb-wasm (1.x); pin the storage format 1.x can open.
+        con = duckdb.connect(db_path, config={"storage_compatibility_version": "v1.5.0"})
         con.execute("INSTALL vss; LOAD vss; SET hnsw_enable_experimental_persistence=true;")
         con.execute("SET max_memory='3GB'")
         con.execute(f"CREATE TABLE chunks(pub_id VARCHAR, title VARCHAR, series VARCHAR, "

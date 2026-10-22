@@ -88,7 +88,8 @@ def _build_db(paths: list[str], meta: dict[str, dict]) -> int:
     work = tempfile.mkdtemp(prefix="fts_")
     db_path = os.path.join(work, "pubs-fts.duckdb")
     try:
-        con = duckdb.connect(db_path)
+        # The viewer reads this file with duckdb-wasm (1.x); pin the storage format 1.x can open.
+        con = duckdb.connect(db_path, config={"storage_compatibility_version": "v1.5.0"})
         con.execute("INSTALL fts; LOAD fts;")
         con.execute("CREATE TABLE docs(id VARCHAR, title VARCHAR, series VARCHAR, "
                     "year VARCHAR, pdf VARCHAR, body VARCHAR)")

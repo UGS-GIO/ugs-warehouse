@@ -147,6 +147,11 @@ def published_overviews(topic: Topic) -> set[str]:
             for n in range(1, len(sink_archive.OVERVIEW_TOLERANCES) + 1) if f"overview_{n}" in listed}
 
 
+def published_geojson(topic: Topic) -> bool:
+    """The published item lists the GeoJSON copy."""
+    return "geojson" in stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+
+
 def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmtiles_url: str,
             rel: dict, file_meta: dict[str, gcs.FileMeta] | None) -> dict:
     """The item's assets, each stamped with this run's or the published file fields."""
@@ -186,6 +191,10 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
                 "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:overview"],
                 "title": f"GeoParquet generalized to {tolerance} deg for small-scale display",
                 "ugs:simplify_tolerance": tolerance}
+    path = config.geojson_path(topic.stem)
+    if ("geojson" in file_meta) if rewritten else ("geojson" in carried and gcs.exists(path)):
+        assets["geojson"] = {"href": config.public_url(path), "type": sink_archive.GEOJSON_MIME,
+                             "roles": ["data"], "title": "GeoJSON (small layers only)"}
     # DuckLake table locator — REVIEW CATALOG ONLY. It's a gs:// table id, not a fetchable object:
     # a browser can't open gs://, the bucket is private (IAM-gated), and even with the parquet
     # chunks a consumer can't materialise the table without the private DuckLake catalog DSN. So the

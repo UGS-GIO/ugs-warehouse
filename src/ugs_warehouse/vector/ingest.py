@@ -94,6 +94,11 @@ def _data_sinks(topic: Topic, con, view: str, written: dict[str, gcs.FileMeta]) 
             sink_archive.write_overviews(topic, con, view, written,
                                          sink_stac.published_overviews(topic))
 
+    def _geojson() -> None:
+        if "data" in written:
+            sink_archive.write_geojson(topic, con, view, written,
+                                       sink_stac.published_geojson(topic))
+
     def _pmtiles() -> None:
         written["pmtiles"] = sink_pmtiles.build(topic, con, view)
 
@@ -101,6 +106,7 @@ def _data_sinks(topic: Topic, con, view: str, written: dict[str, gcs.FileMeta]) 
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  _archive),
         ("overview", _overview),
+        ("geojson",  _geojson),
         ("pmtiles",  _pmtiles),
     ]
 

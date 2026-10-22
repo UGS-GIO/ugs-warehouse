@@ -82,7 +82,9 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   `overview_1..3` assets (role `ugs:overview`): the same rows simplified to just under a pixel at
   ArcGIS LOD 11, 9 and 7 (a quarter of that for polygons narrower than a pixel), one sub-pixel
   speck kept per pixel. The FeatureServer draws small scales from the coarsest one under the
-  request's `maxAllowableOffset`. Downloads and tables read `data`.
+  request's `maxAllowableOffset`. Downloads and tables read `data`. A layer whose GeoParquet is
+  1 MB or less also gets a `geojson` asset, gzipped on the CDN, for web maps that load the whole
+  layer in one request.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.

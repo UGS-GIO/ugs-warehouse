@@ -50,6 +50,10 @@ PAGE_ROWS = 1024
 OVERVIEW_TOLERANCES = (0.00068, 0.0027, 0.0108)
 OVERVIEW_MIN_VERTICES = 1_000_000  # about 16 MB of WKB
 OVERVIEW_MIN_SHRINK = 0.7   # a level must be under 70% of the file before it, or it is not written
+# A small layer also gets a GeoJSON copy, which a web map loads in one request from the CDN with no
+# server in the path. The cap is on the GeoParquet, about a fifth of the GeoJSON's size.
+GEOJSON_MAX_BYTES = 1_000_000
+GEOJSON_MIME = "application/geo+json"
 # Bump when write or write_overviews changes what they write in a way the settings below miss.
 ARCHIVE_BUILD_VERSION = 1
 
@@ -291,6 +295,27 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
             failed.append(n)
     if failed:
         raise RuntimeError(f"overview levels {failed} failed")
+
+
+def write_geojson(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
+                  written: dict[str, gcs.FileMeta], listed: bool = False) -> None:
+    """Write `{stem}.geojson` when the archive is at most GEOJSON_MAX_BYTES, recording it in
+    `written`. A larger layer gets none, and its old file is removed once the published item does
+    not list it (`listed`), as write_overviews does."""
+    path = config.geojson_path(topic.stem)
+    if written["data"].size > GEOJSON_MAX_BYTES:
+        if not listed:
+            gcs.delete_many([path])
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, os.path.basename(path))
+        con.execute(f"COPY (SELECT * FROM {view}) TO '{local}' (FORMAT GDAL, DRIVER 'GeoJSON', "
+                    "LAYER_CREATION_OPTIONS ('RFC7946=YES', 'ID_FIELD=feature_id'))")
+        with open(local, "rb") as f:
+            written["geojson"] = gcs.put_bytes(f.read(), path, content_type=GEOJSON_MIME,
+                                               cache_control=gcs.CACHE_MUTABLE, compress=True)
+    print(f"[{topic.fqn}] geojson: {config.public_url(path)}")
+
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:
     """Write `{stem}.parquet` (latest) + dated archive to GCS. DuckDB streams the COPY (with the

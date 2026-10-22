@@ -140,6 +140,13 @@ def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, 
     return props
 
 
+def published_overviews(topic: Topic) -> set[str]:
+    """Object paths of the overview levels the published item lists."""
+    listed = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    return {config.overview_path(topic.stem, n)
+            for n in range(1, len(sink_archive.OVERVIEW_TOLERANCES) + 1) if f"overview_{n}" in listed}
+
+
 def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmtiles_url: str,
             rel: dict, file_meta: dict[str, gcs.FileMeta] | None) -> dict:
     """The item's assets, each stamped with this run's or the published file fields."""
@@ -165,13 +172,17 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
-    # Generalized copies of a heavy layer, one per drawing scale (vector/sink_archive.py). Presence-
-    # driven like the thumbnail: the archive sink writes or removes them with the archive. Their own
+    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
+    # sink, the thumbnail another job renders) keeps what the published item already carries.
+    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    # Generalized copies of a heavy layer, one per drawing scale (vector/sink_archive.py). A run that
+    # rewrote the archive lists the levels it wrote; otherwise the published ones stand. Their own
     # role keeps them out of downloads; the FeatureServer finds them by key prefix and tolerance.
+    rewritten = "data" in (file_meta or {})
     for n, tolerance in enumerate(sink_archive.OVERVIEW_TOLERANCES, 1):
-        path = config.overview_path(topic.stem, n)
-        if gcs.exists(path):
-            assets[f"overview_{n}"] = {
+        key, path = f"overview_{n}", config.overview_path(topic.stem, n)
+        if (key in file_meta) if rewritten else (key in carried and gcs.exists(path)):
+            assets[key] = {
                 "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:overview"],
                 "title": f"GeoParquet generalized to {tolerance} deg for small-scale display",
                 "ugs:simplify_tolerance": tolerance}
@@ -192,9 +203,6 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
     # publishing (vector/ingest.py).
     if gcs.exists(config.topic_thumbnail_path(topic.stem)):
         assets["thumbnail"] = stac.topic_thumbnail_asset(topic.stem)
-    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
-    # sink, the thumbnail another job renders) keeps what the published item already carries.
-    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
     for key, asset in assets.items():
         if "file:size" in asset:      # a related table stamps its own — it did the upload
             continue

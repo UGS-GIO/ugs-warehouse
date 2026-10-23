@@ -28,7 +28,7 @@ resource "google_cloud_run_v2_service" "geoservices" {
   template {
     service_account                  = var.runtime_service_account
     timeout                          = "60s"
-    max_instance_request_concurrency = 200
+    max_instance_request_concurrency = 100
 
     scaling {
       min_instance_count = 0
@@ -45,7 +45,7 @@ resource "google_cloud_run_v2_service" "geoservices" {
       resources {
         limits = {
           cpu    = "2"
-          memory = "4Gi"
+          memory = "2Gi"
         }
         startup_cpu_boost = true
         # Keep CPU between requests off: scale-to-zero billing.
@@ -103,8 +103,48 @@ resource "google_compute_backend_service" "geoservices" {
     }
   }
 
+  security_policy = google_compute_security_policy.geoservices.id
+
   backend {
     group = google_compute_region_network_endpoint_group.geoservices.id
+  }
+}
+
+# A backend policy sees only cache misses, so it limits what reaches Cloud Run, not cached reads.
+# One map pan sends tens of queries, and an office shares one IP, so the limit is high.
+resource "google_compute_security_policy" "geoservices" {
+  name    = "ugs-warehouse-geoservices"
+  project = var.build_project
+
+  rule {
+    action   = "throttle"
+    priority = 1000
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    rate_limit_options {
+      conform_action = "allow"
+      exceed_action  = "deny(429)"
+      enforce_on_key = "IP"
+      rate_limit_threshold {
+        count        = 1500
+        interval_sec = 60
+      }
+    }
+  }
+
+  rule {
+    action   = "allow"
+    priority = 2147483647
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
   }
 }
 

@@ -5,6 +5,11 @@
 # It lives in the build project, beside the Artifact Registry that holds its image. This file owns
 # its settings; cloudbuild.yaml only rolls out new images (`--image`), so the image and the traffic
 # split it moves (the `prod` tag) are ignored here. The deploy SA needs roles/run.admin there.
+#
+# Clients reach it at https://api.geology.utah.gov, through the maps-assets load balancer in
+# ut-dnr-ugs-maps-prod (docs/LOAD_BALANCER.md). That load balancer's URL map sends the host to the
+# backend service below, which holds the CDN settings. Ingress admits only the load balancer, so the
+# run.app URL does not bypass the CDN.
 
 import {
   to = google_cloud_run_v2_service.geoservices
@@ -17,7 +22,7 @@ resource "google_cloud_run_v2_service" "geoservices" {
   location = var.region
   labels   = merge(var.labels, { component = "geoservices" })
 
-  ingress             = "INGRESS_TRAFFIC_ALL"
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
   deletion_protection = false
 
   template {
@@ -69,7 +74,46 @@ resource "google_cloud_run_v2_service_iam_member" "geoservices_public" {
   member   = "allUsers"
 }
 
+resource "google_compute_region_network_endpoint_group" "geoservices" {
+  name                  = "ugs-warehouse-geoservices"
+  project               = var.build_project
+  region                = var.region
+  network_endpoint_type = "SERVERLESS"
+
+  cloud_run {
+    service = google_cloud_run_v2_service.geoservices.name
+  }
+}
+
+# The CDN caches what the server marks cacheable (layer metadata and query results carry
+# `public, max-age=300`; an error carries `no-store`), keyed on the full query string.
+resource "google_compute_backend_service" "geoservices" {
+  name                  = "ugs-warehouse-geoservices"
+  project               = var.build_project
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  protocol              = "HTTPS"
+  enable_cdn            = true
+
+  cdn_policy {
+    cache_mode = "USE_ORIGIN_HEADERS"
+    cache_key_policy {
+      include_host         = true
+      include_protocol     = true
+      include_query_string = true
+    }
+  }
+
+  backend {
+    group = google_compute_region_network_endpoint_group.geoservices.id
+  }
+}
+
 output "geoservices_url" {
-  value       = google_cloud_run_v2_service.geoservices.uri
-  description = "run.app URL of the ArcGIS FeatureServer."
+  value       = "https://api.geology.utah.gov"
+  description = "Public URL of the ArcGIS FeatureServer, through the maps-assets load balancer."
+}
+
+output "geoservices_backend_service" {
+  value       = google_compute_backend_service.geoservices.id
+  description = "Backend service the maps-assets URL map routes api.geology.utah.gov to."
 }

@@ -34,7 +34,7 @@ filter on these columns, tools such as DuckDB read only the rows in your area.
 > layer id.
 >
 > The ArcGIS feature layers are at
-> `https://ugs-warehouse-geoservices-534590904912.us-central1.run.app`.
+> `https://api.geology.utah.gov`.
 
 ---
 
@@ -185,7 +185,7 @@ Viewer, Experience Builder and StoryMaps.
 1. Click **Add Data** > **Data From Path**. In Map Viewer, click **Add layer** > **Add layer from
    URL**.
 2. Paste the layer URL, for example
-   `https://ugs-warehouse-geoservices-534590904912.us-central1.run.app/ugs/rest/services/hazards_qfaults/default/FeatureServer/0`.
+   `https://api.geology.utah.gov/ugs/rest/services/hazards_qfaults/default/FeatureServer/0`.
 
 You can copy this URL from **Links** > **ArcGIS feature layer** on the layer page in the viewer.
 

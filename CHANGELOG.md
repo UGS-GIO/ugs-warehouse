@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.12.0...v1.13.0) (2026-10-23)
+
+
+### Features
+
+* **infra:** serve the FeatureServer at api.geology.utah.gov through the CDN ([#633](https://github.com/UGS-GIO/ugs-warehouse/issues/633)) ([2f493a0](https://github.com/UGS-GIO/ugs-warehouse/commit/2f493a07305a43ba60551cf726d244f0f393b819))
+
 ## [1.12.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.11.3...v1.12.0) (2026-10-22)
 
 

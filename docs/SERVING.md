@@ -10,7 +10,7 @@ Services are a thin read-through, never the system of record.
 | Consumer | Wants | Serve via | Service? |
 |---|---|---|---|
 | ArcGIS Pro / QGIS / AGOL (vector) | queryable feature layer | **OGC API Features** (pygeoapi) | yes — scale-to-zero |
-| AGOL Map Viewer / Experience Builder / StoryMaps | styled feature layer | **ArcGIS FeatureServer** (Go, [geoparquet-featureserver](https://github.com/UGS-GIO/geoparquet-featureserver)) | yes — scale-to-zero |
+| AGOL Map Viewer / Experience Builder / StoryMaps | styled feature layer | **ArcGIS FeatureServer** (Go, [cloud-native-geoservices](https://github.com/UGS-GIO/cloud-native-geoservices)) | yes — scale-to-zero |
 | ArcGIS Pro (raster) | the geologic-map COGs | **STAC catalog** + **COG by URL** | no — CDN |
 | Web maps | tiles | **PMTiles** (MapLibre) | no — CDN |
 | Analysts / QGIS / Python / R / DuckDB | query + download | **GeoParquet** (range-read pushdown) | no — CDN |

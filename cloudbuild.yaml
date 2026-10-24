@@ -139,7 +139,7 @@ steps:
 
   # ArcGIS FeatureServer for Map Viewer, Experience Builder and StoryMaps: one Go binary over the
   # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes. The code lives in
-  # UGS-GIO/geoparquet-featureserver; Dockerfile.geoservices pins the release.
+  # UGS-GIO/cloud-native-geoservices; Dockerfile.geoservices pins the release.
   - id: build-geoservices
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -870,6 +870,13 @@ steps:
           --region=${_REGION} \
           --tag=prod
         gcloud run services update-traffic ${_GEOSERVICES_SERVICE} --region=${_REGION} --to-tags=prod=100
+
+  # The deployed FeatureServer, end to end through the load balancer and CDN.
+  - id: smoke-geoservices
+    waitFor: [deploy-geoservices]
+    name: python:3.12-slim
+    entrypoint: python
+    args: [-m, scripts.smoke_geoservices]
 
   # No resolve-features-url here any more: it existed only to bake VITE_FEATURES_BASE into the
   # viewer build, and nothing in this config builds the viewer now. cloudbuild-review-viewer.yaml

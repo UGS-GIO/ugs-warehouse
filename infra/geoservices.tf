@@ -1,4 +1,4 @@
-# ArcGIS FeatureServer (UGS-GIO/geoparquet-featureserver): public, scale-to-zero, reads the public CDN,
+# ArcGIS FeatureServer (UGS-GIO/cloud-native-geoservices): public, scale-to-zero, reads the public CDN,
 # no secrets. Its cache budgets size themselves from the memory limit, so memory buys warm tiles.
 # Past its limits it sheds with 503 rather than queueing, so concurrency can be high.
 #

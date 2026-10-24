@@ -315,6 +315,9 @@ gcloud scheduler jobs create http warehouse-nightly \
   no HMAC). DuckLake writes via obstore-fsspec — same auth. No gcsfuse, no GCS extension.
 - **Service (Pub/Sub push)** — deployed by `cloudbuild.yaml` (`deploy-service`) and wired
   by the `wire-pubsub` step. See **§4** for the two IAM grants still needed (GCP perms).
+- **ImageServer** (`ugs-warehouse-imageserver`): `deploy-imageserver` creates it, then
+  `infra/imageserver.tf` imports it and adds the NEG and CDN backend; the maps-assets URL map routes
+  its paths (route rules in that file). `smoke-geoservices` fails until that route exists.
 
 ## Environment variables
 

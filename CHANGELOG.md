@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.14.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.13.0...v1.14.0) (2026-10-24)
+
+
+### Features
+
+* **infra:** rate-limit FeatureServer cache misses and size it from the load tests ([#635](https://github.com/UGS-GIO/ugs-warehouse/issues/635)) ([6cd5e59](https://github.com/UGS-GIO/ugs-warehouse/commit/6cd5e59300def7218b92b30499abd3b8942d15d9))
+
+
+### Bug Fixes
+
+* **deps:** build the FeatureServer from cloud-native-geoservices v0.4.0 ([#641](https://github.com/UGS-GIO/ugs-warehouse/issues/641)) ([dd212b1](https://github.com/UGS-GIO/ugs-warehouse/commit/dd212b1080a98c00d56c545205fde3455e8614a0))
+* **deps:** build the FeatureServer from geoparquet-featureserver v0.3.0 ([#639](https://github.com/UGS-GIO/ugs-warehouse/issues/639)) ([0af8b55](https://github.com/UGS-GIO/ugs-warehouse/commit/0af8b55c70737c55d015f967a9274caf86d41bab))
+
 ## [1.13.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.12.0...v1.13.0) (2026-10-23)
 
 

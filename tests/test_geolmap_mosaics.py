@@ -460,7 +460,7 @@ def test_build_tier_writes_a_webp_cog_from_a_grid_vrt(tmp_path, maxz, aligned, c
     cog = next(c for c in calls if c[0] == "gdal_translate")
     assert cog[2].endswith(grid_vrts[-1]) and cog[cog.index("-of") + 1] == "COG"
     for co in ("TILING_SCHEME=GoogleMapsCompatible", f"ZOOM_LEVEL={cog_zoom}", "COMPRESS=WEBP",
-               f"QUALITY={gm.TILE_QUALITY}", "RESAMPLING=nearest"):
+               f"QUALITY={gm.TILE_QUALITY}", "WARP_RESAMPLING=nearest", "OVERVIEW_RESAMPLING=average"):
         assert co in cog
     (path, obj), kw = uploads[-1]
     assert obj == f"{identity.MOSAIC_PREFIX}/geologic-maps-24k-test-current.cog.tif"

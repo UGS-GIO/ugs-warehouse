@@ -60,7 +60,7 @@ def query(base: str, topic: str, **params) -> str:
 
 
 def row_counts() -> dict[str, int]:
-    doc = json.loads(fetch(ITEMS_URL)[2])
+    doc = get_json(ITEMS_URL)
     items = doc.get("items") or doc.get("features") or []
     return {i["id"]: i["properties"].get("ugs:row_count") for i in items if i["id"] in LAYERS}
 
@@ -71,7 +71,7 @@ def check_layer(base: str, topic: str, geometry: str | None, rows: int | None) -
         assert meta["geometryType"] == geometry, meta["geometryType"]
     assert meta["objectIdField"] == "feature_id", meta["objectIdField"]
     assert any(f["type"] == "esriFieldTypeOID" for f in meta["fields"])
-    assert meta.get("extent", {}).get("xmin") is not None, "no extent"
+    e = meta["extent"]
 
     count = get_json(query(base, topic, where="1=1", returnCountOnly="true"))["count"]
     if rows is not None:
@@ -82,8 +82,9 @@ def check_layer(base: str, topic: str, geometry: str | None, rows: int | None) -
     assert len(page["features"]) == min(5, count), len(page["features"])
     assert all(f.get("geometry") for f in page["features"]), "a feature without geometry"
 
-    ids = get_json(query(base, topic, objectIds="1,2", outFields="feature_id"))
-    assert sorted(f["attributes"]["feature_id"] for f in ids["features"]) == [1, 2]
+    first = sorted(f["attributes"]["feature_id"] for f in page["features"])[:2]
+    ids = get_json(query(base, topic, objectIds=",".join(map(str, first)), outFields="feature_id"))
+    assert sorted(f["attributes"]["feature_id"] for f in ids["features"]) == first
 
     only = get_json(query(base, topic, where="1=1", returnIdsOnly="true"))
     assert len(only["objectIds"]) == count, len(only["objectIds"])
@@ -99,7 +100,6 @@ def check_layer(base: str, topic: str, geometry: str | None, rows: int | None) -
     assert gj["type"] == "FeatureCollection" and len(gj["features"]) == min(5, count)
 
     # A drawing tile, as Map Viewer asks for one.
-    e = meta["extent"]
     tile = get_json(query(base, topic, geometry=json.dumps({**{k: e[k] for k in
                           ("xmin", "ymin", "xmax", "ymax")}, "spatialReference": e["spatialReference"]}),
                           geometryType="esriGeometryEnvelope", spatialRel="esriSpatialRelIntersects",

@@ -27,7 +27,7 @@
             "displayName": "mosaics",
             "container": {
               "imageUri": "SET_BY_submit_mosaics_batch.sh",
-              "options": "--network host",
+              "options": "--network host --ulimit nofile=65536:65536",
               "volumes": ["/mnt/disks/mosaic-work:/mnt/mosaic-work"],
               "commands": ["SET_BY_submit_mosaics_batch.sh"]
             },

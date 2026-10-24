@@ -3,9 +3,9 @@
 # The 24k (z17) and 100k (z15) tiers build here; the Cloud Run mosaics job has neither the disk nor the
 # time for their statewide tile trees. --scale picks the tier (default 24k).
 #
-# Defaults to a SCRATCH run: --quads writes only geologic-maps-<scale>-test-<editions>.pmtiles and no
-# STAC item (pubs/geolmap_mosaics.py build()), so it cannot touch the live tier or catalog. The real
-# statewide run needs --statewide and overwrites the live <scale> object + item.
+# Defaults to a SCRATCH run: --quads writes only geologic-maps-<scale>-test-<editions>.pmtiles and
+# .cog.tif, and no STAC item (pubs/geolmap_mosaics.py build()), so it cannot touch the live tier or
+# catalog. The real statewide run needs --statewide and overwrites the live <scale> objects + item.
 #
 # --review writes to the login-gated review warehouse instead (the private review bucket under
 # review/stac, served by the review app), still reading the COGs from the public bucket. Publishing a

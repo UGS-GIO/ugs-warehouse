@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.14.0...v1.14.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** build the FeatureServer from cloud-native-geoservices v0.4.2 ([#643](https://github.com/UGS-GIO/ugs-warehouse/issues/643)) ([7c7d286](https://github.com/UGS-GIO/ugs-warehouse/commit/7c7d2860bfbd4180eb12acc1dd55c7e764017b31))
+
 ## [1.14.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.13.0...v1.14.0) (2026-10-24)
 
 

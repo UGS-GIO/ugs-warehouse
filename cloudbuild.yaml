@@ -32,6 +32,7 @@ substitutions:
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (pygeoapi over GeoParquet, scale-to-zero)
   _GEOSERVICES_SERVICE: ugs-warehouse-geoservices  # ArcGIS FeatureServer for Map Viewer / Experience Builder (Go over the CDN GeoParquet, scale-to-zero)
+  _IMAGESERVER_SERVICE: ugs-warehouse-imageserver  # ArcGIS ImageServer over the geologic-map COGs (titiler, scale-to-zero)
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
@@ -149,6 +150,16 @@ steps:
         IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices
         docker build -t "$$IMG:${_TAG}" -t "$$IMG:latest" - < Dockerfile.geoservices
 
+  # ArcGIS ImageServer over the COGs, from the same repo; Dockerfile.imageserver pins the release.
+  - id: build-imageserver
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-imageserver
+        docker build -t "$$IMG:${_TAG}" -t "$$IMG:latest" - < Dockerfile.imageserver
+
   # Ops console (Django + HTMX). Build context is the repo root (Dockerfile.admin COPYs admin/).
   - id: build-admin
     name: gcr.io/cloud-builders/docker
@@ -201,6 +212,11 @@ steps:
     waitFor: [build-geoservices]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices']
+
+  - id: push-imageserver
+    waitFor: [build-imageserver]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-imageserver']
 
   - id: push-api
     waitFor: [build-api]
@@ -871,9 +887,28 @@ steps:
           --tag=prod
         gcloud run services update-traffic ${_GEOSERVICES_SERVICE} --region=${_REGION} --to-tags=prod=100
 
-  # The deployed FeatureServer, end to end through the load balancer and CDN.
+  # ArcGIS ImageServer. infra/imageserver.tf owns its settings; the flags here match it so the first
+  # deploy creates the service locked to the load balancer. Low concurrency: exports queue for a slot.
+  - id: deploy-imageserver
+    waitFor: [push-imageserver]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run deploy ${_IMAGESERVER_SERVICE} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-imageserver:${_TAG} \
+          --region=${_REGION} \
+          --service-account=${_RUNTIME_SA} \
+          --ingress=internal-and-cloud-load-balancing \
+          --concurrency=8 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=20 \
+          --tag=prod
+        gcloud run services update-traffic ${_IMAGESERVER_SERVICE} --region=${_REGION} --to-tags=prod=100
+
+  # The deployed FeatureServer and ImageServer, end to end through the load balancer and CDN.
   - id: smoke-geoservices
-    waitFor: [deploy-geoservices]
+    waitFor: [deploy-geoservices, deploy-imageserver]
     name: python:3.12-slim
     entrypoint: python
     args: [-m, scripts.smoke_geoservices]
@@ -888,6 +923,7 @@ steps:
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-imageserver
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api

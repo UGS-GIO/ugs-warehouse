@@ -441,7 +441,7 @@ which preserves object paths.
   render, so Map Viewer, Experience Builder and StoryMaps get the symbology, popups and attribute
   tables. The code is [geoparquet-featureserver](https://github.com/UGS-GIO/geoparquet-featureserver);
   `Dockerfile.geoservices` pins the release deployed. `scripts/smoke_geoservices.py` checks the
-  public service end to end after each deploy and every night.
+  public service end to end after each deploy.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
 - External catalogs (USWB) federate in as children of the root, so one catalog URL covers them.
 

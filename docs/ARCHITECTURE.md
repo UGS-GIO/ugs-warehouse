@@ -442,6 +442,9 @@ which preserves object paths.
   tables. The code is [cloud-native-geoservices](https://github.com/UGS-GIO/cloud-native-geoservices);
   `Dockerfile.geoservices` pins the release deployed. `scripts/smoke_geoservices.py` checks the
   public service end to end after each deploy.
+- `ugs-warehouse-imageserver`: an ArcGIS ImageServer per geologic-map COG (24k series and publication
+  COGs), from the same repo on titiler; `Dockerfile.imageserver` pins the release and lists the STAC
+  collections. The load balancer sends `/ugs/rest/services/{id}/ImageServer` paths to it.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
 - External catalogs (USWB) federate in as children of the root, so one catalog URL covers them.
 

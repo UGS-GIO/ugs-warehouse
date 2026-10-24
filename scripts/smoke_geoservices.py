@@ -1,4 +1,4 @@
-"""Check the deployed FeatureServer end to end, through the load balancer and CDN.
+"""Check the deployed FeatureServer and ImageServer end to end, through the load balancer and CDN.
 
     python -m scripts.smoke_geoservices [--base https://api.geology.utah.gov]
 
@@ -26,6 +26,9 @@ LAYERS = {
     "enmin_ccs_co2_sources": None,
 }
 BIG_KEY_LAYER = "enmin_ccs_co2_sources"
+# A publication COG, and a tile inside it.
+IMAGE_ID = "M-103"
+IMAGE_TILE = "12/1580/768"
 
 
 def fetch(url: str, headers: dict | None = None) -> tuple[int, dict, bytes]:
@@ -146,6 +149,19 @@ def check_cache(base: str) -> None:
     raise AssertionError("the CDN never served the repeat from cache (no Age header)")
 
 
+def check_image(base: str) -> None:
+    """An ImageServer describes an 8-bit COG and draws a tile and an export."""
+    url = f"{base}/ugs/rest/services/{IMAGE_ID}/ImageServer"
+    meta = get_json(f"{url}?f=json")
+    assert meta["pixelType"] == "U8" and meta["tileInfo"], meta.get("pixelType")
+    status, head, body = fetch(f"{url}/tile/{IMAGE_TILE}")
+    assert status == 200 and head.get("content-type", "").startswith("image/") and body, status
+    bbox = ",".join(str(meta["extent"][k]) for k in ("xmin", "ymin", "xmax", "ymax"))
+    status, head, _ = fetch(f"{url}/exportImage?" + urllib.parse.urlencode(
+        {"f": "image", "format": "png", "bbox": bbox, "bboxSR": 3857, "size": "256,256"}))
+    assert status == 200 and head.get("content-type") == "image/png", (status, head)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--base", default="https://api.geology.utah.gov")
@@ -154,7 +170,8 @@ def main() -> int:
     checks = [(f"layer {t}", lambda t=t, g=g: check_layer(base, t, g, rows.get(t)))
               for t, g in LAYERS.items()]
     checks += [("big integer", lambda: check_big_integer(base)),
-               ("errors", lambda: check_errors(base)), ("cache", lambda: check_cache(base))]
+               ("errors", lambda: check_errors(base)), ("cache", lambda: check_cache(base)),
+               ("image server", lambda: check_image(base))]
     failed = 0
     for name, check in checks:
         try:

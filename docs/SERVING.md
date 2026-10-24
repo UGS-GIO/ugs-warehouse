@@ -12,6 +12,7 @@ Services are a thin read-through, never the system of record.
 | ArcGIS Pro / QGIS / AGOL (vector) | queryable feature layer | **OGC API Features** (pygeoapi) | yes — scale-to-zero |
 | AGOL Map Viewer / Experience Builder / StoryMaps | styled feature layer | **ArcGIS FeatureServer** (Go, [cloud-native-geoservices](https://github.com/UGS-GIO/cloud-native-geoservices)) | yes — scale-to-zero |
 | ArcGIS Pro (raster) | the geologic-map COGs | **STAC catalog** + **COG by URL** | no — CDN |
+| AGOL Map Viewer / StoryMaps / Field Maps (raster) | the geologic-map COGs as an image layer | **ArcGIS ImageServer** (titiler, [cloud-native-geoservices](https://github.com/UGS-GIO/cloud-native-geoservices)) | yes — scale-to-zero |
 | Web maps | tiles | **PMTiles** (MapLibre) | no — CDN |
 | Analysts / QGIS / Python / R / DuckDB | query + download | **GeoParquet** (range-read pushdown) | no — CDN |
 | Discovery | "what exists" | **STAC catalog** | no — CDN |

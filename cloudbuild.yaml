@@ -139,7 +139,7 @@ steps:
 
   # ArcGIS FeatureServer for Map Viewer, Experience Builder and StoryMaps: one Go binary over the
   # same GeoParquet, symbolized by the Esri renderers ugs-styles publishes. The code lives in
-  # UGS-GIO/geoparquet-featureserver; Dockerfile.geoservices pins the release.
+  # UGS-GIO/cloud-native-geoservices; Dockerfile.geoservices pins the release.
   - id: build-geoservices
     name: gcr.io/cloud-builders/docker
     entrypoint: bash

@@ -1,12 +1,12 @@
 # ArcGIS FeatureServer over the serving-topics GeoParquet, built from a pinned release of
-# github.com/UGS-GIO/geoparquet-featureserver. No build context: `docker build - < Dockerfile.geoservices`
+# github.com/UGS-GIO/cloud-native-geoservices. No build context: `docker build - < Dockerfile.geoservices`
 FROM golang:1.26 AS build
-ARG FEATURESERVER_VERSION=v0.3.0
+ARG FEATURESERVER_VERSION=v0.4.0
 RUN CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags="-s -w" \
-    github.com/UGS-GIO/geoparquet-featureserver@${FEATURESERVER_VERSION}
+    github.com/UGS-GIO/cloud-native-geoservices/cmd/featureserver@${FEATURESERVER_VERSION}
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/geoparquet-featureserver /geoservices
+COPY --from=build /out/featureserver /geoservices
 ENV PORT=8080 \
     STAC_COLLECTION_URL=https://maps-assets.geology.utah.gov/warehouse/stac/ugs-serving-topics/items.json
 EXPOSE 8080

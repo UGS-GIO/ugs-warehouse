@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.15.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.14.1...v1.15.0) (2026-10-24)
+
+
+### Features
+
+* **infra:** deploy the ArcGIS ImageServer from cloud-native-geoservices v0.6.0 ([#648](https://github.com/UGS-GIO/ugs-warehouse/issues/648)) ([0a39c0f](https://github.com/UGS-GIO/ugs-warehouse/commit/0a39c0fedbb241b833cb5a9f1db8e375016ddfd4))
+
+
+### Bug Fixes
+
+* **deps:** build the FeatureServer from cloud-native-geoservices v0.5.0 ([#646](https://github.com/UGS-GIO/ugs-warehouse/issues/646)) ([92e1ddb](https://github.com/UGS-GIO/ugs-warehouse/commit/92e1ddb676737694799a015a3e5d859b5bf26fe7))
+
 ## [1.14.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.14.0...v1.14.1) (2026-10-24)
 
 

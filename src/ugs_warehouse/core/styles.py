@@ -112,7 +112,7 @@ def _cdn_url(entry: dict, key: str) -> str:
 _RASTER_KEYS = ("colormap_name", "colormap", "rescale", "nodata")
 # sprite: icon renders' pre-baked sprite sheet, map.addSprite()d before the symbol layer.
 # glyphs: label renders' glyph template; without it MapLibre draws no text at all.
-# esri_url: the same render as an Esri renderer, for the FeatureServer (geoparquet-featureserver).
+# esri_url: the same render as an Esri renderer, for the FeatureServer (cloud-native-geoservices).
 _VECTOR_URL_KEYS = (("sprite", "sprite"), ("glyphs", "glyphs"), ("esri", "esri_url"))
 # legend: explicit legend (icon renders have no derivable paint color). field: the attribute the
 # render symbolizes, so the viewer wires legend/filter without re-parsing the GL expression.

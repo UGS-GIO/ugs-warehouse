@@ -439,7 +439,7 @@ which preserves object paths.
 - OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
 - `ugs-warehouse-geoservices`: an ArcGIS FeatureServer over the GeoParquet, one layer per ugs-styles
   render, so Map Viewer, Experience Builder and StoryMaps get the symbology, popups and attribute
-  tables. The code is [geoparquet-featureserver](https://github.com/UGS-GIO/geoparquet-featureserver);
+  tables. The code is [cloud-native-geoservices](https://github.com/UGS-GIO/cloud-native-geoservices);
   `Dockerfile.geoservices` pins the release deployed. `scripts/smoke_geoservices.py` checks the
   public service end to end after each deploy.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.

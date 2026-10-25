@@ -378,6 +378,7 @@ def _write_cog(vrt: str, out: str, zoom: int, env: dict) -> None:
         ["gdal_translate", "-q", vrt, out, "-of", "COG", "-co", "TILING_SCHEME=GoogleMapsCompatible",
          "-co", f"ZOOM_LEVEL={zoom}", "-co", "COMPRESS=WEBP", "-co", f"QUALITY={TILE_QUALITY}",
          "-co", "WARP_RESAMPLING=nearest", "-co", "OVERVIEW_RESAMPLING=average",
+         "-co", "BIGTIFF=YES",
          "-co", "NUM_THREADS=ALL_CPUS"], env=env, check=True)
 
 

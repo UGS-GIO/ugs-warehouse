@@ -97,9 +97,9 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf
 // screen every control here is a 44 px target; a mouse keeps the dense rows.
 const INFO_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 "
   + "hover:text-foreground focus:opacity-100 group-hover:opacity-100 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-lg pointer-coarse:opacity-100";
-const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-25 "
+const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-3xs text-muted-foreground hover:text-foreground disabled:opacity-25 "
   + "pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-sm";
-const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover "
+const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-2xs font-medium normal-case tracking-normal hover:bg-hover "
   + "pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
 export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf, controlsOf }: {

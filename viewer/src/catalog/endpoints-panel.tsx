@@ -80,7 +80,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
     <UiSelect value={chosen} onValueChange={setPickedRender}
       title="Which published symbology this service serves"
       items={renders.map((r) => ({ value: r, label: r }))}
-      className="max-w-[11rem] shrink-0 text-sm" />
+      className="max-w-44 shrink-0 text-sm" />
   ) : undefined;
   type Row = { label: string; desc: string; url: string; pick?: React.ReactNode; esri?: boolean };
   const rows: Row[] = [];

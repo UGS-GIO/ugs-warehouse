@@ -50,7 +50,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-          <Menu.Popup className="max-h-[var(--available-height)] min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
+          <Menu.Popup className="max-h-(--available-height) min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
             {/* Views only where the tab row is hidden. */}
             {pages.length > 0 && (
               <div className="md:hidden">

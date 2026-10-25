@@ -84,6 +84,17 @@
   --color-ring: hsl(var(--ring));
 }
 
+@theme {
+  --text-2xs: 11px;
+  --text-3xs: 10px;
+  --container-lead: 75ch;
+  --container-lightbox: 92vw;
+  --spacing-modal: 85vh;
+  --spacing-popup: 70vh;
+  --spacing-preview: 75svh;
+  --spacing-preview-lg: 55svh;
+}
+
 /* Utah DS typography. Source Sans 3 is the DS body font ("can be universally used"); we self-host
    it so the app doesn't depend on the header package for its own text. UT Industry comes FROM the
    header package (v5+ loads all four weights and exposes the variable) — no second @font-face. */

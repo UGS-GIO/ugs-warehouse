@@ -69,7 +69,7 @@ export function Developers({ catalogUrl, groups }: { catalogUrl: string; groups:
   ];
 
   return (
-    <section id="for-developers" className="w-full max-w-[62rem] scroll-mt-24 space-y-10 py-8">
+    <section id="for-developers" className="w-full max-w-248 scroll-mt-24 space-y-10 py-8">
       <header className="space-y-2">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">For developers</h2>
         <p className="max-w-2xl text-muted-foreground">

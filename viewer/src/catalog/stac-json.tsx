@@ -56,7 +56,7 @@ export function StacJson({ item, title = "STAC item JSON" }: { item: StacDoc; ti
         <div role="dialog" aria-modal="true" aria-label={title}
           className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div aria-hidden onClick={() => setOpen(false)} className="absolute inset-0 bg-black/50" />
-          <div ref={panelRef} className="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg border border-border bg-card shadow-xl">
+          <div ref={panelRef} className="relative z-10 flex max-h-modal w-full max-w-3xl flex-col rounded-lg border border-border bg-card shadow-xl">
             <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-card-foreground">{title}</h2>
               <div className="flex items-center gap-1.5">

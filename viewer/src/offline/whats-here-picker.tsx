@@ -29,6 +29,7 @@ import { type Hit, hitLabel, identifyAt, identifyPoints, tileAt } from "./identi
 import { limit, probe } from "./limit";
 import * as opfs from "./opfs";
 import { useOffline } from "./store";
+import { formatCoords, pointLink } from "@/map/share-point";
 import {
   caveatOf, type Here, isSaveable, isUnitLayer, mostDetailed, otherUnit, probeOf, quadsFor, REFERENCE_IDS, ringAround,
   saveBbox, scaleOf, type Target, toleranceM,
@@ -392,8 +393,27 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
 
 
   const btn = "rounded-md border border-border px-3 py-1.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11";
+  const smallBtn = "rounded-md border border-border px-2.5 py-1 text-xs hover:bg-hover pointer-coarse:min-h-11";
+  // The point itself, to note or send: the coordinates, or a link that opens the map here with a pin.
+  // Without a share sheet the link is copied instead.
+  const [said, setSaid] = useState<string | null>(null);
+  const copy = (text: string, done: string) => navigator.clipboard?.writeText(text)
+    .then(() => setSaid(done), () => setSaid("Couldn't copy"));
+  const pointBar = querying && target.kind === "point" && (
+    <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
+      <button type="button" className={smallBtn}
+        onClick={() => copy(formatCoords(target.lat, target.lon), "Coordinates copied")}>Copy coordinates</button>
+      <button type="button" className={smallBtn} onClick={() => {
+        const url = pointLink(location.href, target.lon, target.lat, target.zoom ?? 14);
+        if (navigator.share) navigator.share({ title: "A point on the UGS map", text: formatCoords(target.lat, target.lon), url }).catch(() => {});
+        else copy(url, "Link copied");
+      }}>Share</button>
+      {said && <span role="status" className="text-xs text-muted-foreground">{said}</span>}
+    </div>
+  );
   const list = (
     <>
+      {pointBar}
       {card}
       {checking > 0 && (
         <p className="px-4 py-1 text-xs text-muted-foreground">Checking {checking} more layer{checking === 1 ? "" : "s"}…</p>

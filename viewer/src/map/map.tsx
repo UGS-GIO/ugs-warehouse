@@ -11,6 +11,9 @@ import { type Flavor, GLYPHS, protomapsStyle } from "./basemap-style";
 import { basemapProtocol } from "@/offline/basemap-protocol";
 import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
+import { withOpacity } from "./layer-opacity";
+import { askHeading, lastFix, setFix, useFix, useHeading } from "./location";
+import { formatCoords, pinOf } from "./share-point";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { hasFootprint, type StacDoc } from "@/stac";
 import { useCogBoxes } from "@/stac/cog-extents";
@@ -126,6 +129,18 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
   };
 }
 
+// Which way the phone points: a soft wedge from the blue dot, drawn north-up and turned by the marker.
+const HeadingCone = () => (
+  <svg aria-hidden="true" width="64" height="64" viewBox="0 0 64 64" className="pointer-events-none">
+    <defs>
+      <linearGradient id="heading-cone" x1="0" y1="1" x2="0" y2="0">
+        <stop offset="0" stopColor="#1da1f2" stopOpacity="0.55" /><stop offset="1" stopColor="#1da1f2" stopOpacity="0" />
+      </linearGradient>
+    </defs>
+    <path d="M32 32 L18 4 A30 30 0 0 1 46 4 Z" fill="url(#heading-cone)" />
+  </svg>
+);
+
 const PinGlyph = () => (
   <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
     <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
@@ -189,16 +204,24 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     if (m && !isDesktop) m.easeTo({ center: [lng, lat], zoom, offset: [0, -0.28 * m.getContainer().clientHeight], duration: 400 });
     onPickAt?.(lng, lat, zoom);
   };
-  // "What's under me": the same picker at the device's location.
+  // "What's under me": the same picker at the device's location, from the geolocate control's own
+  // watch. With the watch off it is started, and the picker opens on its first fix.
+  const geolocate = useRef<maplibregl.GeolocateControl>(null);
+  const awaitingFix = useRef(false);
+  const fix = useFix();
+  const heading = useHeading();
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const underZoom = () => Math.max(mapRef.current?.getZoom() ?? 0, 14);
   const underMe = () => {
     setGpsError(null);
+    void askHeading();
     if (!navigator.geolocation) return setGpsError("This device can't share its location.");
-    navigator.geolocation.getCurrentPosition(
-      (p) => pickAt(p.coords.longitude, p.coords.latitude, Math.max(mapRef.current?.getZoom() ?? 0, 14)),
-      (e) => setGpsError(e.code === e.PERMISSION_DENIED
-        ? "Location is blocked. Allow it for this site in your browser settings." : "Couldn't find your location. Try again."),
-      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 30_000 });
+    const button = mapRef.current?.getContainer().querySelector(".maplibregl-ctrl-geolocate");
+    const watching = !!button && /geolocate-(active|background)(?!-error)/.test(button.className);
+    const f = lastFix();
+    if (watching && f) return pickAt(f.lng, f.lat, underZoom());
+    awaitingFix.current = true;
+    if (!button?.className.includes("geolocate-waiting")) geolocate.current?.trigger();
   };
   const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
   // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
@@ -386,6 +409,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   };
 
   return (
+    // The geolocate button is maplibre's; a tap on it is where iOS lets the compass be asked for.
+    <div className="contents" onClickCapture={(e) => {
+      if (e.target instanceof Element && e.target.closest(".maplibregl-ctrl-geolocate")) void askHeading();
+    }}>
     <MapGL
       ref={mapRef}
       mapLib={maplibregl}
@@ -400,6 +427,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onLoad={() => {
         setMapLoaded(true); reportBounds();
         setMapTarget(mapRef);
+        const shared = showPin ? pinOf(location.search) : null;
+        if (shared) setPin({ ...shared, label: formatCoords(shared.lat, shared.lng) });
         const focus = takeFocus();
         if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
@@ -489,8 +518,26 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           )}
         </MapControl>
       )}
-      <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
-        positionOptions={{ enableHighAccuracy: true }} />
+      {/* The blue dot and follow mode: tracking keeps the map centred until a pan. */}
+      <GeolocateControl ref={geolocate} position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
+        positionOptions={{ enableHighAccuracy: true }}
+        onGeolocate={(e) => {
+          setFix({ lng: e.coords.longitude, lat: e.coords.latitude });
+          if (!awaitingFix.current) return;
+          awaitingFix.current = false;
+          pickAt(e.coords.longitude, e.coords.latitude, underZoom());
+        }}
+        onError={(e) => {
+          if (!awaitingFix.current) return;
+          awaitingFix.current = false;
+          setGpsError(e.code === e.PERMISSION_DENIED
+            ? "Location is blocked. Allow it for this site in your browser settings." : "Couldn't find your location. Try again.");
+        }} />
+      {fix && heading !== null && (
+        <Marker longitude={fix.lng} latitude={fix.lat} rotation={heading} rotationAlignment="map" pitchAlignment="map">
+          <HeadingCone />
+        </Marker>
+      )}
       {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
@@ -540,7 +587,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           return (
             <Fragment key={l.id}>
               <Source id={`rpm-${s}`} type="raster" url={`pmtiles://${l.rasterPmHref}`} tileSize={256}>
-                <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": 1 }} />
+                <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": l.opacity ?? 1 }} />
               </Source>
               {l.unitsHref && <IdentifyLayer slug={s} href={l.unitsHref} />}
             </Fragment>
@@ -553,7 +600,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           return (
             <Fragment key={l.id}>
               <Source id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-                <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 }} />
+                <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 * (l.opacity ?? 1) }} />
               </Source>
               {l.unitsHref && <IdentifyLayer slug={s} href={l.unitsHref} />}
             </Fragment>
@@ -570,6 +617,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
                   key={li}
                   {...({
                     ...sl,
+                    paint: withOpacity(sl.paint, sl.type, l.opacity ?? 1),
                     id: `pm-${s}-${li}`,
                     source: `pm-${s}`,
                     "source-layer": pmLayer,
@@ -582,7 +630,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               // source on the layers). Explicit `source` for the same reason — don't rely on inject.
               mapDefaultLayers(l.id).map(({ kind, type, filter, paint }) => (
                 <Layer key={kind} {...({ id: `pm-${s}-${kind}`, source: `pm-${s}`, type, "source-layer": pmLayer,
-                  filter, paint } as LayerProps)} />
+                  filter, paint: withOpacity(paint, type, l.opacity ?? 1) } as LayerProps)} />
               ))
             )}
           </Source>
@@ -613,6 +661,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Popup>
       )}
     </MapGL>
+    </div>
   );
 }
 

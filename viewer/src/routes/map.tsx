@@ -14,6 +14,7 @@ import { isReferenceAsset, relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
+import { LayerOpacitySlider } from "@/map/layer-opacity-slider";
 import type { Target } from "@/offline/whats-here";
 import { useZarrProblems } from "@/zarr/use-zarr-layers";
 import { LayerCubeControls } from "@/zarr/layer-cube-controls";
@@ -41,9 +42,11 @@ function MapView() {
   const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
     ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
   // A datacube's row picks its variable and steps into the URL, which toLayer reads back.
-  const cubeControlsOf = (id: string) => {
-    const z = c.activeLayers.find((l) => l.id === id)?.zarr;
-    return z ? <LayerCubeControls id={id} zarr={z} /> : undefined;
+  // An active layer's row: a datacube's picks, else its opacity (the deck overlay has none to set).
+  const layerControlsOf = (id: string) => {
+    const l = c.activeLayers.find((a) => a.id === id);
+    if (!l) return undefined;
+    return l.zarr ? <LayerCubeControls id={id} zarr={l.zarr} /> : <LayerOpacitySlider id={id} title={l.title} />;
   };
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
@@ -95,7 +98,7 @@ function MapView() {
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
         problemOf={(id) => zarrProblems[id]}
-        controlsOf={cubeControlsOf}
+        controlsOf={layerControlsOf}
         onOpen={c.openItem}
         // PMTiles, the raster mosaics and COGs are all single files read by range, and the
         // service worker answers all three out of OPFS, so all three can be stored whole.

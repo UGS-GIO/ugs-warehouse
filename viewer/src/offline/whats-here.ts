@@ -61,3 +61,15 @@ export function whatsHere(layers: ActiveLayer[], t: Target): Here[] {
     id: `${l.id}#table`, title: l.title, group: "table" as const, save: { how: "table" as const, url: l.tableHref },
   }] : [])]).sort((a, b) => (a.group === b.group ? a.title.localeCompare(b.title) : rank[a.group] - rank[b.group]));
 }
+
+/**
+ * How a long press checks a row is really under the point, beyond its bbox: a vector layer is
+ * asked for its features there, a raster mosaic whether it has a tile there. A plate has only its
+ * bbox (the index carries no outline), and a table is only something to save. A datacube covers
+ * the whole state, so it says nothing about this place and is left out.
+ */
+export function probeOf(h: Here): "identify" | "tile" | "bbox" | null {
+  if (h.group === "table" || !h.save) return null;
+  if (h.save?.how !== "area") return "bbox";
+  return h.group === "layer" ? "identify" : "tile";
+}

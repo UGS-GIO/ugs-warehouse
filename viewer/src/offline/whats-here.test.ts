@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
 import type { Bbox } from "./guards";
-import { quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
+import { probeOf, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
 
 const STATE = [-114.05, 37, -109.04, 42];
 const layers: ActiveLayer[] = [
@@ -13,9 +13,9 @@ const layers: ActiveLayer[] = [
   { id: "nobox", title: "Aspatial table", pmHref: "https://cdn/x.pmtiles" },
 ];
 
-describe("whatsHere", () => {
-  const slc = { kind: "point" as const, lon: -111.9, lat: 40.78 };
+const slc = { kind: "point" as const, lon: -111.9, lat: 40.78 };
 
+describe("whatsHere", () => {
   it("lists what covers a point, data layers first", () => {
     expect(whatsHere(layers, slc).map((h) => h.id)).toEqual(["faults", "mosaic", "plate", "cube"]);   // layers, then maps by title
   });
@@ -44,6 +44,15 @@ describe("whatsHere", () => {
   it("matches an area by overlap", () => {
     const view: Target = { kind: "area", bbox: [-109.7, 38.45, -109.4, 38.65] };
     expect(whatsHere(layers, view).map((h) => h.id)).toContain("moab");
+  });
+});
+
+describe("probeOf", () => {
+  // A long press lists only what is really there, so each row is checked the cheapest true way.
+  it("asks vectors for features, mosaics for a tile, plates by bbox, and leaves out cubes", () => {
+    const withTable = [{ ...layers[0], tableHref: "https://cdn/faults.parquet" }, ...layers.slice(1)];
+    const by = Object.fromEntries(whatsHere(withTable, slc).map((h) => [h.id, probeOf(h)]));
+    expect(by).toEqual({ faults: "identify", "faults#table": null, mosaic: "tile", plate: "bbox", cube: null });
   });
 });
 

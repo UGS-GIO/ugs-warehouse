@@ -92,6 +92,17 @@ export async function identifyAt(url: string, lon: number, lat: number, mapZoom:
   return out;
 }
 
+/** Whether an archive (a raster mosaic, say) has a tile at the point: its real coverage, which its
+ *  bbox overstates wherever the mosaic is patchy. */
+export async function tileAt(url: string, lon: number, lat: number, source?: PMTiles): Promise<boolean> {
+  const p = source ?? archiveFor(url);
+  const h = await p.getHeader();
+  const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
+  const n = 2 ** z;
+  const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
+  return !!(await p.getZxy(z, Math.floor(at.x * n), Math.floor(at.y * n)));
+}
+
 // Keys and values that identify a row rather than describe it: a label made of them reads as noise
 // ("groundshaking_current.fid-23e49f4e_1a07e84e73d_-1143").
 const ID_KEY = /(^|_)(fid|id|objectid|globalid|guid|uuid|ogc_fid|shape_\w+|ugs_key)$/i;

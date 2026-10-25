@@ -5,7 +5,7 @@ import Pbf from "pbf";
 import { FileSource, PMTiles } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { describe, expect, it } from "vitest";
-import { hitLabel, hits, identifyAt, inRings, toSegment } from "./identify";
+import { hitLabel, hits, identifyAt, inRings, tileAt, toSegment } from "./identify";
 
 describe("geometry", () => {
   const square = [[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }]];
@@ -83,5 +83,12 @@ describe("identifyAt (real PMTiles)", () => {
     expect(got.some((g) => g.layer === layer)).toBe(true);
 
     expect(await identifyAt("fixture", -100, 30, 15, archive())).toEqual([]);   // Texas: not in this quad
+  });
+
+  it("has a tile where the archive covers, and none outside it", async () => {
+    const h = await archive().getHeader();
+    const mid = [(h.minLon + h.maxLon) / 2, (h.minLat + h.maxLat) / 2] as const;
+    expect(await tileAt("fixture", mid[0], mid[1], archive())).toBe(true);
+    expect(await tileAt("fixture", -100, 30, archive())).toBe(false);
   });
 });

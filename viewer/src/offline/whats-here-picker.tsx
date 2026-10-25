@@ -1,10 +1,8 @@
-// "What's here": everything at a place on the map, to show and (on phones) keep offline.
+// "What's here": everything at a place on the map, to show and keep offline.
 //
-// Opened by a long press or right-click on the map (the quad under it) or by "Save this area"
-// (the view). Everything that overlaps is listed with a checkbox and, when saving is on, its
-// exact size; the actions apply to what is ticked. Saving ticks everything by default so the
-// common case is one tap; showing ticks nothing, since drawing every overlapping layer at once
-// is never what anyone wants.
+// A long press or right-click opens it to show what is under the point; each row turns its layer
+// on or off at a tap. "Save offline…" there, or "Save this area" (the view), switches it to
+// saving: everything that overlaps the quad or view, ticked, with its exact size.
 import { Dialog } from "@base-ui/react/dialog";
 import { useMutation, useQueries } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -19,10 +17,10 @@ import { planTableArea } from "./table-area";
 import * as queue from "./queue";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
-import { type Hit, hitLabel, identifyAt } from "./identify";
+import { type Hit, hitLabel, identifyAt, tileAt } from "./identify";
 import * as opfs from "./opfs";
 import { useOffline } from "./store";
-import { type Here, isSaveable, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
+import { type Here, isSaveable, probeOf, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
 
 // Pricing walks each archive's directory; four at a time keeps a busy area from opening dozens
 // of range requests at once on a phone connection.
@@ -41,9 +39,11 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
 
 const BASEMAP = "__basemap__";
 
-export function WhatsHerePicker({ target, canSave, onClose }: {
-  target: Target; canSave: boolean; onClose: () => void;
+export function WhatsHerePicker({ target, startSaving, onClose }: {
+  target: Target; startSaving: boolean; onClose: () => void;
 }) {
+  const [saving, setSaving] = useState(startSaving);
+  const [opened, setOpened] = useState<string | null>(null);   // the row showing its attributes
   const ctx = useViewCtx();
   const { files, engineBytes } = useOffline();
   const index = useBasemapIndex();
@@ -69,11 +69,13 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
       return archive && !have.has(quadUrl(q.code)) ? [{ url: quadUrl(q.code), bytes: archive.bytes }] : [];
     }),
   ];
-  const basemapOffered = canSave && !stateSaved && basemapParts.length > 0;
+  const basemapOffered = saving && !stateSaved && basemapParts.length > 0;
 
-  const [ticked, setTicked] = useState<Set<string>>(() => new Set(canSave
-    // Tables start unticked: most trips want the map, and each table costs a footer read to price.
-    ? [BASEMAP, ...saveable.filter((h) => h.group !== "table" && !have.has(h.save.url)).map((h) => h.id)] : []));
+  // Tables start unticked: most trips want the map, and each table costs a footer read to price.
+  const allTicked = () => new Set([BASEMAP,
+    ...saveable.filter((h) => h.group !== "table" && !have.has(h.save.url)).map((h) => h.id)]);
+  const [ticked, setTicked] = useState<Set<string>>(() => (startSaving ? allTicked() : new Set()));
+  const startSave = () => { setTicked(allTicked()); setSaving(true); };
   const toggle = (id: string, on: boolean) => setTicked((prev) => {
     const next = new Set(prev);
     if (on) next.add(id); else next.delete(id);
@@ -97,20 +99,21 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
         const plan = await planCogArea(url, bbox);
         return { kind: "cog", plan, label: h.title, bytes: plan.bytes };
       }),
-      enabled: canSave && (h.group !== "table" || ticked.has(h.id)),
+      enabled: saving && (h.group !== "table" || ticked.has(h.id)),
       staleTime: 5 * 60_000,
       retry: false,
     })),
   });
   const priceOf = (h: Here) => prices[saveable.findIndex((s) => s.id === h.id)];
 
-  // Showing at a point: ask every vector layer what it has exactly there, so the list is what is
+  // Showing at a point: ask every layer what it has exactly there (probeOf), so the list is what is
   // under the click, not every layer whose extent covers it (statewide ones always do).
-  const querying = !canSave && target.kind === "point";
-  const vectors = saveable.filter((h) => h.group === "layer" && h.save.how === "area");
+  const querying = !saving && target.kind === "point";
+  const at = target.kind === "point" ? `${target.lon.toFixed(6)},${target.lat.toFixed(6)}` : "";
+  const vectors = saveable.filter((h) => probeOf(h) === "identify");
   const identified = useQueries({
     queries: vectors.map((h) => ({
-      queryKey: ["identify", h.save.url, target.kind === "point" ? `${target.lon.toFixed(6)},${target.lat.toFixed(6)},${Math.round(target.zoom ?? 12)}` : ""],
+      queryKey: ["identify", h.save.url, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
       queryFn: (): Promise<Hit[]> => limit(() => target.kind === "point"
         ? identifyAt(h.save.url, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
       enabled: querying,
@@ -118,8 +121,21 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
       retry: false,
     })),
   });
+  const mosaics = saveable.filter((h) => probeOf(h) === "tile");
+  const tiled = useQueries({
+    queries: mosaics.map((h) => ({
+      queryKey: ["tile-at", h.save.url, at],
+      queryFn: (): Promise<boolean> => limit(() => target.kind === "point"
+        ? tileAt(h.save.url, target.lon, target.lat) : Promise.resolve(true)),
+      enabled: querying,
+      staleTime: 5 * 60_000,
+      retry: false,
+    })),
+  });
   const hitsOf = (h: Here) => identified[vectors.findIndex((v) => v.id === h.id)]?.data ?? [];
-  const checking = querying ? identified.filter((q) => q.isPending).length : 0;
+  const isThere = (h: Here) => (probeOf(h) === "identify" ? hitsOf(h).length > 0
+    : probeOf(h) === "tile" ? !!tiled[mosaics.findIndex((m) => m.id === h.id)]?.data : probeOf(h) === "bbox");
+  const checking = querying ? [...identified, ...tiled].filter((q) => q.isPending).length : 0;
 
   // Ticks are set when the picker opens, possibly before the store's first read; what turns out to
   // be saved whole already is left out here rather than queued again.
@@ -128,7 +144,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const basemapBytes = basemapOffered && ticked.has(BASEMAP) ? basemapParts.reduce((n, p) => n + p.bytes, 0) : 0;
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
   // A table needs the table engine on the device too; it is counted once, the first time.
-  const needsEngine = canSave && !engineBytes && chosen.some((h) => h.group === "table");
+  const needsEngine = saving && !engineBytes && chosen.some((h) => h.group === "table");
   const total = basemapBytes + chosen.reduce((n, h) => n + (priceOf(h)?.data?.bytes ?? 0), 0)
     + (needsEngine ? ENGINE_BYTES : 0);
 
@@ -161,12 +177,12 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const title = querying && target.kind === "point"
     ? `What's here · ${target.lat.toFixed(4)}, ${target.lon.toFixed(4)}`
     : target.kind === "point"
-    ? `Here · quad ${quads[0].code}`
-    : `This area · ${quads.length} quad${quads.length === 1 ? "" : "s"}`;
+    ? `Save offline · quad ${quads[0].code}`
+    : `Save offline · ${quads.length} quad${quads.length === 1 ? "" : "s"}`;
   // When saving, only what can actually be saved is listed: a row you can't tick is noise. That
-  // drops datacubes (no offline form) and anything whose pricing failed. Showing (desktop) keeps all.
-  const listed = canSave ? here.filter((h) => h.save && !priceOf(h)?.isError)
-    : querying ? here.filter((h) => h.group === "map" || hitsOf(h).length > 0)
+  // drops datacubes (no offline form) and anything whose pricing failed. Showing keeps all.
+  const listed = saving ? here.filter((h) => h.save && !priceOf(h)?.isError)
+    : querying ? here.filter(isThere)
     : here.filter((h) => h.group !== "table");   // a table is only something to save
   const groups = [
     { name: "Data layers", rows: listed.filter((h) => h.group === "layer") },
@@ -174,38 +190,37 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
     { name: "Published maps", rows: listed.filter((h) => h.group === "map") },
   ].filter((g) => g.rows.length);
 
-  const row = (h: Here) => {
-    const price = canSave && h.save ? priceOf(h) : undefined;
-    const savedWhole = !!h.save && have.has(h.save.url);   // the whole file is already stored
-    const disabled = canSave ? !h.save || savedWhole || !!price?.isError : false;
-    const found = querying ? hitsOf(h) : [];
+
+  // Showing: the row is a switch for its layer, so one tap puts it on the map or takes it off. What
+  // is under the point leads, the layer it comes from under it; the chevron opens its attributes,
+  // what "query what's under my click" is for.
+  const showRow = (h: Here) => {
+    const on = ctx.isActive(h.id);
+    const found = hitsOf(h);
+    const labels = [...new Set(found.map((x) => hitLabel(x.properties)).filter(Boolean))];
     return (
       <div key={h.id}>
-        <label className={`flex items-center gap-2 px-3 py-1.5 pointer-coarse:min-h-12 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
-          <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" disabled={disabled}
-            checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate" title={h.title}>{h.title}</span>
-            {found.length > 0 && (
-              <span className="block truncate text-xs text-muted-foreground">
-                {[...new Set(found.map((x) => hitLabel(x.properties)).filter(Boolean))].slice(0, 3).join(" · ")
-                  || `${found.length} feature${found.length === 1 ? "" : "s"}`}
-              </span>
-            )}
-          </span>
-          {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
-          {canSave && (
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-              {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes)
-                : h.group === "table" && !ticked.has(h.id) ? "" : "…"}
+        <div className="flex items-center hover:bg-hover">
+          <button type="button" role="switch" aria-checked={on} onClick={() => ctx.toggleLayers([h.id], !on)}
+            className="flex min-w-0 flex-1 items-center gap-3 py-1.5 pl-4 text-left pointer-coarse:min-h-12">
+            <span className="min-w-0 flex-1">
+              {labels.length > 0 && (
+                <span className="block truncate font-semibold" title={labels.join(" · ")}>{labels.slice(0, 3).join(" · ")}</span>
+              )}
+              <span className={`block truncate ${labels.length ? "text-xs text-muted-foreground" : ""}`} title={h.title}>{h.title}</span>
             </span>
-          )}
-        </label>
-        {/* The attributes themselves: what "query what's under my click" is for. Outside the
-            label, so opening it doesn't tick the row. */}
-        {found.length > 0 && (
-          <details className="px-9 pb-1.5 text-xs">
-            <summary className="cursor-pointer text-primary">Attributes</summary>
+            <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${on ? "bg-primary" : "bg-border"}`}>
+              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-all ${on ? "left-[1.125rem]" : "left-0.5"}`} />
+            </span>
+          </button>
+          {found.length > 0 ? (
+            <button type="button" aria-expanded={opened === h.id} aria-label={`Attributes of ${h.title}`}
+              onClick={() => setOpened(opened === h.id ? null : h.id)}
+              className={`w-11 shrink-0 self-stretch text-muted-foreground transition-transform ${opened === h.id ? "rotate-180" : ""}`}>⌄</button>
+          ) : <span className="w-11 shrink-0" />}
+        </div>
+        {opened === h.id && (
+          <div className="px-4 pb-2 text-xs">
             {found.slice(0, 5).map((x, n) => (
               <dl key={n} className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 border-t border-border pt-1">
                 {Object.entries(x.properties).slice(0, 20).map(([k, v]) => (
@@ -217,9 +232,28 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
               </dl>
             ))}
             {found.length > 5 && <p className="mt-1 text-muted-foreground">and {found.length - 5} more here</p>}
-          </details>
+          </div>
         )}
       </div>
+    );
+  };
+
+
+  const saveRow = (h: Here) => {
+    const price = h.save ? priceOf(h) : undefined;
+    const savedWhole = !!h.save && have.has(h.save.url);   // the whole file is already stored
+    const disabled = !h.save || savedWhole || !!price?.isError;
+    return (
+      <label key={h.id} className={`flex items-center gap-2 px-3 py-1.5 pointer-coarse:min-h-12 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
+        <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" disabled={disabled}
+          checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
+        <span className="min-w-0 flex-1 truncate" title={h.title}>{h.title}</span>
+        {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes)
+            : h.group === "table" && !ticked.has(h.id) ? "" : "…"}
+        </span>
+      </label>
     );
   };
 
@@ -240,7 +274,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
               <p className="px-4 py-1 text-xs text-muted-foreground">Checking {checking} more layer{checking === 1 ? "" : "s"}…</p>
             )}
             {!listed.length && !basemapOffered && !checking && (
-              <p className="px-4 py-2 text-sm text-muted-foreground">{canSave ? "Nothing here can be saved offline." : "Nothing mapped at this spot."}</p>
+              <p className="px-4 py-2 text-sm text-muted-foreground">{saving ? "Nothing here can be saved offline." : "Nothing mapped at this spot."}</p>
             )}
             {basemapOffered && (
               <section>
@@ -256,22 +290,24 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
               </section>
             )}
             {groups.map((g) => {
-              const ids = g.rows.filter((h) => !canSave || h.save).map((h) => h.id);
+              const ids = g.rows.filter((h) => h.save).map((h) => h.id);
               const all = ids.length > 0 && ids.every((id) => ticked.has(id));
               return (
                 <section key={g.name}>
                   <div className="flex items-center px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <span className="flex-1">{g.name} · {g.rows.length}</span>
-                    <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
-                      onClick={() => setTicked((prev) => {
-                        const next = new Set(prev);
-                        for (const id of ids) { if (all) next.delete(id); else next.add(id); }
-                        return next;
-                      })}>
-                      {all ? "None" : "All"}
-                    </button>
+                    {saving && (
+                      <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
+                        onClick={() => setTicked((prev) => {
+                          const next = new Set(prev);
+                          for (const id of ids) { if (all) next.delete(id); else next.add(id); }
+                          return next;
+                        })}>
+                        {all ? "None" : "All"}
+                      </button>
+                    )}
                   </div>
-                  {g.rows.map(row)}
+                  {g.rows.map(saving ? saveRow : showRow)}
                 </section>
               );
             })}
@@ -279,15 +315,23 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
 
           <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
             {save.error && <p className="w-full text-sm text-destructive">{save.error.message}</p>}
-            <button type="button" className={btn} disabled={save.isPending || ![...ticked].some((id) => id !== BASEMAP)}
-              onClick={show}>Show on map</button>
-            {canSave && (
+            {saving ? <>
+              {!startSaving && <button type="button" className={btn} disabled={save.isPending} onClick={() => setSaving(false)}>Back</button>}
+              <button type="button" className={btn} disabled={save.isPending || ![...ticked].some((id) => id !== BASEMAP)}
+                onClick={show}>Show on map</button>
               <button type="button" className={`${btn} ml-auto bg-primary text-primary-foreground hover:bg-primary/90`}
                 disabled={save.isPending || pricing || total === 0}
                 onClick={() => save.mutate(undefined, { onSuccess: onClose })}>
                 {pricing ? "Pricing…" : `Save offline · ${opfs.formatBytes(total)}`}
               </button>
-            )}
+            </> : <>
+              {opfs.isSupported() && (
+                <button type="button" className={btn} onClick={startSave}>
+                  Save {target.kind === "point" ? "this quad" : "this area"} offline…
+                </button>
+              )}
+              <Dialog.Close className={`${btn} ml-auto`}>Done</Dialog.Close>
+            </>}
           </div>
         </Dialog.Popup>
       </Dialog.Portal>

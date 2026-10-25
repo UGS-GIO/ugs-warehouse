@@ -13,7 +13,6 @@ import { colorForId } from "@/map/map-model";
 import { isReferenceAsset, relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
-import { isSupported } from "@/offline/opfs";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
 import type { Target } from "@/offline/whats-here";
 import { useZarrProblems } from "@/zarr/use-zarr-layers";
@@ -35,9 +34,9 @@ function MapView() {
   const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
   // The map's view, for "This area" in the offline basemap section of the layers panel.
   const [view, setView] = useState<[number, number, number, number] | null>(null);
-  // The "What's here" picker. `canSave`: the explicit "Save this area…" always saves; a long press
-  // or right-click saves on phones only, and on desktop is for showing what is there.
-  const [pick, setPick] = useState<{ target: Target; canSave: boolean } | null>(null);
+  // The "What's here" picker. A long press or right-click shows what is there; "Save this area…"
+  // opens it straight to saving.
+  const [pick, setPick] = useState<{ target: Target; startSaving: boolean } | null>(null);
   // A datacube that can't open says so in its row instead of sitting "on" and blank.
   const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
     ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
@@ -63,13 +62,13 @@ function MapView() {
   // the sheet is open, so a long press with the sheet down had nowhere to mount it. It portals to
   // the page body either way.
   const picker = pick && <WhatsHerePicker key={JSON.stringify(pick.target)} target={pick.target}
-    canSave={pick.canSave} onClose={() => setPick(null)} />;
+    startSaving={pick.startSaving} onClose={() => setPick(null)} />;
 
   return <>{picker}<MapShell
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       onBoundsChange={setView}
-      onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, canSave: !isDesktop && isSupported() })}
+      onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, startSaving: false })}
       relatedFor={relatedFor}
       search={<MapSearchFor state={c} className={isDesktop ? "w-80" : "w-[calc(100vw-20px)]"} />} showPin
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
@@ -85,7 +84,7 @@ function MapView() {
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
       <BasemapDownload bbox={view}
-        onSaveArea={view ? () => setPick({ target: { kind: "area", bbox: view }, canSave: true }) : undefined} />
+        onSaveArea={view ? () => setPick({ target: { kind: "area", bbox: view }, startSaving: true }) : undefined} />
       <LayerList
         rows={c.layerRows}
         activeIds={c.idsForMap}

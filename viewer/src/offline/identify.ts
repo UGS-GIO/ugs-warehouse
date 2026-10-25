@@ -108,10 +108,17 @@ export async function tileAt(url: string, lon: number, lat: number, source?: PMT
 const ID_KEY = /(^|_)(fid|id|objectid|globalid|guid|uuid|ogc_fid|shape_\w+|ugs_key)$/i;
 const ID_VALUE = /fid-|^[0-9a-f]{8}-[0-9a-f]{4}-|_[0-9a-f]{10,}/i;
 
-/** A short label for a hit: the first name-like attribute, else the first descriptive text. */
+// Warehouse bookkeeping on every row: says nothing about the feature.
+const META_KEY = /^(_.*|review_status|table_type|quad_name|scale|is_current|import_date|target_epsg)$/i;
+// Text that reads as words, not a code or a number: "Salt Lake", "Jordan"; not "41620" or "VSSegs".
+const WORDS = /\s|^[A-Z]?[a-z]+$/;
+
+/** A short label for a hit: a name, else a title or type, else the first text that reads as words. */
 export function hitLabel(props: Hit["properties"]): string | null {
-  const keys = Object.keys(props).filter((k) => !ID_KEY.test(k) && !ID_VALUE.test(String(props[k])));
-  const named = keys.find((k) => /^(name|title|label|unit.?name|unitname|type|class|category)$/i.test(k));
-  const key = named ?? keys.find((k) => typeof props[k] === "string" && String(props[k]).length < 80);
+  const keys = Object.keys(props).filter((k) => !ID_KEY.test(k) && !META_KEY.test(k)
+    && !ID_VALUE.test(String(props[k])) && typeof props[k] === "string" && String(props[k]).trim());
+  const key = keys.find((k) => /name/i.test(k))
+    ?? keys.find((k) => /^(title|label|type|class|category|grade)$/i.test(k))
+    ?? keys.find((k) => String(props[k]).length < 80 && WORDS.test(String(props[k])));
   return key ? String(props[key]) : null;
 }

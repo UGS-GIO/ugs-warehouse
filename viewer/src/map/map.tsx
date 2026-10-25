@@ -126,14 +126,23 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
   };
 }
 
+const PinGlyph = () => (
+  <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
+    <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
+    <circle cx="12" cy="11.5" r="4" fill="white" />
+  </svg>
+);
+
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search,
-  showPin = false, onPickAt }: {
+  showPin = false, onPickAt, pickedAt }: {
   item?: StacDoc; layers: ActiveLayer[];
   search?: ReactNode;   // drawn in the top-left corner (the desktop map search)
   showPin?: boolean;    // the map view shows the search's place pin; Discover's map does not
-  // "What's here" at a point: a long press on phones, a right-click on desktop. Optional.
+  // "What's here" at a point: a long press on phones, a right-click on desktop, or the device's
+  // location. Optional. `pickedAt` is the point it is open on, pinned until it closes.
   onPickAt?: (lon: number, lat: number, zoom: number) => void;
+  pickedAt?: { lng: number; lat: number } | null;
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -174,6 +183,23 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     timer?: ReturnType<typeof setTimeout>; x: number; y: number; lng?: number; lat?: number; armed?: boolean;
   } | null>(null);
   const cancelPress = () => { clearTimeout(press.current?.timer); press.current = null; };
+  // On a phone the picker's sheet covers the lower half, so the point moves up into the map above it.
+  const pickAt = (lng: number, lat: number, zoom = mapRef.current?.getZoom() ?? 12) => {
+    const m = mapRef.current;
+    if (m && !isDesktop) m.easeTo({ center: [lng, lat], zoom, offset: [0, -0.28 * m.getContainer().clientHeight], duration: 400 });
+    onPickAt?.(lng, lat, zoom);
+  };
+  // "What's under me": the same picker at the device's location.
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const underMe = () => {
+    setGpsError(null);
+    if (!navigator.geolocation) return setGpsError("This device can't share its location.");
+    navigator.geolocation.getCurrentPosition(
+      (p) => pickAt(p.coords.longitude, p.coords.latitude, Math.max(mapRef.current?.getZoom() ?? 0, 14)),
+      (e) => setGpsError(e.code === e.PERMISSION_DENIED
+        ? "Location is blocked. Allow it for this site in your browser settings." : "Couldn't find your location. Try again."),
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 30_000 });
+  };
   const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
   // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
   // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
@@ -397,14 +423,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         // Swallow the click the browser synthesises after a touch: it would land on the picker
         // that just opened under the finger and toggle whichever row is there.
         e.originalEvent.preventDefault();
-        onPickAt?.(p.lng, p.lat, mapRef.current?.getZoom() ?? 12);
+        pickAt(p.lng, p.lat);
       }}
       onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
       onMouseUp={(e) => {
         if (e.originalEvent.button !== 2 || !press.current) return;
         const still = !moved(e.point.x, e.point.y);
         press.current = null;
-        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat, mapRef.current?.getZoom() ?? 12);
+        if (still) pickAt(e.lngLat.lng, e.lngLat.lat);
       }}
     >
       {search && <MapControl position="top-left">{search}</MapControl>}
@@ -416,12 +442,12 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               <button type="button" aria-label="Remove the pin" onClick={() => setPin(null)}
                 className="text-muted-foreground hover:text-foreground">×</button>
             </span>
-            <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
-              <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
-              <circle cx="12" cy="11.5" r="4" fill="white" />
-            </svg>
+            <PinGlyph />
           </div>
         </Marker>
+      )}
+      {pickedAt && (
+        <Marker longitude={pickedAt.lng} latitude={pickedAt.lat} anchor="bottom"><PinGlyph /></Marker>
       )}
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
@@ -443,6 +469,26 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       <MapControl position="top-right">
         <BasemapMenu value={basemap} onValueChange={setBasemap} items={BASEMAP_IDS} thumbs={BASEMAP_THUMBS} />
       </MapControl>
+      {onPickAt && (
+        <MapControl position={isDesktop ? "top-right" : "bottom-right"} className="flex flex-row-reverse items-center gap-2">
+          <div className="maplibregl-ctrl maplibregl-ctrl-group" style={{ margin: 0 }}>
+            {/* Inline display: maplibre's unlayered `button { display: block }` beats the flex utility. */}
+            <button type="button" aria-label="What's under me" title="What's under me" onClick={underMe}
+              style={{ display: "flex" }} className="items-center justify-center text-foreground">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z" /><path d="M9.5 9a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1M12 15.5h.01" />
+              </svg>
+            </button>
+          </div>
+          {gpsError && (
+            <button type="button" role="alert" onClick={() => setGpsError(null)}
+              className="max-w-56 rounded-md border border-border bg-card px-2 py-1 text-left text-xs text-foreground shadow">
+              {gpsError}
+            </button>
+          )}
+        </MapControl>
+      )}
       <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
       {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}

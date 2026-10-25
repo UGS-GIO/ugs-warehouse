@@ -5,7 +5,14 @@
 // saving: everything that overlaps the quad or view, ticked, with its exact size.
 import { Dialog } from "@base-ui/react/dialog";
 import { useMutation, useQueries } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
+import { Drawer } from "@base-ui/react/drawer";
+import { DETENTS } from "@/map/map-model";
+import { SHEET_POPUP } from "@/ui/sheet-chrome";
+import { SheetGrabber } from "@/ui/sheet";
+import { useIsDesktop } from "@/ui/use-breakpoint";
+import { idOf } from "@/stac";
+import { topUnit } from "@/map/identify";
 import { useViewCtx } from "@/app";
 import { Chevron } from "@/ui/chevron";
 import { toLayer } from "@/map/to-layer";
@@ -21,7 +28,10 @@ import { useBasemapIndex } from "./basemap-download";
 import { type Hit, hitLabel, identifyAt, tileAt } from "./identify";
 import * as opfs from "./opfs";
 import { useOffline } from "./store";
-import { type Here, isSaveable, probeOf, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
+import {
+  type Here, isSaveable, isUnitLayer, mostDetailed, probeOf, quadsFor, REFERENCE_IDS, saveBbox, scaleOf, type Target,
+  type Unit, unitOf, whatsHere,
+} from "./whats-here";
 
 // Pricing walks each archive's directory; four at a time keeps a busy area from opening dozens
 // of range requests at once on a phone connection.
@@ -40,13 +50,24 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
 
 const BASEMAP = "__basemap__";
 
-// The groups a viewer has collapsed, kept on this device; storage can be blocked, so all open then.
-const CLOSED_KEY = "whats-here-closed";
-function readClosed(): Set<string> {
+/** A switch's track and thumb, inside the row button that is the switch. */
+const Knob = ({ on }: { on: boolean }) => (
+  <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${on ? "bg-primary" : "bg-border"}`}>
+    <span className={`absolute top-0.5 size-5 rounded-full bg-background shadow transition-all ${on ? "left-4.5" : "left-0.5"}`} />
+  </span>
+);
+const HALF = DETENTS[1], FULL = DETENTS[2];
+
+// Which groups a viewer has opened or closed, kept on this device. Until they choose, every group is
+// open but Reference; storage can be blocked, and then the defaults hold.
+const GROUPS_KEY = "whats-here-groups";
+const REFERENCE = "Reference";
+function readGroups(): Record<string, boolean> {
   try {
-    const v: unknown = JSON.parse(localStorage.getItem(CLOSED_KEY) ?? "[]");
-    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-  } catch { return new Set(); }
+    const v: unknown = JSON.parse(localStorage.getItem(GROUPS_KEY) ?? "{}");
+    return v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).filter(([, o]) => typeof o === "boolean")) : {};
+  } catch { return {}; }
 }
 
 export function WhatsHerePicker({ target, startSaving, onClose }: {
@@ -54,22 +75,29 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
 }) {
   const [saving, setSaving] = useState(startSaving);
   const [opened, setOpened] = useState<string | null>(null);   // the row showing its attributes
-  const [closed, setClosed] = useState(readClosed);
+  const [groupsOpen, setGroupsOpen] = useState(readGroups);
+  const isOpen = (name: string) => groupsOpen[name] ?? name !== REFERENCE;
   const toggleGroup = (name: string) => {
-    const next = new Set(closed);
-    if (!next.delete(name)) next.add(name);
-    setClosed(next);
-    try { localStorage.setItem(CLOSED_KEY, JSON.stringify([...next])); } catch { /* kept for this visit only */ }
+    const next = { ...groupsOpen, [name]: !isOpen(name) };
+    setGroupsOpen(next);
+    try { localStorage.setItem(GROUPS_KEY, JSON.stringify(next)); } catch { /* kept for this visit only */ }
   };
+  const listRef = useRef<HTMLDivElement>(null);
+  const isDesktop = useIsDesktop();
+  const [snap, setSnap] = useState<number | string>(HALF);
   const ctx = useViewCtx();
   const { files, engineBytes } = useOffline();
   const index = useBasemapIndex();
 
   // Every drawable layer the app knows about, resolved exactly as the map resolves them.
-  const candidates = useMemo(() => {
+  const { candidates, scales } = useMemo(() => {
     const seen = new Map<string, ItemRef>();
     for (const r of [...ctx.mapItems, ...ctx.allItems]) if (!seen.has(r.href)) seen.set(r.href, r);
-    return [...seen.values()].map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null);
+    const refs = [...seen.values()];
+    return {
+      candidates: refs.map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null),
+      scales: new Map(refs.map((r) => [idOf(r.href), scaleOf(r.data?.properties?.["ugs:scale"])])),
+    };
   }, [ctx.mapItems, ctx.allItems]);
   const here = useMemo(() => whatsHere(candidates, target), [candidates, target]);
   const bbox = saveBbox(target);
@@ -92,7 +120,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const allTicked = () => new Set([BASEMAP,
     ...saveable.filter((h) => h.group !== "table" && !have.has(h.save.url)).map((h) => h.id)]);
   const [ticked, setTicked] = useState<Set<string>>(() => (startSaving ? allTicked() : new Set()));
-  const startSave = () => { setTicked(allTicked()); setSaving(true); };
+  const startSave = () => { setTicked(allTicked()); setSaving(true); listRef.current?.scrollTo({ top: 0 }); };
   const toggle = (id: string, on: boolean) => setTicked((prev) => {
     const next = new Set(prev);
     if (on) next.add(id); else next.delete(id);
@@ -149,10 +177,38 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       retry: false,
     })),
   });
+  // A plate or mosaic with a `units` archive names the unit under the point too.
+  const unitMaps = here.filter((h) => h.unitsHref);
+  const unitHits = useQueries({
+    queries: unitMaps.map((h) => ({
+      queryKey: ["identify", h.unitsHref, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
+      queryFn: (): Promise<Hit[]> => limit(() => target.kind === "point" && h.unitsHref
+        ? identifyAt(h.unitsHref, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
+      enabled: querying,
+      staleTime: 5 * 60_000,
+      retry: false,
+    })),
+  });
   const hitsOf = (h: Here) => identified[vectors.findIndex((v) => v.id === h.id)]?.data ?? [];
   const isThere = (h: Here) => (probeOf(h) === "identify" ? hitsOf(h).length > 0
     : probeOf(h) === "tile" ? !!tiled[mosaics.findIndex((m) => m.id === h.id)]?.data : probeOf(h) === "bbox");
-  const checking = querying ? [...identified, ...tiled].filter((q) => q.isPending).length : 0;
+  const checking = querying ? [...identified, ...tiled, ...unitHits].filter((q) => q.isPending).length : 0;
+
+  // The geologic unit under the point, from the most detailed map that names one, and the most
+  // detailed published map here, which may only be a scan.
+  const unit = mostDetailed<Unit & { from: Here }>([
+    ...vectors.filter((h) => isUnitLayer(h.id)).flatMap((h) => {
+      const u = hitsOf(h).map((x) => unitOf(h.id, x.properties)).find(Boolean);
+      return u ? [{ ...u, from: h }] : [];
+    }),
+    ...unitMaps.flatMap((h, i) => {
+      const u = topUnit(unitHits[i]?.data ?? []);
+      return u ? [{ symbol: u.code, name: u.name, age: u.age, description: u.description,
+                    scale: scales.get(h.id), from: h }] : [];
+    }),
+  ]);
+  const detailedMap = mostDetailed(here.filter((h) => h.group === "map" && isThere(h))
+    .map((h) => ({ h, scale: scales.get(h.id) })).filter((m) => m.scale));
 
   // Ticks are set when the picker opens, possibly before the store's first read; what turns out to
   // be saved whole already is left out here rather than queued again.
@@ -201,10 +257,14 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const listed = saving ? here.filter((h) => h.save && !priceOf(h)?.isError)
     : querying ? here.filter(isThere)
     : here.filter((h) => h.group !== "table");   // a table is only something to save
+  // What the geology card shows is not listed again below it.
+  const inCard = new Set(querying ? [unit?.from.id, detailedMap?.h.id] : []);
+  const rows = listed.filter((h) => !inCard.has(h.id));
   const groups = [
-    { name: "Data layers", rows: listed.filter((h) => h.group === "layer") },
-    { name: "Data tables", rows: listed.filter((h) => h.group === "table") },
-    { name: "Published maps", rows: listed.filter((h) => h.group === "map") },
+    { name: "Data layers", rows: rows.filter((h) => h.group === "layer" && !REFERENCE_IDS.has(h.id)) },
+    { name: "Data tables", rows: rows.filter((h) => h.group === "table") },
+    { name: "Published maps", rows: rows.filter((h) => h.group === "map") },
+    { name: REFERENCE, rows: rows.filter((h) => h.group === "layer" && REFERENCE_IDS.has(h.id)) },
   ].filter((g) => g.rows.length);
 
 
@@ -226,9 +286,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
               )}
               <span className={`block truncate ${labels.length ? "text-xs text-muted-foreground" : ""}`} title={h.title}>{h.title}</span>
             </span>
-            <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${on ? "bg-primary" : "bg-border"}`}>
-              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-all ${on ? "left-[1.125rem]" : "left-0.5"}`} />
-            </span>
+            <Knob on={on} />
           </button>
           {found.length > 0 ? (
             <button type="button" aria-expanded={opened === h.id} aria-label={`Attributes of ${h.title}`}
@@ -276,7 +334,147 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     );
   };
 
+  // The geologic unit under the point leads, since it is what most long presses ask; then the most
+  // detailed published map here. Each is a switch for its layer, as the rows below are.
+  const ratio = (s?: number) => (s ? ` · 1:${s.toLocaleString()}` : "");
+  const card = querying && (unit || detailedMap) && (
+    <section className="mx-3 mb-1 mt-1 rounded-xl border border-border bg-card p-3">
+      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Geology here</div>
+      {unit && (
+        <button type="button" role="switch" aria-checked={ctx.isActive(unit.from.id)}
+          onClick={() => ctx.toggleLayers([unit.from.id], !ctx.isActive(unit.from.id))}
+          className="mt-1 flex w-full items-start gap-3 text-left">
+          <span className="min-w-0 flex-1">
+            <span className="block text-lg font-semibold leading-snug">
+              {unit.symbol && <span className="mr-1.5 rounded bg-muted px-1.5 font-mono text-base">{unit.symbol}</span>}
+              {unit.name}
+            </span>
+            {unit.age && <span className="block text-sm">{unit.age}</span>}
+            {unit.description && <span className="mt-1 line-clamp-4 block text-sm text-muted-foreground">{unit.description}</span>}
+            <span className="mt-1 block text-xs text-muted-foreground">From {unit.from.title}{ratio(unit.scale)}</span>
+          </span>
+          <Knob on={ctx.isActive(unit.from.id)} />
+        </button>
+      )}
+      {detailedMap && detailedMap.h.id !== unit?.from.id && (
+        <button type="button" role="switch" aria-checked={ctx.isActive(detailedMap.h.id)}
+          onClick={() => ctx.toggleLayers([detailedMap.h.id], !ctx.isActive(detailedMap.h.id))}
+          className={`flex w-full items-center gap-3 text-left ${unit ? "mt-2 border-t border-border pt-2" : "mt-1"}`}>
+          <span className="min-w-0 flex-1">
+            <span className="block text-xs text-muted-foreground">Most detailed map here{ratio(detailedMap.scale)}</span>
+            <span className="block truncate text-sm" title={detailedMap.h.title}>{detailedMap.h.title}</span>
+          </span>
+          <Knob on={ctx.isActive(detailedMap.h.id)} />
+        </button>
+      )}
+    </section>
+  );
+
   const btn = "rounded-md border border-border px-3 py-1.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11";
+  const list = (
+    <>
+      {card}
+      {checking > 0 && (
+        <p className="px-4 py-1 text-xs text-muted-foreground">Checking {checking} more layer{checking === 1 ? "" : "s"}…</p>
+      )}
+      {!listed.length && !basemapOffered && !checking && (
+        <p className="px-4 py-2 text-sm text-muted-foreground">{saving ? "Nothing here can be saved offline." : "Nothing mapped at this spot."}</p>
+      )}
+      {basemapOffered && (
+        <section>
+          <div className="px-4 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Basemap</div>
+          <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-hover pointer-coarse:min-h-12">
+            <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" checked={ticked.has(BASEMAP)}
+              onChange={(e) => toggle(BASEMAP, e.target.checked)} />
+            <span className="flex-1">Streets basemap for {quads.length === 1 ? "this quad" : `these ${quads.length} quads`}</span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {opfs.formatBytes(basemapParts.reduce((n, p) => n + p.bytes, 0))}
+            </span>
+          </label>
+        </section>
+      )}
+      {groups.map((g) => {
+        const ids = g.rows.filter((h) => h.save).map((h) => h.id);
+        const all = ids.length > 0 && ids.every((id) => ticked.has(id));
+        return (
+          <section key={g.name}>
+            <div className="flex items-center pr-4 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <button type="button" aria-expanded={isOpen(g.name)} onClick={() => toggleGroup(g.name)}
+                className="flex min-h-9 flex-1 items-center gap-2 px-4 text-left uppercase tracking-wider hover:text-foreground">
+                <Chevron open={isOpen(g.name)} />
+                <span>{g.name} · {g.rows.length}</span>
+              </button>
+              {saving && isOpen(g.name) && (
+                <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
+                  onClick={() => setTicked((prev) => {
+                    const next = new Set(prev);
+                    for (const id of ids) { if (all) next.delete(id); else next.add(id); }
+                    return next;
+                  })}>
+                  {all ? "None" : "All"}
+                </button>
+              )}
+            </div>
+            {isOpen(g.name) && g.rows.map(saving ? saveRow : showRow)}
+          </section>
+        );
+      })}
+    </>
+  );
+  const footer = (close: ReactNode) => (
+    <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
+      {save.error && <p className="w-full text-sm text-destructive">{save.error.message}</p>}
+      {saving ? <>
+        {!startSaving && <button type="button" className={btn} disabled={save.isPending} onClick={() => setSaving(false)}>Back</button>}
+        <button type="button" className={btn} disabled={save.isPending || ![...ticked].some((id) => id !== BASEMAP)}
+          onClick={show}>Show on map</button>
+        <button type="button" className={`${btn} ml-auto bg-primary text-primary-foreground hover:bg-primary/90`}
+          disabled={save.isPending || pricing || total === 0}
+          onClick={() => save.mutate(undefined, { onSuccess: onClose })}>
+          {pricing ? "Pricing…" : `Save offline · ${opfs.formatBytes(total)}`}
+        </button>
+      </> : <>
+        {opfs.isSupported() && (
+          <button type="button" className={btn} onClick={startSave}>
+            Save {target.kind === "point" ? "this quad" : "this area"} offline…
+          </button>
+        )}
+        {close}
+      </>}
+    </div>
+  );
+  const closeX = "rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11";
+
+  // Phones: the app's bottom sheet, non-modal so the map and the pin stay in view above it. Half
+  // height first; a swipe down from there, Escape or ✕ closes it.
+  if (!isDesktop) {
+    return (
+      <Drawer.Root open modal={false} snapPoints={[HALF, FULL]} snapPoint={snap}
+        onSnapPointChange={(p) => { if (p === null) onClose(); else setSnap(p); }}
+        onOpenChange={(open, details) => {
+          if (open) return;
+          if (save.isPending) details.cancel(); else onClose();
+        }}>
+        <Drawer.Portal>
+          {/* Above the Utah header, which sits at z-index 3000. */}
+          <Drawer.Viewport className="pointer-events-none fixed inset-0 flex items-end" style={{ zIndex: 3101 }}>
+            <Drawer.Popup initialFocus={false} style={{ height: `${FULL * 100}%` }} className={SHEET_POPUP}>
+              <SheetGrabber label={snap === HALF ? "Expand panel to full height" : "Collapse panel"}
+                onStep={() => setSnap(snap === HALF ? FULL : HALF)} onArrow={(s) => setSnap(s > 0 ? FULL : HALF)} />
+              <div className="flex items-center gap-2 border-b border-border px-4 pb-2">
+                <Drawer.Title className="flex-1 text-base font-semibold">{title}</Drawer.Title>
+                <Drawer.Close className={closeX} aria-label="Close">✕</Drawer.Close>
+              </div>
+              <Drawer.Content ref={listRef} className="min-h-0 flex-1 touch-auto overflow-y-auto overscroll-contain py-2">
+                {list}
+              </Drawer.Content>
+              {footer(<Drawer.Close className={`${btn} ml-auto`}>Done</Drawer.Close>)}
+            </Drawer.Popup>
+          </Drawer.Viewport>
+        </Drawer.Portal>
+      </Drawer.Root>
+    );
+  }
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !save.isPending) onClose(); }}>
       <Dialog.Portal>
@@ -285,77 +483,12 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
         <Dialog.Popup className="fixed inset-x-0 bottom-0 z-3101 flex max-h-modal flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-lg md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl">
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <Dialog.Title className="flex-1 text-base font-semibold">{title}</Dialog.Title>
-            <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11" aria-label="Close">✕</Dialog.Close>
+            <Dialog.Close className={closeX} aria-label="Close">✕</Dialog.Close>
           </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto py-2">
-            {checking > 0 && (
-              <p className="px-4 py-1 text-xs text-muted-foreground">Checking {checking} more layer{checking === 1 ? "" : "s"}…</p>
-            )}
-            {!listed.length && !basemapOffered && !checking && (
-              <p className="px-4 py-2 text-sm text-muted-foreground">{saving ? "Nothing here can be saved offline." : "Nothing mapped at this spot."}</p>
-            )}
-            {basemapOffered && (
-              <section>
-                <div className="px-4 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Basemap</div>
-                <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-hover pointer-coarse:min-h-12">
-                  <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" checked={ticked.has(BASEMAP)}
-                    onChange={(e) => toggle(BASEMAP, e.target.checked)} />
-                  <span className="flex-1">Streets basemap for {quads.length === 1 ? "this quad" : `these ${quads.length} quads`}</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {opfs.formatBytes(basemapParts.reduce((n, p) => n + p.bytes, 0))}
-                  </span>
-                </label>
-              </section>
-            )}
-            {groups.map((g) => {
-              const ids = g.rows.filter((h) => h.save).map((h) => h.id);
-              const all = ids.length > 0 && ids.every((id) => ticked.has(id));
-              return (
-                <section key={g.name}>
-                  <div className="flex items-center pr-4 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    <button type="button" aria-expanded={!closed.has(g.name)} onClick={() => toggleGroup(g.name)}
-                      className="flex min-h-9 flex-1 items-center gap-2 px-4 text-left uppercase tracking-wider hover:text-foreground">
-                      <Chevron open={!closed.has(g.name)} />
-                      <span>{g.name} · {g.rows.length}</span>
-                    </button>
-                    {saving && !closed.has(g.name) && (
-                      <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
-                        onClick={() => setTicked((prev) => {
-                          const next = new Set(prev);
-                          for (const id of ids) { if (all) next.delete(id); else next.add(id); }
-                          return next;
-                        })}>
-                        {all ? "None" : "All"}
-                      </button>
-                    )}
-                  </div>
-                  {!closed.has(g.name) && g.rows.map(saving ? saveRow : showRow)}
-                </section>
-              );
-            })}
+          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-2">
+            {list}
           </div>
-
-          <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
-            {save.error && <p className="w-full text-sm text-destructive">{save.error.message}</p>}
-            {saving ? <>
-              {!startSaving && <button type="button" className={btn} disabled={save.isPending} onClick={() => setSaving(false)}>Back</button>}
-              <button type="button" className={btn} disabled={save.isPending || ![...ticked].some((id) => id !== BASEMAP)}
-                onClick={show}>Show on map</button>
-              <button type="button" className={`${btn} ml-auto bg-primary text-primary-foreground hover:bg-primary/90`}
-                disabled={save.isPending || pricing || total === 0}
-                onClick={() => save.mutate(undefined, { onSuccess: onClose })}>
-                {pricing ? "Pricing…" : `Save offline · ${opfs.formatBytes(total)}`}
-              </button>
-            </> : <>
-              {opfs.isSupported() && (
-                <button type="button" className={btn} onClick={startSave}>
-                  Save {target.kind === "point" ? "this quad" : "this area"} offline…
-                </button>
-              )}
-              <Dialog.Close className={`${btn} ml-auto`}>Done</Dialog.Close>
-            </>}
-          </div>
+          {footer(<Dialog.Close className={`${btn} ml-auto`}>Done</Dialog.Close>)}
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

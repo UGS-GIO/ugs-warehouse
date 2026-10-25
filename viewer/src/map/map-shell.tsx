@@ -19,6 +19,8 @@ import { useIsDesktop } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
 import { Chevron } from "@/ui/chevron";
+import { GRAB, noMenu, SHEET_POPUP } from "@/ui/sheet-chrome";
+import { SheetGrabber } from "@/ui/sheet";
 
 type RevealRef = RefObject<(() => void) | null>;
 
@@ -49,11 +51,8 @@ function DesktopDock({ info, dock, resizable }: { info: ReactNode; dock: DockSta
 }
 
 const icon = "h-5 w-5";
-// No text selection, tap highlight or callout menu on a long press of the sheet's chrome.
-const GRAB = "select-none [-webkit-touch-callout:none] [-webkit-tap-highlight-color:transparent]";
 const SNAP_POINTS: number[] = [...DETENTS];
 const SHEET_LABEL = ["Expand panel", "Expand panel to full height", "Collapse panel"];
-const noMenu = (e: React.MouseEvent) => e.preventDefault();
 // No "Map" tab: the map is never hidden, it's what the sheet sits on. Tapping the open tab drops
 // the sheet back to a peek, which is the move a Map button was standing in for.
 const TABS: { id: SheetTab; label: string; path: ReactNode }[] = [
@@ -83,12 +82,7 @@ function PhoneSheet({ layers, info, revealInfo, areaRef }: Omit<ShellProps, "map
 
   // Tap the grabber: peek → half → full → peek.
   const stepSheet = () => setSheet({ tab, detent: (detent + 1) % DETENTS.length }, true);
-  const arrowSheet = (e: React.KeyboardEvent) => {
-    const step = e.key === "ArrowUp" ? 1 : e.key === "ArrowDown" ? -1 : 0;
-    if (!step) return;
-    e.preventDefault();
-    setDetent(Math.min(Math.max(detent + step, 0), DETENTS.length - 1));
-  };
+  const arrowSheet = (step: 1 | -1) => setDetent(Math.min(Math.max(detent + step, 0), DETENTS.length - 1));
 
   return (
     <>
@@ -121,14 +115,9 @@ function PhoneSheet({ layers, info, revealInfo, areaRef }: Omit<ShellProps, "map
               initialFocus={false}
               finalFocus={false}
               style={{ height: `${DETENTS[DETENTS.length - 1] * 100}%` }}
-              className="pointer-events-auto relative flex w-full flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl outline-none [padding-bottom:max(0px,calc(var(--drawer-snap-point-offset)+var(--drawer-swipe-movement-y)))] [transform:translateY(calc(var(--drawer-snap-point-offset)+var(--drawer-swipe-movement-y)))] transition-transform duration-300 ease-out data-swiping:duration-0 motion-reduce:transition-none">
+              className={SHEET_POPUP}>
               <Drawer.Title className="sr-only">{tab === "layers" ? "Layers" : "Item detail"}</Drawer.Title>
-              {/* A button too, so each detent is a tap or an arrow key away, not only a drag (WCAG 2.5.7). */}
-              <button type="button" onContextMenu={noMenu} onClick={stepSheet} onKeyDown={arrowSheet}
-                aria-label={SHEET_LABEL[detent]}
-                className={`flex shrink-0 cursor-grab touch-none items-center justify-center py-3 ${GRAB}`}>
-                <span className="h-1.5 w-10 rounded-full bg-border" />
-              </button>
+              <SheetGrabber label={SHEET_LABEL[detent]} onStep={stepSheet} onArrow={arrowSheet} />
               {!collapsed && (
                 <Drawer.Content className="min-h-0 flex-1 touch-auto overflow-y-auto overscroll-contain">
                   <div className="px-3 pb-3">

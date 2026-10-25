@@ -36,12 +36,19 @@ describe("hitLabel", () => {
     expect(hitLabel({ objectid: 7, unitname: "Lake Bonneville deposits", age: "Q" })).toBe("Lake Bonneville deposits");
   });
   it("skips identifiers, which read as noise", () => {
-    expect(hitLabel({ id: "groundshaking_current.fid-23e49f4e_1a07e84e73d_-1143", pga: "0.4g" })).toBe("0.4g");
+    expect(hitLabel({ id: "groundshaking_current.fid-23e49f4e_1a07e84e73d_-1143", pga: "Very strong" })).toBe("Very strong");
     expect(hitLabel({ globalid: "0b1f8c2e-1234-4d5e-9abc-001122334455" })).toBeNull();
   });
 
-  it("falls back to the first short text", () => {
+  it("prefers a name over a class or code that comes first", () => {
+    expect(hitLabel({ class: "First", countynbr: "18", name: "SALT LAKE" })).toBe("SALT LAKE");
+    expect(hitLabel({ cbsafp2: "41620", classfp: "H1", name20: "Salt Lake" })).toBe("Salt Lake");
+  });
+
+  it("falls back to text that reads as words, never a code, number or bookkeeping", () => {
     expect(hitLabel({ objectid: 7, hazard: "High" })).toBe("High");
+    expect(hitLabel({ egshazardunit: "VSSegs", acc: "0.4" })).toBeNull();
+    expect(hitLabel({ table_type: "dimension", _publication_date: "2026-09-22" })).toBeNull();
     expect(hitLabel({ objectid: 7 })).toBeNull();
   });
 });

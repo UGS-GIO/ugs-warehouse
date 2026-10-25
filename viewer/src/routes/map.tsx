@@ -69,6 +69,7 @@ function MapView() {
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       onBoundsChange={setView}
       onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, startSaving: false })}
+      pickedAt={pick?.target.kind === "point" ? { lng: pick.target.lon, lat: pick.target.lat } : null}
       relatedFor={relatedFor}
       search={<MapSearchFor state={c} className={isDesktop ? "w-80" : "w-[calc(100vw-20px)]"} />} showPin
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}

@@ -87,8 +87,9 @@ Open <https://data.geology.utah.gov/>.
 - Open a layer to see it on a map and in a data table. You can sort and filter the table.
 - Select a feature on the map to highlight its row in the table, and the reverse.
 - Long-press the map (right-click on a computer) to see what is at that place: the map unit or
-  feature under it, from every layer, and the published maps that cover it. Tap a row to turn
-  that layer on or off.
+  feature under it, from every layer, and the published maps that cover it. The geologic unit and
+  the most detailed geologic map are at the top. Tap a row to turn that layer on or off. To see
+  what is at your own location, tap the **What's under me** button on the map.
 - Export a layer, or the part in your map view, to Shapefile, GeoPackage, File Geodatabase,
   FlatGeobuf, GeoJSON or CSV. You can choose the coordinate system, for example NAD83 / UTM zone 12N
   (EPSG:26912). The export runs in your browser.

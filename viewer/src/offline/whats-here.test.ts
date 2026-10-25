@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
 import type { Bbox } from "./guards";
-import { probeOf, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
+import { mostDetailed, probeOf, quadsFor, saveBbox, scaleOf, type Target, unitOf, whatsHere } from "./whats-here";
 
 const STATE = [-114.05, 37, -109.04, 42];
 const layers: ActiveLayer[] = [
@@ -66,5 +66,29 @@ describe("saveBbox / quadsFor", () => {
   it("keeps an area's own bounds", () => {
     const bbox: Bbox = [-112, 40.7, -111.8, 40.8];
     expect(saveBbox({ kind: "area", bbox })).toEqual(bbox);
+  });
+});
+
+describe("geology", () => {
+  it("reads a scale in the forms the catalog uses", () => {
+    expect([scaleOf("1:24,000"), scaleOf("100k"), scaleOf("500000"), scaleOf("unk")]).toEqual([24000, 100000, 500000, undefined]);
+  });
+
+  it("names a unit from each unit layer's own fields, and nothing from other layers", () => {
+    expect(unitOf("geolmap_geolunits_500k", { unitname: "intrusive rocks-Tertiary", unitsymbol: "Ti", age: "Tertiary" }))
+      .toEqual({ name: "intrusive rocks-Tertiary", symbol: "Ti", age: "Tertiary", scale: 500000 });
+    expect(unitOf("geolmap_geolunits_gems", { mapunit: "Qal", scale: "24000" })).toMatchObject({ symbol: "Qal", scale: 24000 });
+    expect(unitOf("enmin_ut_counties", { name: "SALT LAKE" })).toBeNull();
+    expect(unitOf("constructor", {})).toBeNull();
+  });
+
+  it("prefers the most detailed scale, unknown scales last", () => {
+    expect(mostDetailed([{ id: "a", scale: 500000 }, { id: "b" }, { id: "c", scale: 24000 }])?.id).toBe("c");
+    expect(mostDetailed([])).toBeUndefined();
+  });
+
+  it("carries a plate's units archive through", () => {
+    const plate = { ...layers[1], unitsHref: "https://cdn/slc-units.pmtiles" };
+    expect(whatsHere([plate], slc)[0].unitsHref).toBe("https://cdn/slc-units.pmtiles");
   });
 });

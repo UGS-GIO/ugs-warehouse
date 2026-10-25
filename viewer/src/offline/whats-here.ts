@@ -16,6 +16,8 @@ export type Here = {
   /** How it is saved, always cut to the area: "area" for PMTiles tiles, "cog" for COG blocks,
    *  "table" for the GeoParquet row groups (table-area.ts). */
   save: { how: "area" | "cog" | "table"; url: string } | null;
+  /** A plate or mosaic's `units` PMTiles, which names the unit at a point. */
+  unitsHref?: string;
 };
 
 /** A row that can be kept offline, with its save method known. */
@@ -57,6 +59,7 @@ export function whatsHere(layers: ActiveLayer[], t: Target): Here[] {
       : l.rasterPmHref ? { how: "area", url: l.rasterPmHref }
       : l.cogHref ? { how: "cog", url: l.cogHref }
       : null,
+    ...(l.unitsHref ? { unitsHref: l.unitsHref } : {}),
   }, ...(l.tableHref ? [{
     id: `${l.id}#table`, title: l.title, group: "table" as const, save: { how: "table" as const, url: l.tableHref },
   }] : [])]).sort((a, b) => (a.group === b.group ? a.title.localeCompare(b.title) : rank[a.group] - rank[b.group]));
@@ -73,3 +76,45 @@ export function probeOf(h: Here): "identify" | "tile" | "bbox" | null {
   if (h.save?.how !== "area") return "bbox";
   return h.group === "layer" ? "identify" : "tile";
 }
+
+/** A map scale as its denominator: "1:24,000" → 24000, "100k" → 100000. */
+export function scaleOf(v: unknown): number | undefined {
+  const m = String(v ?? "").replace(/,/g, "").match(/^(?:1:)?\s*(\d+(?:\.\d+)?)\s*(k)?$/i);
+  return m ? Number(m[1]) * (m[2] ? 1000 : 1) : undefined;
+}
+
+/** Reference layers: boundaries and grids that cover every point, so they are listed apart and
+ *  collapsed. Chosen by item id; their STAC items carry nothing that marks them. */
+export const REFERENCE_IDS = new Set([
+  "enmin_plss_sections", "enmin_plss_townshiprange", "enmin_ut_counties", "enmin_ccus_cbcounty",
+  "enmin_ccs_georegions", "enmin_ccs_exclusionzones", "hazards_studyareas",
+  "wetlands_subbasin_huc8", "wetlands_subbasin_huc8_ecoregion", "wetlands_watershed_huc12",
+  "wetlands_watershed_huc12_ecoregion", "wetlands_wetlandsapp_huc12", "wetlands_plants_huc8",
+  "wetlands_ecoregion", "wetlands_plants_ecoregion", "wetlands_assessment_projects",
+  "wetlands_wetlands_metadata", "wetlands_riparian_metadata", "wetlands_wetlandsoutline",
+]);
+
+export type Unit = { name?: string; symbol?: string; age?: string; description?: string; scale?: number };
+
+// The geologic-unit layers and their fields, from each layer's own schema. GeMS map-unit polygons
+// carry only the unit code; their descriptions live in a separate table.
+const UNIT_FIELDS: Record<string, { name?: string; symbol: string; age?: string; scale: string | number }> = {
+  geolmap_geolunits_500k: { name: "unitname", symbol: "unitsymbol", age: "age", scale: 500000 },
+  geolmap_geolunits_gems: { symbol: "mapunit", scale: "scale" },
+};
+export const isUnitLayer = (id: string) => Object.hasOwn(UNIT_FIELDS, id);
+
+const text = (v: unknown) => (v == null || String(v).trim() === "" ? undefined : String(v).trim());
+
+/** The unit a geologic-unit layer's feature names, or null when the layer is not one. */
+export function unitOf(layerId: string, props: Record<string, unknown>): Unit | null {
+  const f = isUnitLayer(layerId) ? UNIT_FIELDS[layerId] : undefined;
+  const symbol = f && text(props[f.symbol]);
+  if (!f || !symbol) return null;
+  return { symbol, name: f.name && text(props[f.name]), age: f.age && text(props[f.age]),
+           scale: typeof f.scale === "number" ? f.scale : scaleOf(props[f.scale]) };
+}
+
+/** The most detailed of several: the smallest scale denominator, unknown scales last. */
+export const mostDetailed = <T extends { scale?: number }>(xs: T[]): T | undefined =>
+  xs.reduce<T | undefined>((a, x) => (!a || (x.scale ?? Infinity) < (a.scale ?? Infinity) ? x : a), undefined);

@@ -39,11 +39,27 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
 
 const BASEMAP = "__basemap__";
 
+// The groups a viewer has collapsed, kept on this device; storage can be blocked, so all open then.
+const CLOSED_KEY = "whats-here-closed";
+function readClosed(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(CLOSED_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch { return new Set(); }
+}
+
 export function WhatsHerePicker({ target, startSaving, onClose }: {
   target: Target; startSaving: boolean; onClose: () => void;
 }) {
   const [saving, setSaving] = useState(startSaving);
   const [opened, setOpened] = useState<string | null>(null);   // the row showing its attributes
+  const [closed, setClosed] = useState(readClosed);
+  const toggleGroup = (name: string) => {
+    const next = new Set(closed);
+    if (!next.delete(name)) next.add(name);
+    setClosed(next);
+    try { localStorage.setItem(CLOSED_KEY, JSON.stringify([...next])); } catch { /* kept for this visit only */ }
+  };
   const ctx = useViewCtx();
   const { files, engineBytes } = useOffline();
   const index = useBasemapIndex();
@@ -294,10 +310,14 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
               const all = ids.length > 0 && ids.every((id) => ticked.has(id));
               return (
                 <section key={g.name}>
-                  <div className="flex items-center px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    <span className="flex-1">{g.name} · {g.rows.length}</span>
-                    {saving && (
-                      <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
+                  <div className="flex items-center pr-4 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    <button type="button" aria-expanded={!closed.has(g.name)} onClick={() => toggleGroup(g.name)}
+                      className="flex min-h-9 flex-1 items-center gap-2 px-4 text-left uppercase tracking-wider hover:text-foreground">
+                      <span className={`transition-transform ${closed.has(g.name) ? "-rotate-90" : ""}`}>⌄</span>
+                      <span>{g.name} · {g.rows.length}</span>
+                    </button>
+                    {saving && !closed.has(g.name) && (
+                      <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
                         onClick={() => setTicked((prev) => {
                           const next = new Set(prev);
                           for (const id of ids) { if (all) next.delete(id); else next.add(id); }
@@ -307,7 +327,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
                       </button>
                     )}
                   </div>
-                  {g.rows.map(saving ? saveRow : showRow)}
+                  {!closed.has(g.name) && g.rows.map(saving ? saveRow : showRow)}
                 </section>
               );
             })}

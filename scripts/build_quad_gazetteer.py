@@ -60,7 +60,7 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=OUT)
     args = ap.parse_args()
     data = rows(fetch())
-    args.out.write_text(json.dumps(data, separators=(",", ":")) + "\n")
+    args.out.write_text(json.dumps(data, separators=(",", ":")) + "\n", encoding="utf-8")
     print(f"{len(data)} quads -> {args.out} ({args.out.stat().st_size // 1024} KB)")
 
 

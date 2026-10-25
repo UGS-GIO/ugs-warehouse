@@ -41,7 +41,7 @@ export function quadAt(lon: number, lat: number): Quad {
 
 /** The quad a USGS Ohio code names: the inverse of quadAt. */
 export function quadOf(code: string): Quad {
-  const m = /^(\d{2})(\d{3})([a-h])([1-8])$/.exec(code);
+  const m = /^(\d{2})(\d{3})([a-h])([1-8])$/.exec(code.toLowerCase());
   if (!m) throw new Error(`not a 7.5-minute quad code: ${code}`);
   const lat = Number(m[1]) + ROWS.indexOf(m[3]) * CELL;
   const lon = -(Number(m[2]) + (Number(m[4]) - 1) * CELL);

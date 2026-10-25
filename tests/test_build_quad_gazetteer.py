@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.build_quad_gazetteer import rows
+from scripts.build_quad_gazetteer import rows, rows_100k
 
 
 def _feature(name: str, code: str, w: float, s: float, e: float, n: float) -> dict:
@@ -22,3 +22,17 @@ def test_rows_are_name_and_grid_code_with_usgs_suffix_case():
 def test_an_outline_off_its_codes_cell_fails_the_build():
     with pytest.raises(ValueError, match="40111e6"):
         rows([_feature("Wrong", "40111E6", -111.875, 40.5, -111.75, 40.625)])
+
+
+def test_100k_sheets_are_coded_by_their_se_cell_and_kept_only_in_utah():
+    got = rows_100k([
+        _feature("Salt Lake City", "", -112.0008, 40.4999, -111.0007, 41.0),
+        _feature("Wells", "", -115.0009, 40.9999, -114.0009, 41.4999),        # Nevada, past 114W
+        _feature("Evanston", "", -111.0008, 40.9999, -110.0007, 41.5),        # Wyoming notch
+    ])
+    assert got == [["Salt Lake City", "40111e1"]]
+
+
+def test_a_100k_outline_off_the_30x60_grid_fails_the_build():
+    with pytest.raises(ValueError, match="Odd"):
+        rows_100k([_feature("Odd", "", -112.25, 40.5, -111.0, 41.0)])

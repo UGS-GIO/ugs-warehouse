@@ -37,7 +37,7 @@ function bindSlash(el: HTMLInputElement | null) {
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
 const quadRow = (quad: QuadHit): Row =>
-  ({ type: "quad", key: `quad:${quad.code}`, label: `${quad.name} quad`, sub: `7.5' quad · ${quad.code}`, quad });
+  ({ type: "quad", key: `quad:${quad.code}`, label: `${quad.name} quad`, sub: "7.5' quadrangle", quad });
 
 export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAll, defaultQuery, onClear,
   className = "" }: {

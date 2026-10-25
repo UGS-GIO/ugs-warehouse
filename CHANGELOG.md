@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.16.0...v1.16.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **cdn:** cache FeatureServer and ImageServer responses on the CDN for a week ([#662](https://github.com/UGS-GIO/ugs-warehouse/issues/662)) ([b789e9b](https://github.com/UGS-GIO/ugs-warehouse/commit/b789e9bb54ff11cd653f1245b2e1b82724b1666a))
+
 ## [1.16.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.15.1...v1.16.0) (2026-10-25)
 
 

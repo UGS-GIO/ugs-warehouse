@@ -234,10 +234,13 @@ def test_build_non_scoped_writes_catalog_item_and_refreshes():
          patch.object(gm.editions, "quad_by_series", return_value={"M-296DM": "Park City East Quad"}), \
          patch.object(gm.editions, "edition_graph", return_value={"M-296DM": {"deprecated": False}}), \
          patch.object(gm, "build_tier", return_value=True) as mock_build_tier, \
-         patch.object(gm.stac, "refresh_catalog") as mock_refresh:
+         patch.object(gm.stac, "refresh_catalog", return_value=[]) as mock_refresh, \
+         patch.object(gm.cdn, "mark") as mock_mark, patch.object(gm.cdn, "flush") as mock_flush:
         built = gm.build(["24k"], edition_mode="current")
 
     assert built == 1
+    mock_mark.assert_called_once_with(["geologic-maps-24k"])  # the COG is rewritten in place
+    mock_flush.assert_called_once_with([])
     call = mock_build_tier.call_args
     assert call.kwargs.get("suffix") == ""
     assert call.kwargs.get("write_stac_item") is True

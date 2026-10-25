@@ -681,7 +681,7 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
-      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1|CDN_URL_MAP=${_CDN_URL_MAP}|CDN_PROJECT=${_CDN_PROJECT}|CDN_HOST=${_CDN_HOST}
       - --command=python
       # --scale=<tier> form: gcloud rejects a repeated bare "--scale" item in --args.
       - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=500k
@@ -924,6 +924,7 @@ steps:
       - --concurrency=8
       - --cpu=1
       - --memory=512Mi
+      - --cpu-boost
       - --min-instances=0
       - --max-instances=20
     env:

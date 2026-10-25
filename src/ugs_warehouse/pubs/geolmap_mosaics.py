@@ -65,7 +65,7 @@ from pmtiles.convert import mbtiles_to_header_json
 from pmtiles.tile import tileid_to_zxy, zxy_to_tileid
 from pmtiles.writer import Writer
 
-from ..core import config, gcs, stac
+from ..core import cdn, config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
@@ -616,7 +616,7 @@ def build(scales: list[str], maxz: int | None = None,
     if quads:
         print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
               f"writing '*{suffix}' items only, real tiers untouched")
-    built = 0
+    built, rebaked = 0, []
     published = published_pubs() if write_stac_item else None
     for tier in scales:
         # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
@@ -625,9 +625,16 @@ def build(scales: list[str], maxz: int | None = None,
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
                       suffix=suffix, write_stac_item=write_stac_item, published=published):
             built += 1
+            rebaked.append(f"geologic-maps-{tier}")
     if built and not quads:
+        # The COG is rewritten at the same URL, so the ImageServer's cached answers must go.
+        cdn.mark(rebaked)
         print("[mosaics] refreshing STAC catalog")
-        stac.refresh_catalog()
+        problems = stac.refresh_catalog()
+        try:
+            cdn.flush(problems)
+        except Exception as e:  # noqa: BLE001 - the mosaics are written; the ids stay pending
+            print(f"[mosaics] CDN invalidation FAILED, {rebaked} stay pending: {e}", file=sys.stderr)
     print(f"[mosaics] complete: {built}/{len(scales)} tiers built")
     return built
 

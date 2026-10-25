@@ -7,6 +7,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { useMutation, useQueries } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useViewCtx } from "@/app";
+import { Chevron } from "@/ui/chevron";
 import { toLayer } from "@/map/to-layer";
 import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
@@ -232,7 +233,9 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
           {found.length > 0 ? (
             <button type="button" aria-expanded={opened === h.id} aria-label={`Attributes of ${h.title}`}
               onClick={() => setOpened(opened === h.id ? null : h.id)}
-              className={`w-11 shrink-0 self-stretch text-muted-foreground transition-transform ${opened === h.id ? "rotate-180" : ""}`}>⌄</button>
+              className="flex w-11 shrink-0 items-center justify-center self-stretch text-muted-foreground">
+              <Chevron open={opened === h.id} />
+            </button>
           ) : <span className="w-11 shrink-0" />}
         </div>
         {opened === h.id && (
@@ -313,7 +316,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
                   <div className="flex items-center pr-4 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <button type="button" aria-expanded={!closed.has(g.name)} onClick={() => toggleGroup(g.name)}
                       className="flex min-h-9 flex-1 items-center gap-2 px-4 text-left uppercase tracking-wider hover:text-foreground">
-                      <span className={`transition-transform ${closed.has(g.name) ? "-rotate-90" : ""}`}>⌄</span>
+                      <Chevron open={!closed.has(g.name)} />
                       <span>{g.name} · {g.rows.length}</span>
                     </button>
                     {saving && !closed.has(g.name) && (

@@ -23,6 +23,7 @@ import { Unavailable } from "@/offline/offline-notice";
 import { isNetworkError, useOnline } from "@/offline/online";
 import { TableOffline } from "@/offline/table-offline";
 import { useOffline } from "@/offline/store";
+import { Chevron } from "@/ui/chevron";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -253,10 +254,10 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
       {/* One header line that says what this is and how big it is — the row count used to float
           mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
-        <button className="inline-flex items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+        <button className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
           title={collapsed ? "Show the data" : "Hide the data"} aria-expanded={!collapsed}
           onClick={() => setCollapsed((v) => !v)}>
-          <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+          <Chevron open={!collapsed} />
           Data
           <span className="font-normal">
             · {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}

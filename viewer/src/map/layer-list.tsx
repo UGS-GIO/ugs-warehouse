@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 
 import { OfflineButton } from "@/offline/offline-button";
 import { reorderLayers } from "./map-model";
+import { Chevron } from "@/ui/chevron";
 
 // `layer` = a serving topic rather than a publication plate; those sort first and lead the list.
 export type LayerRow = { id: string; href: string; title: string; group: string; layer: boolean };
@@ -44,7 +45,7 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
         });
       }}>
       <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground pointer-coarse:min-h-11">
-        <span className="inline-block w-3 shrink-0 transition-transform [details[open]>summary_&]:rotate-90">▸</span>
+        <Chevron />
         <span className="min-w-0 truncate">{label}</span>
         {action && <span className="ml-auto pl-2">{action}</span>}
       </summary>

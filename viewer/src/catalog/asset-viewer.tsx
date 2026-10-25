@@ -17,6 +17,7 @@ import { C, toggle } from "@/ui/ui";
 import { UiSegmented } from "@/ui/segmented";
 import { useDataSaver } from "@/lib/data-saver";
 import { type AssetEntry, assetEntries, plateEntry, previewKindOf } from "./item-view";
+import { Chevron } from "@/ui/chevron";
 
 // deck.gl's mesh layers and the terrain builder: only items with a 3D asset need them, so they load
 // with the first one rather than with every catalog page.
@@ -43,9 +44,8 @@ export function FieldsPanel({ item }: { item: StacDoc }) {
   if (!cols) return null;
   return (
     <details className="group mt-3 text-xs">
-      <summary className="inline-flex cursor-pointer list-none items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
-        <span aria-hidden className="group-open:hidden">▸</span>
-        <span aria-hidden className="hidden group-open:inline">▾</span>
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+        <Chevron />
         Fields <span className="font-normal">· {cols.length}</span>
       </summary>
       <div className="mt-2"><SchemaTable columns={cols} /></div>

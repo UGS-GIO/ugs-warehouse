@@ -18,6 +18,7 @@ import { DETENTS, parseSheet, sheetParam, type SheetState, type SheetTab } from 
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
+import { Chevron } from "@/ui/chevron";
 
 type RevealRef = RefObject<(() => void) | null>;
 
@@ -40,7 +41,7 @@ function DesktopDock({ info, dock, resizable }: { info: ReactNode; dock: DockSta
         aria-expanded={dock.open}
         className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
       >
-        <span>{dock.open ? "▾" : "▸"}</span> Item detail
+        <Chevron open={dock.open} /> Item detail
       </button>
       {dock.open && <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">{info}</div>}
     </section>

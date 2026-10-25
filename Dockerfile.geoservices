@@ -7,7 +7,8 @@ RUN CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags="-s -w" \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/featureserver /geoservices
-ENV PORT=8080 \
+# CDN_TTL: the CDN keeps a response a week; ingest, restyle and releases invalidate what changed.
+ENV PORT=8080 CDN_TTL=604800 \
     STAC_COLLECTION_URL=https://maps-assets.geology.utah.gov/warehouse/stac/ugs-serving-topics/items.json
 EXPOSE 8080
 ENTRYPOINT ["/geoservices"]

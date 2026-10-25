@@ -82,18 +82,17 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
 
   const found = text.length >= 2 ? catalog.data?.(text) : undefined;
   const quadHits = text.length >= 2 ? quads.data?.(text) ?? [] : [];
-  // Quads named by what was typed lead the places; looser quad matches follow the locator's.
-  const strong = quadHits.filter((h) => isStrongQuad(h, text));
+  // Quads get their own group, above Places when a quad name starts with what was typed.
+  const quadsFirst = quadHits.some((h) => isStrongQuad(h, text));
+  const quadGroup = { value: "Quads", items: quadHits.map(quadRow) };
   const groups: Group[] = text.length >= 2
     ? [
         { value: "Exact match", items: found?.exact ? [itemRow(found.exact)] : [] },
         { value: "Layers", items: (found?.layers ?? []).map(itemRow) },
-        { value: "Places", items: [
-            ...strong.map(quadRow),
-            ...(places.data ?? []).slice(0, 5).map((s): Row =>
-              ({ type: "place", key: s.magicKey, label: s.text, sub: "Place", place: s })),
-            ...quadHits.filter((h) => !strong.includes(h)).slice(0, 3).map(quadRow),
-          ] },
+        ...(quadsFirst ? [quadGroup] : []),
+        { value: "Places", items: (places.data ?? []).slice(0, 5).map((s): Row =>
+            ({ type: "place", key: s.magicKey, label: s.text, sub: "Place", place: s })) },
+        ...(quadsFirst ? [] : [quadGroup]),
         { value: "Publications", items: (found?.publications ?? []).map(itemRow) },
       ].filter((g) => g.items.length)
     : [

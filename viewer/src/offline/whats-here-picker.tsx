@@ -280,8 +280,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const title = querying && target.kind === "point"
     ? `What's here · ${target.lat.toFixed(4)}, ${target.lon.toFixed(4)}`
     : target.kind === "point"
-    ? `Save offline · quad ${quads[0].code}`
-    : `Save offline · ${quads.length} quad${quads.length === 1 ? "" : "s"}`;
+    ? "Save offline · this quadrangle"
+    : `Save offline · ${quads.length} quadrangle${quads.length === 1 ? "" : "s"}`;
   // When saving, only what can actually be saved is listed: a row you can't tick is noise. That
   // drops datacubes (no offline form) and anything whose pricing failed. Showing keeps all.
   const listed = saving ? here.filter((h) => h.save && !priceOf(h)?.isError)
@@ -430,7 +430,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
           <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-hover pointer-coarse:min-h-12">
             <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" checked={ticked.has(BASEMAP)}
               onChange={(e) => toggle(BASEMAP, e.target.checked)} />
-            <span className="flex-1">Streets basemap for {quads.length === 1 ? "this quad" : `these ${quads.length} quads`}</span>
+            <span className="flex-1">Streets basemap for {quads.length === 1 ? "this quadrangle" : `these ${quads.length} quadrangles`}</span>
             <span className="text-xs tabular-nums text-muted-foreground">
               {opfs.formatBytes(basemapParts.reduce((n, p) => n + p.bytes, 0))}
             </span>
@@ -480,7 +480,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       </> : <>
         {opfs.isSupported() && (
           <button type="button" className={btn} onClick={startSave}>
-            Save {target.kind === "point" ? "this quad" : "this area"} offline…
+            Save {target.kind === "point" ? "this quadrangle" : "this area"} offline…
           </button>
         )}
         {close}

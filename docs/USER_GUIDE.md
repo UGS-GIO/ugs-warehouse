@@ -160,7 +160,7 @@ with no visit.
 ![Step 3: Download button beside a layer](img/offline/layer-download.png){ width="320" }
 
 To save only part of the state, zoom in on the map and tap **Save this area** under
-**Offline basemap**. Or long-press the map and tap **Save this quad offline** to save the 7.5'
+**Offline basemap**. Or long-press the map and tap **Save this quadrangle offline** to save the 7.5'
 quadrangle at that place.
 
 Downloads run one at a time. If you close the app or lose signal, the download continues from

@@ -37,7 +37,7 @@ function bindSlash(el: HTMLInputElement | null) {
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
 const quadRow = (quad: QuadHit): Row =>
-  ({ type: "quad", key: `quad:${quad.code}`, label: `${quad.name} quad`, sub: "7.5' quadrangle", quad });
+  ({ type: "quad", key: `quad:${quad.code}`, label: `${quad.name} quadrangle`, sub: "USGS 7.5-minute map area", quad });
 
 export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAll, defaultQuery, onClear,
   className = "" }: {
@@ -86,7 +86,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
   const quadHits = text.length >= 2 ? quads.data?.(text) ?? [] : [];
   // Quads get their own group, above Places when a quad name starts with what was typed.
   const quadsFirst = quadHits.some((h) => isStrongQuad(h, text));
-  const quadGroup = { value: "Quads", items: quadHits.map(quadRow) };
+  const quadGroup = { value: "Quadrangles", items: quadHits.map(quadRow) };
   const groups: Group[] = text.length >= 2
     ? [
         { value: "Exact match", items: found?.exact ? [itemRow(found.exact)] : [] },

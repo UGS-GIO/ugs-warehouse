@@ -25,7 +25,7 @@ function Shell({ label, result, onClose, children }: {
   return (
     <section role="region" aria-label={label} className="mt-3 rounded-md border border-border bg-card p-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <span ref={head} tabIndex={-1} className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground outline-none">{label}</span>
+        <span ref={head} tabIndex={-1} className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground outline-none">{label}</span>
         <button type="button" onClick={onClose} aria-label="Clear selection" className="text-muted-foreground hover:text-foreground">✕</button>
       </div>
       {children}

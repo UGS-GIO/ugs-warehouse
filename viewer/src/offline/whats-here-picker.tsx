@@ -228,8 +228,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
     <Dialog.Root open onOpenChange={(open) => { if (!open && !save.isPending) onClose(); }}>
       <Dialog.Portal>
         {/* Above the Utah header, which sits at z-index 3000 and otherwise covers the title bar. */}
-        <Dialog.Backdrop className="fixed inset-0 z-[3100] bg-black/40" />
-        <Dialog.Popup className="fixed inset-x-0 bottom-0 z-[3101] flex max-h-[85vh] flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-[32rem] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl">
+        <Dialog.Backdrop className="fixed inset-0 z-3100 bg-black/40" />
+        <Dialog.Popup className="fixed inset-x-0 bottom-0 z-3101 flex max-h-modal flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-lg md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl">
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <Dialog.Title className="flex-1 text-base font-semibold">{title}</Dialog.Title>
             <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11" aria-label="Close">✕</Dialog.Close>

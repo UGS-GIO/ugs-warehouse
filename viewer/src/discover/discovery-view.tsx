@@ -252,11 +252,11 @@ export function DiscoveryView({
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         {renderSearch ? (
-          <div className="min-w-[12rem] flex-1 sm:max-w-md">{renderSearch(q, (text) => patch({ q: text }))}</div>
+          <div className="min-w-48 flex-1 sm:max-w-md">{renderSearch(q, (text) => patch({ q: text }))}</div>
         ) : (
           <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
             placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
-            className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
+            className="min-w-48 flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
         )}
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
@@ -319,7 +319,7 @@ export function DiscoveryView({
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">
         {/* LEFT — facet rail (grouped, sectioned, collapsible, with counts). */}
-        <aside className="hidden w-[264px] shrink-0 flex-col overflow-y-auto border-r border-border bg-background md:flex">
+        <aside className="hidden w-66 shrink-0 flex-col overflow-y-auto border-r border-border bg-background md:flex">
           <div className="flex items-center justify-between px-3 pb-1 pt-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Filters</h2>
             {activeFilters > 0 && (
@@ -335,7 +335,7 @@ export function DiscoveryView({
           <FacetSection label="Format" facets={facets.formats} selected={new Set(formats)}
             onToggle={(k) => toggleList("formats", k)} />
           <GeometrySection facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
-          <div className="px-3 py-4 text-[11px] leading-snug text-muted-foreground">
+          <div className="px-3 py-4 text-2xs leading-snug text-muted-foreground">
             Filters narrow the cards and the map together. Hover a card to find it on the map.
           </div>
         </aside>
@@ -563,7 +563,7 @@ function FacetSection({ label, facets, selected, onToggle }: {
                 <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
-                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-[10px] leading-none ${on
+                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
                   <span className="min-w-0 flex-1 truncate" title={f.label}>{f.label}</span>
                   <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>
@@ -608,7 +608,7 @@ function GeometrySection({ facets, value, onChange }: {
                   onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
-                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[10px] leading-none ${on
+                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>
                   <span className="min-w-0 flex-1 truncate">{f.label}</span>
                   <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>

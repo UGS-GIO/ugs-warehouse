@@ -131,7 +131,7 @@ const shapeOf = (layers?: Array<Record<string, unknown>>): Shape => {
 };
 function Swatch({ color, shape, small = false }: { color: string; shape: Shape; small?: boolean }) {
   const size = small ? "h-2.5 w-2.5" : "h-3.5 w-3.5";
-  if (shape === "line") return <span aria-hidden className="inline-block h-[3px] w-4 shrink-0 rounded-full" style={{ background: color }} />;
+  if (shape === "line") return <span aria-hidden className="inline-block h-0.75 w-4 shrink-0 rounded-full" style={{ background: color }} />;
   return <span aria-hidden className={`inline-block ${size} shrink-0 border border-black/10 ${shape === "circle" ? "rounded-full" : "rounded-sm"}`} style={{ background: color }} />;
 }
 const SHOWN = 12;   // entries before "Show all", so a long legend does not bury the page below it

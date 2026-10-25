@@ -597,7 +597,7 @@ export function FeatureDetail({ feature, onOpenRelated, onClose }: {
     <div>
       <div className="mb-2.5 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</div>
+          <div className="text-3xs font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</div>
           <h3 className="truncate text-sm font-semibold text-foreground" title={feature.title}>{feature.title || "Feature"}</h3>
         </div>
         <button type="button" onClick={onClose} aria-label="Close feature detail" title="Close feature detail"

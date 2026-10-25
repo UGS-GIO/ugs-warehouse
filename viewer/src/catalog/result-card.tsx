@@ -70,9 +70,9 @@ export function ResultCard({ it, density, on, link, addSlot }: CardProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
             <p className={`min-w-0 flex-1 font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
-            {hasFootprint(it.data) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
+            {hasFootprint(it.data) && <span className="shrink-0 text-3xs font-medium text-primary"><span aria-hidden>◆</span> map</span>}
           </div>
-          {sid && <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div>}
+          {sid && <div className="truncate font-mono text-2xs text-muted-foreground" title={sid}>{sid}</div>}
           <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
           {!compact && <div className="mt-1">{formatBadges(it)}</div>}
         </div>
@@ -91,11 +91,11 @@ export function ResultRow({ it, density, on, link, addSlot }: CardProps) {
       <Link {...link}
         className={`flex min-w-0 flex-1 cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING}`}>
         <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
-        {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
+        {sid && <span className="shrink-0 font-mono text-2xs text-muted-foreground">{sid}</span>}
         {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}
         {hasFootprint(it.data) && (
           <span className="ml-auto shrink-0 text-primary">
-            <span aria-hidden className="text-[10px]">◆</span><span className="sr-only">on the map</span>
+            <span aria-hidden className="text-3xs">◆</span><span className="sr-only">on the map</span>
           </span>
         )}
       </Link>

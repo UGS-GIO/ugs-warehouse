@@ -156,7 +156,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
       cell: (info) => {
         const v = info.getValue();
         const s = v == null ? "" : String(v);
-        return <span className="block max-w-[280px] truncate" title={s}>{s}</span>;
+        return <span className="block max-w-70 truncate" title={s}>{s}</span>;
       },
     })),
     [page?.columns],

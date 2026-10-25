@@ -135,14 +135,14 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
       </div>
       <Combobox.Portal>
         <Combobox.Positioner sideOffset={6} align="start" className="z-50">
-          <Combobox.Popup className="max-h-[70vh] w-[var(--anchor-width)] min-w-72 overflow-y-auto rounded-md border border-border bg-card py-1 text-sm text-foreground shadow-lg">
+          <Combobox.Popup className="max-h-popup w-(--anchor-width) min-w-72 overflow-y-auto rounded-md border border-border bg-card py-1 text-sm text-foreground shadow-lg">
             <Combobox.Empty className="px-3 py-2 text-muted-foreground empty:hidden">
               {text.length >= 2 && !busy ? `No places, layers or publications match “${text}”` : null}
             </Combobox.Empty>
             <Combobox.List>
               {(group: Group) => (
                 <Combobox.Group key={group.value} items={group.items}>
-                  <Combobox.GroupLabel className="flex items-center justify-between px-3 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <Combobox.GroupLabel className="flex items-center justify-between px-3 pb-1 pt-2 text-2xs font-bold uppercase tracking-wider text-muted-foreground">
                     {group.value}
                     {group.value === "Recent" && (
                       <button type="button" onClick={clearRecent}

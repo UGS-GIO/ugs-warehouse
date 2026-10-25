@@ -295,3 +295,22 @@ def test_restyle_rebinds_a_publication_collection_but_not_a_serving_topic_layer_
     assert "default" in json.loads(store[pub])["ugs:renders"]
     assert store[topic] == topic_doc
     assert R._single_file_collections("all", {}, [pub, topic]) == ["ugs-publications/OFR/OFR-1"]
+
+
+def test_a_restyle_invalidates_the_rebound_topics_on_the_cdn(monkeypatch):
+    _styled_wells(monkeypatch)
+    sent: list = []
+    monkeypatch.setattr(R.cdn, "invalidate_features", sent.append)
+    R.restyle()
+    assert sent == [["enmin_ucrc_wells"]]
+
+
+def test_a_failed_cdn_invalidation_fails_the_restyle_after_its_writes(monkeypatch):
+    kicked = _styled_wells(monkeypatch)
+
+    def fail(item_ids):
+        raise RuntimeError("403")
+    monkeypatch.setattr(R.cdn, "invalidate_features", fail)
+    with pytest.raises(RuntimeError, match="invalidate the CDN"):
+        R.restyle()
+    assert kicked == [None]

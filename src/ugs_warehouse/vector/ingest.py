@@ -7,7 +7,7 @@ For each topic:
   4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
   5. Build PMTiles via tippecanoe (`sink_pmtiles`)
   6. Write STAC item (`sink_stac`)
-  7. Invalidate the layer's FeatureServer paths on the CDN (`core.cdn`), once the run is done
+  7. Invalidate a changed layer's FeatureServer paths on the CDN (`core.cdn`), once the run is done
 
 Each sink is independent: failure in one does not corrupt the others.
 
@@ -187,19 +187,23 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
             rc = 1
             data_failed = True
 
+    item_changed = False
+
     def _stac() -> None:
+        nonlocal item_changed
         # The hash vouches for the published artifacts, so it only moves when they were all
         # rewritten. Stamping it after a failed data sink would make the next --skip-unchanged run
         # skip the rebuild.
         content_hash = fingerprint.published_hash(topic) if data_failed else fp
-        sink_stac.write(topic, con, view, metadata=meta, related=related_info,
-                        content_hash=content_hash, file_meta=written)
+        item_changed = sink_stac.write(topic, con, view, metadata=meta, related=related_info,
+                                       content_hash=content_hash, file_meta=written)
 
     if not _run_sink(topic, "stac", _stac):
         rc = 1
     if not skip_refresh and not _refresh_catalog(topic):
         rc = 1
-    if data_sinks and changed is not None:
+    # A metadata edit changes what the FeatureServer serves too.
+    if (data_sinks or item_changed) and changed is not None:
         changed.append(topic.stem)
     return rc
 
@@ -226,7 +230,7 @@ def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False
 
     `skip_unchanged` defaults on — an unchanged topic (fingerprint matches the published item) is
     skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild.
-    A topic whose data sinks ran is appended to `changed`."""
+    A topic whose data sinks ran or whose item changed is appended to `changed`."""
     try:
         if dry_run:
             return _ingest(topic, dry_run=True, skip_refresh=skip_refresh,

@@ -98,3 +98,21 @@ def test_a_dry_run_invalidates_nothing(posts, monkeypatch):
     monkeypatch.setattr(ingest, "ingest_topic", _changes)
     assert _main(monkeypatch, "--topic", "hazards.hazards_qfaults_current", "--dry-run") == 0
     assert posts == []
+
+
+@pytest.mark.parametrize("title, served_change", [("Q", False), ("Quaternary faults", True)])
+def test_a_rewritten_item_reports_whether_it_changed(monkeypatch, title, served_change):
+    """The datetime falls back to the clock, so it differs on every run and is not a change."""
+    from ugs_warehouse.vector import sink_stac
+
+    monkeypatch.setattr(sink_stac, "_assets", lambda *a: {})
+    for fn in ("attach_renders", "attach_classification", "stamp_file_meta"):
+        monkeypatch.setattr(sink_stac.stac, fn, lambda _i: None)
+
+    def write(title: str) -> bool:
+        monkeypatch.setattr(sink_stac, "_properties", lambda *a: {"title": title})
+        return sink_stac.write(Topic.parse("hazards.hazards_qfaults_current"), None, "v",
+                               bbox=[-114.0, 37.0, -109.0, 42.0], row_count=1)
+
+    assert write("Q") is True
+    assert write(title) is served_change

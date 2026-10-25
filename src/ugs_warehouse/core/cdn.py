@@ -1,4 +1,4 @@
-"""Invalidate a layer's ArcGIS service paths on the Cloud CDN after an ingest changes it.
+"""Invalidate a layer's FeatureServer paths on the Cloud CDN after an ingest or restyle changes it.
 
 The FeatureServer sits behind the maps-assets load balancer, whose CDN keeps each response for its
 `s-maxage`. Unset `CDN_URL_MAP` or `CDN_PROJECT` invalidates nothing (local dev, tests, review).

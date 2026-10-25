@@ -12,6 +12,7 @@ bbox/row_count come from the transformed view.
 from __future__ import annotations
 
 import datetime
+import json
 import sys
 
 import duckdb
@@ -224,7 +225,9 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           metadata: dict | None = None, bbox: list[float] | None = None,
           row_count: int | None = None, related: dict | None = None,
           content_hash: str | None = None,
-          file_meta: dict[str, gcs.FileMeta] | None = None) -> None:
+          file_meta: dict[str, gcs.FileMeta] | None = None) -> bool:
+    """Write the topic's item; True when it differs from the published one beyond its datetime,
+    which falls back to the clock."""
     rel = related or {}
     rel_links = rel.get("links") or []
     bb = bbox if bbox is not None else _bbox(con, view)
@@ -263,5 +266,22 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
     stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
     stac.stamp_file_meta(item)  # the style and thumbnail, which other jobs write
+    before = _published(topic)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")
+    return _undated(before) != _undated(json.loads(json.dumps(item)))
+
+
+def _published(topic: Topic) -> dict | None:
+    try:
+        return json.loads(gcs.get_bytes(stac.item_object_path(collection_path(topic.schema),
+                                                              topic.stem)))
+    except FileNotFoundError:
+        return None
+
+
+def _undated(item: dict | None) -> dict | None:
+    if item is None:
+        return None
+    props = {k: v for k, v in (item.get("properties") or {}).items() if k != "datetime"}
+    return {**{k: v for k, v in item.items() if k != "_collection_path"}, "properties": props}

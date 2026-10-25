@@ -100,7 +100,7 @@ def test_connection_closed_when_a_sink_raises():
 
 # --- #54: the fingerprint gates the DATA sinks, never the STAC sink ------------------------
 
-def _run_unchanged(**kwargs):
+def _run_unchanged(item_changed=False, **kwargs):
     """Ingest a topic whose fingerprint matches the published item."""
     topic = Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current")
     backend = MagicMock()
@@ -113,7 +113,7 @@ def _run_unchanged(**kwargs):
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
          patch("ugs_warehouse.vector.sink_archive.write_geojson"), \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
-         patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
+         patch("ugs_warehouse.vector.sink_stac.write", return_value=item_changed) as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as refresh:
 
@@ -217,3 +217,9 @@ def test_an_unchanged_topic_is_not_marked_for_cdn_invalidation():
     changed: list[str] = []
     _run_unchanged(changed=changed)
     assert changed == []
+
+
+def test_a_metadata_edit_is_marked_for_cdn_invalidation():
+    changed: list[str] = []
+    _run_unchanged(item_changed=True, changed=changed)
+    assert changed == ["enmin_ucrc_wells"]

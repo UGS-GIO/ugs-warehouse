@@ -416,8 +416,21 @@ const IMAGE_SERVED_COLLECTIONS = new Set([
 
 // Whether the ImageServer serves this item: one in those collections with a GeoTIFF (or untyped)
 // asset keyed visual, cog or data, the server's ASSET_KEYS.
+// An index entry has no `collection`; its self link ends in {collection}/{id}/{id}.json.
+const collectionIdOf = (d: StacDoc | undefined): string => {
+  if (d?.collection) return d.collection;
+  const self = d?.links?.find((l) => l.rel === "self")?.href;
+  if (!self) return "";
+  let path = self;
+  try {
+    path = new URL(self, d ? fetchedFrom.get(d) : undefined).pathname;
+  } catch { /* relative with no base: use it as is */ }
+  const parts = path.split("/").filter(Boolean);
+  return parts.length >= 3 ? parts[parts.length - 3] : "";
+};
+
 export const isImageServed = (d: StacDoc | undefined): boolean =>
-  IMAGE_SERVED_COLLECTIONS.has(d?.collection ?? "")
+  IMAGE_SERVED_COLLECTIONS.has(collectionIdOf(d))
   && ["visual", "cog", "data"].some((k) => {
     const a = d?.assets?.[k];
     return a && (a.type || "image/tiff").startsWith("image/tiff");

@@ -69,6 +69,10 @@ describe("isImageServed", () => {
 
   it("skips a pub without a COG, another key, a non-TIFF, or an unlisted series", async () => {
     expect(await served({ collection: "MP", assets: { publication: { href: "a.pdf", type: "application/pdf" } } })).toBe(false);
+    // An index entry: no `collection`, only a self link under its series.
+    const self = (href: string) => [{ rel: "self", href }];
+    expect(await served({ links: self("./ugs-publications/M/M-1/M-1.json"), assets: { cog } })).toBe(true);
+    expect(await served({ links: self("./ugs-publications/RI/RI-1/RI-1.json"), assets: { cog } })).toBe(false);
     expect(await served({ collection: "MP", assets: { image: cog } })).toBe(false);
     expect(await served({ collection: "hazards", assets: { data: parquet } })).toBe(false);
     expect(await served({ collection: "RI", assets: { cog } })).toBe(false);

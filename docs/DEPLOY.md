@@ -411,6 +411,7 @@ separate deploy such as review.
 | `PUB_THUMB_PX`, `PUB_THUMB_MAX_PDF_MB` | `400`, `1000` | Cover thumbnail size and PDF download cap |
 | `MIRROR_WORKERS`, `MIRROR_MAX_MB` | `4`, `0` (no cap) | Source-file mirror concurrency and size cap |
 | `MOSAIC_MINZOOM`, `MOSAIC_WEBP_QUALITY`, `MOSAIC_COG_MAXZOOM`, `MOSAIC_WORK_DIR` | `4`, `90`, `15`, system temp | Raster mosaic build (PMTiles and WebP COG) |
+| `MOSAIC_INCREMENTAL_MAX_FRACTION` | `0.3` | Share of a tier's maps that may change before a rebake is full instead of incremental |
 | `PUB_GRAPH_SIMILAR_K` | `5` | Neighbours per pub in the graph |
 | `EMBED_MODEL`, `EMBED_CHUNK_CHARS`, `FASTEMBED_CACHE` | `BAAI/bge-small-en-v1.5`, `1200`, none | Embedding job |
 | `POSTGREST_URL` | the seamless-units PostgREST URL | Units source when no DSN is set (`units_pmtiles.py`) |

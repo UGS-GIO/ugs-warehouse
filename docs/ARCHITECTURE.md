@@ -251,6 +251,19 @@ never-tried pubs still go first. Time budget, summary and exit code are per task
 build below is catalog-wide, so only task 0 runs it, from what is extracted so far; the next run
 picks up the rest.
 
+A mosaic rebake (`pubs/geolmap_mosaics.py`) is incremental by default. The tier Item records each
+member's COG etag and footprint (`ugs:members`) and the build settings (`ugs:mosaic_build`). The
+next run compares the members' etags with that record. For maps that were added, rewritten or
+removed, it renders the tiles under their old and new footprints again, at the base zoom and then
+each overview zoom. It copies every other tile byte for byte from the published PMTiles. A tile
+that is now blank is dropped. The COG cannot be patched in place: WebP COG blocks cannot be
+rewritten without losing the COG layout. So each run keeps a lossless master
+(`geologic-maps-<tier>.master.tif`, ZSTD, on the COG zoom's tile grid) beside the COG. A rebake
+patches the master under the same footprints and encodes the whole COG from it. Unchanged blocks
+then encode to the same bytes. A run is full when there is no record, when the settings differ,
+when more than `MOSAIC_INCREMENTAL_MAX_FRACTION` (0.3) of the members changed, when the master
+cannot hold the new extent, or with `--full`. A `--quads` run is always full and records nothing.
+
 After the self-heal an `--all` vectors run builds one identify layer per mosaic tier
 (`pubs/identify.py`): `<vectors prefix>/_identify/units-<tier>.pmtiles`, tile layer `units`, the same
 attributes. Members and their order are the mosaic bake's (`geolmap_mosaics._group_by_tier`, then

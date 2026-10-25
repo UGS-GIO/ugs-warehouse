@@ -28,7 +28,7 @@ from pathlib import Path
 
 import duckdb
 
-from ..core import config, gcs, stac, styles
+from ..core import cdn, config, gcs, stac, styles
 from . import ducklake, maintain
 from .sink_stac import CATALOG
 from .topics import Topic
@@ -126,8 +126,14 @@ def retire(topic: Topic, *, dry_run: bool = False, assume_yes: bool = False,
         print("[retire] dry-run — catalog not refreshed, nothing written")
         return 0
 
-    stac.refresh_catalog()
+    cdn.mark([stem])  # before the refresh, so a failed run leaves it for the next one to clear
+    problems = stac.refresh_catalog()
     print(f"[retire] {topic.fqn} retired")
+    try:
+        cdn.flush(problems)
+    except Exception as e:  # noqa: BLE001 — retired; only the CDN copy is left, and it stays pending
+        print(f"[retire] CDN invalidation FAILED, {stem!r} stays pending: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

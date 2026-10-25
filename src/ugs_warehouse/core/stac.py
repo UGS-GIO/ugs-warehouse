@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from typing import NamedTuple
 
 from . import catalog_docs, config, feature_service, gcs, item_mirror, styles
@@ -1311,7 +1312,28 @@ def _duplicate_item_ids(groups: dict[str, list[str]]) -> list[str]:
             for iid, where in sorted(paths.items()) if len(where) > 1]
 
 
-def refresh_catalog(*, strict: bool = False) -> list[str]:
+# Two refreshes at once would each write what they listed, and the last to finish wins, maybe with
+# the older listing. Under this lease each one lists after the previous one wrote. A holder that dies
+# leaves a lease that expires after the TTL, so a waiter takes it over.
+REFRESH_LEASE = "_locks/refresh_catalog"
+REFRESH_LEASE_TTL_S = 900
+REFRESH_LEASE_WAIT_S = 1200
+
+
+def refresh_catalog(*, strict: bool = False, wait_s: float | None = None) -> list[str]:
+    """`_refresh_catalog` under REFRESH_LEASE. Raises gcs.LeaseTimeout past `wait_s`
+    (default REFRESH_LEASE_WAIT_S)."""
+    wait_s = REFRESH_LEASE_WAIT_S if wait_s is None else wait_s
+    with gcs.lease(REFRESH_LEASE, ttl_s=REFRESH_LEASE_TTL_S, wait_s=wait_s, poll_s=5):
+        started = time.monotonic()
+        problems = _refresh_catalog(strict=strict)
+    if (took := time.monotonic() - started) > REFRESH_LEASE_TTL_S:
+        print(f"[catalog] refresh took {took:.0f}s, past the {REFRESH_LEASE_TTL_S}s lease: another "
+              "refresh may have run beside it; raise REFRESH_LEASE_TTL_S", file=sys.stderr)
+    return problems
+
+
+def _refresh_catalog(*, strict: bool = False) -> list[str]:
     """Rebuild the root catalog + every non-publication collection.json by listing items in GCS.
 
     A publication series whose every publication has a collection.json is indexed in the
@@ -1324,8 +1346,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     printed. The root files are always written; `strict` then raises
     if there were problems.
 
-    Derive-from-truth + idempotent: safe to run after each ingest or on demand. Under
-    concurrent ingests the last writer wins (brief staleness, self-heals next run).
+    Derive-from-truth + idempotent: safe to run after each ingest or on demand.
     """
     from concurrent.futures import ThreadPoolExecutor
 

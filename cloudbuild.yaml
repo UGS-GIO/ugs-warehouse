@@ -33,6 +33,9 @@ substitutions:
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (pygeoapi over GeoParquet, scale-to-zero)
   _GEOSERVICES_SERVICE: ugs-warehouse-geoservices  # ArcGIS FeatureServer for Map Viewer / Experience Builder (Go over the CDN GeoParquet, scale-to-zero)
   _IMAGESERVER_SERVICE: ugs-warehouse-imageserver  # ArcGIS ImageServer over the geologic-map COGs (titiler, scale-to-zero)
+  _CDN_URL_MAP: ut-dnr-ugs-maps-prod-public-lb    # the load balancer in front of both, with Cloud CDN
+  _CDN_PROJECT: ut-dnr-ugs-maps-prod
+  _CDN_HOST: api.geology.utah.gov
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
@@ -258,7 +261,9 @@ steps:
       # and /tmp is RAM on Cloud Run anyway), so peak RSS tracks the layer's geometry, not this cap.
       # TOPIC_THUMBS_JOB: after publishing a topic the ingest starts the thumbnail job for it
       # (core/jobs.py). Prod only; the review job leaves it unset so it starts nothing.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB@TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
+      # CDN_*: then it invalidates the changed layers' FeatureServer paths (core/cdn.py), also prod
+      # only. The retire and restyle jobs get the same.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB@TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}@CDN_URL_MAP=${_CDN_URL_MAP}@CDN_PROJECT=${_CDN_PROJECT}@CDN_HOST=${_CDN_HOST}
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
@@ -438,10 +443,11 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DB_PASS=${_SECRET}:latest
-      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.retire@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}
+      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.retire@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@CDN_URL_MAP=${_CDN_URL_MAP}@CDN_PROJECT=${_CDN_PROJECT}@CDN_HOST=${_CDN_HOST}
       - --command=scripts/cloudrun_entrypoint.sh
-      # One topic: a listing, a table drop and a few hundred deletes. Nothing like a compaction.
-      - --task-timeout=1800
+      # One topic: a listing, a table drop and a few hundred deletes, then up to 1200s waiting for
+      # another catalog refresh, the refresh, and the 360s wait before the CDN invalidation.
+      - --task-timeout=3600
       - --max-retries=0
       - --cpu=1
       - --memory=2Gi
@@ -595,11 +601,13 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
-      # A rebind starts the thumbnail job, since a style change is a preview change (core/jobs.py).
-      - --set-env-vars=TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
+      # A rebind starts the thumbnail job, since a style change is a preview change (core/jobs.py),
+      # and invalidates the rebound layers on the CDN like the ingest job does.
+      - --set-env-vars=TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB},CDN_URL_MAP=${_CDN_URL_MAP},CDN_PROJECT=${_CDN_PROJECT},CDN_HOST=${_CDN_HOST}
       - --command=python
       - --args=-m,ugs_warehouse.restyle
-      - --task-timeout=1800
+      # Room for the refresh lease wait (up to 1200s), the refresh and the CDN flush's 360s wait.
+      - --task-timeout=3600
       - --max-retries=1
       - --cpu=1
       - --memory=2Gi
@@ -825,7 +833,8 @@ steps:
       - --iap
       - --no-allow-unauthenticated
       - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
-      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
+      # CDN_*: an override edit to a serving topic marks it pending on the CDN (ops/overrides.py).
+      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}|CDN_URL_MAP=${_CDN_URL_MAP}|CDN_PROJECT=${_CDN_PROJECT}|CDN_HOST=${_CDN_HOST}
 
   # NB: Pub/Sub topic + push subscription + run.invoker are NOT wired here — they're one-time infra,
   # provisioned out-of-band by `just provision` (scripts/provision.sh). Builds only build + deploy
@@ -873,38 +882,55 @@ steps:
   # ArcGIS FeatureServer. infra/geoservices.tf owns its settings; this step only rolls out the image.
   # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
   # was pinned to an older revision.
+  # SERVED_BUILD names what the image serves: the pinned release and a hash of its Dockerfile, which
+  # holds the ENV too. When it differs from the revision serving `prod`, the step clears the host's
+  # CDN cache. FeatureServer and ImageServer paths share /ugs/rest/services/{id}/, and a pattern takes
+  # `*` only at its end, so a release of either clears both.
   - id: deploy-geoservices
     waitFor: [push-geoservices]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
-      - -c
-      - |
-        set -euo pipefail
-        gcloud run deploy ${_GEOSERVICES_SERVICE} \
-          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:${_TAG} \
-          --region=${_REGION} \
-          --tag=prod
-        gcloud run services update-traffic ${_GEOSERVICES_SERVICE} --region=${_REGION} --to-tags=prod=100
+      - scripts/deploy_geoservice.sh
+      - ${_GEOSERVICES_SERVICE}
+      - Dockerfile.geoservices
+      - FEATURESERVER_VERSION
+      - '/*'
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-geoservices:${_TAG}
+      - --region=${_REGION}
+    env:
+      - REGION=${_REGION}
+      - CDN_URL_MAP=${_CDN_URL_MAP}
+      - CDN_PROJECT=${_CDN_PROJECT}
+      - CDN_HOST=${_CDN_HOST}
 
   # ArcGIS ImageServer. infra/imageserver.tf owns its settings; the flags here match it so the first
   # deploy creates the service locked to the load balancer. Low concurrency: exports queue for a slot.
+  # Clears the CDN cache like the FeatureServer above.
   - id: deploy-imageserver
     waitFor: [push-imageserver]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
-      - -c
-      - |
-        set -euo pipefail
-        gcloud run deploy ${_IMAGESERVER_SERVICE} \
-          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-imageserver:${_TAG} \
-          --region=${_REGION} \
-          --service-account=${_RUNTIME_SA} \
-          --ingress=internal-and-cloud-load-balancing \
-          --concurrency=8 --cpu=1 --memory=512Mi --min-instances=0 --max-instances=20 \
-          --tag=prod
-        gcloud run services update-traffic ${_IMAGESERVER_SERVICE} --region=${_REGION} --to-tags=prod=100
+      - scripts/deploy_geoservice.sh
+      - ${_IMAGESERVER_SERVICE}
+      - Dockerfile.imageserver
+      - IMAGESERVER_VERSION
+      - '/ugs/rest/services/*'
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-imageserver:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --ingress=internal-and-cloud-load-balancing
+      - --concurrency=8
+      - --cpu=1
+      - --memory=512Mi
+      - --min-instances=0
+      - --max-instances=20
+    env:
+      - REGION=${_REGION}
+      - CDN_URL_MAP=${_CDN_URL_MAP}
+      - CDN_PROJECT=${_CDN_PROJECT}
+      - CDN_HOST=${_CDN_HOST}
 
   # The deployed FeatureServer and ImageServer, end to end through the load balancer and CDN.
   - id: smoke-geoservices

@@ -59,6 +59,9 @@ resource "google_cloud_run_v2_service" "imageserver" {
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
+      # Cloud Build owns env (SERVED_BUILD, which scripts/deploy_geoservice.sh compares to decide
+      # when to clear the CDN cache). An env block set here would be ignored.
+      template[0].containers[0].env,
       template[0].revision,
       traffic,
       client,

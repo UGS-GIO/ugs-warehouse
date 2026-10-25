@@ -100,7 +100,7 @@ def test_connection_closed_when_a_sink_raises():
 
 # --- #54: the fingerprint gates the DATA sinks, never the STAC sink ------------------------
 
-def _run_unchanged(**kwargs):
+def _run_unchanged(item_changed=False, **kwargs):
     """Ingest a topic whose fingerprint matches the published item."""
     topic = Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current")
     backend = MagicMock()
@@ -113,7 +113,7 @@ def _run_unchanged(**kwargs):
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
          patch("ugs_warehouse.vector.sink_archive.write_geojson"), \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
-         patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
+         patch("ugs_warehouse.vector.sink_stac.write", return_value=item_changed) as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as refresh:
 
@@ -205,3 +205,27 @@ def test_force_runs_every_sink_even_when_unchanged():
     archive.assert_called_once()
     pmtiles.assert_called_once()
     stac_write.assert_called_once()
+
+
+@pytest.fixture
+def pending(monkeypatch):
+    """The ids marked pending on the CDN, with invalidation configured."""
+    from ugs_warehouse.core import cdn, gcs
+    monkeypatch.setattr(cdn, "URL_MAP", "lb")
+    monkeypatch.setattr(cdn, "PROJECT", "p")
+    return lambda: [p.rsplit("/", 1)[-1] for p in gcs.list_paths(f"{cdn.PENDING_PREFIX}/")]
+
+
+def test_a_rebuilt_topic_is_marked_pending_on_the_cdn(pending):
+    _run_unchanged(skip_unchanged=False)
+    assert pending() == ["enmin_ucrc_wells"]
+
+
+def test_an_unchanged_topic_is_not_marked_pending(pending):
+    _run_unchanged()
+    assert pending() == []
+
+
+def test_a_metadata_edit_is_marked_pending(pending):
+    _run_unchanged(item_changed=True)
+    assert pending() == ["enmin_ucrc_wells"]

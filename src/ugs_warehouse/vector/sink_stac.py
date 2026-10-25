@@ -12,11 +12,12 @@ bbox/row_count come from the transformed view.
 from __future__ import annotations
 
 import datetime
+import json
 import sys
 
 import duckdb
 
-from ..core import config, gcs, stac
+from ..core import cdn, config, gcs, stac
 from . import ducklake, introspect, sink_archive
 from .topics import Topic
 
@@ -224,7 +225,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           metadata: dict | None = None, bbox: list[float] | None = None,
           row_count: int | None = None, related: dict | None = None,
           content_hash: str | None = None,
-          file_meta: dict[str, gcs.FileMeta] | None = None) -> None:
+          file_meta: dict[str, gcs.FileMeta] | None = None) -> bool:
+    """Write the topic's item; True when what the FeatureServer serves from it changed."""
     rel = related or {}
     rel_links = rel.get("links") or []
     bb = bbox if bbox is not None else _bbox(con, view)
@@ -263,5 +265,16 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
     stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
     stac.stamp_file_meta(item)  # the style and thumbnail, which other jobs write
+    before = _published(topic)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")
+    return cdn.feature_fields(before) != cdn.feature_fields(json.loads(json.dumps(item)))
+
+
+def _published(topic: Topic) -> dict | None:
+    try:
+        return json.loads(gcs.get_bytes(stac.item_object_path(collection_path(topic.schema),
+                                                              topic.stem)))
+    except FileNotFoundError:
+        return None
+

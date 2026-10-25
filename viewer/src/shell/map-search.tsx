@@ -55,6 +55,8 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
   const text = q.trim();
   // Enter with no suggestion highlighted runs the full search, as a plain search box would.
   const highlighted = useRef<Row | undefined>(undefined);
+  // The list hangs under the whole search bar, at its width, as map apps do.
+  const bar = useRef<HTMLDivElement>(null);
   const recent = useRecent();
 
   const catalog = useQuery({
@@ -133,7 +135,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
       onItemHighlighted={(row) => { highlighted.current = row; }}
       itemToStringLabel={(row) => row.label}
     >
-      <div className={`flex items-center gap-2 rounded-full border border-input bg-background px-3 py-1 shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 ${className}`}>
+      <div ref={bar} className={`flex items-center gap-2 rounded-full border border-input bg-background px-3 py-1 shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 ${className}`}>
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
           <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
         </svg>
@@ -153,8 +155,8 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         )}
       </div>
       <Combobox.Portal>
-        <Combobox.Positioner sideOffset={6} align="start" className="z-50">
-          <Combobox.Popup className="max-h-popup w-(--anchor-width) min-w-72 overflow-y-auto rounded-md border border-border bg-card py-1 text-sm text-foreground shadow-lg">
+        <Combobox.Positioner anchor={bar} sideOffset={6} align="start" className="z-50">
+          <Combobox.Popup className="max-h-popup w-(--anchor-width) overflow-y-auto rounded-md border border-border bg-card py-1 text-sm text-foreground shadow-lg">
             <Combobox.Empty className="px-3 py-2 text-muted-foreground empty:hidden">
               {text.length >= 2 && !busy ? `No places, layers or publications match “${text}”` : null}
             </Combobox.Empty>

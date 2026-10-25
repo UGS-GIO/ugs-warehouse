@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.15.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.15.0...v1.15.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** build the FeatureServer and ImageServer from cloud-native-geoservices v0.7.0 ([#656](https://github.com/UGS-GIO/ugs-warehouse/issues/656)) ([2e28aca](https://github.com/UGS-GIO/ugs-warehouse/commit/2e28aca128b073078a20aa89405dafaa6235e10b))
+* **deps:** build the ImageServer from cloud-native-geoservices v0.6.1 with a one-day CDN cache ([#652](https://github.com/UGS-GIO/ugs-warehouse/issues/652)) ([036eed3](https://github.com/UGS-GIO/ugs-warehouse/commit/036eed30e0dfc6ed00d3b1b62dcf047869c5a07f))
+
 ## [1.15.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.14.1...v1.15.0) (2026-10-24)
 
 

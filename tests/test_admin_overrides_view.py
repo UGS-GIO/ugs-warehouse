@@ -17,7 +17,7 @@ from django.apps import apps  # noqa: E402
 if not apps.ready:
     django.setup()
 
-from django.test import Client  # noqa: E402
+from django.test import Client, override_settings  # noqa: E402
 from ops import jobs, overrides  # noqa: E402
 
 from ugs_warehouse import iap  # noqa: E402
@@ -32,7 +32,7 @@ def client(monkeypatch, fake_iap):
 @pytest.fixture()
 def started(monkeypatch) -> list:
     calls: list = []
-    monkeypatch.setattr(jobs, "run_mode", lambda key, mode: calls.append((key, mode))
+    monkeypatch.setattr(jobs, "run_catalog_refresh", lambda item_id: calls.append(item_id)
                         or {"ok": True, "message": "started"})
     return calls
 
@@ -42,7 +42,7 @@ def test_a_serving_topic_override_starts_the_catalog_refresh(client, started, mo
                                                        "serving_topic": True})
     res = client.post("/overrides/hazards_qfaults/save", {"title": "Q"})
     assert res.status_code == 200
-    assert started == [("restyle", "refresh")]
+    assert started == ["hazards_qfaults"]
     assert b"CDN invalidation: started" in res.content
 
 
@@ -50,3 +50,12 @@ def test_a_publication_override_starts_nothing(client, started, monkeypatch):
     monkeypatch.setattr(overrides, "save", lambda *a: {"applied": True, "fields": ["title"]})
     client.post("/overrides/OFR-1/save", {"title": "Q"})
     assert started == []
+
+
+@override_settings(JOBS_DRY_RUN=False)
+def test_the_refresh_job_is_told_which_topic_to_invalidate(monkeypatch):
+    sent: list = []
+    monkeypatch.setattr(jobs, "_start", lambda job, msg, args, **kw: sent.append((job.name, args)))
+    jobs.run_catalog_refresh("hazards_qfaults")
+    assert sent == [("ugs-warehouse-restyle",
+                     ["-m", "scripts.refresh_stac", "--mark", "hazards_qfaults"])]

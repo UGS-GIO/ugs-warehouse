@@ -71,7 +71,8 @@ def test_flush_invalidates_the_listings_and_every_pending_layer(posts):
 
 def test_a_layer_a_refresh_problem_names_stays_pending(posts):
     cdn.mark(["hazards_qfaults", "hazards_qfaults_zones"])
-    problems = ["duplicate item id hazards_qfaults: ugs-serving-topics/a, ugs-serving-topics/b"]
+    problems = ["dropped ugs-serving-topics/hazards/hazards_qfaults from the index: "
+                "ValueError: bad JSON"]
     assert cdn.flush(problems) == ["hazards_qfaults_zones"]
     assert _pending() == ["hazards_qfaults"]
 
@@ -243,9 +244,21 @@ def test_a_layer_the_ingest_refresh_reports_a_problem_for_stays_pending(posts):
 
 def test_the_refresh_job_invalidates_what_is_pending(posts, monkeypatch):
     from scripts import refresh_stac
-    cdn.mark(["hazards_qfaults"])
+    cdn.mark(["left_over"])
+    cdn._own.clear()
     monkeypatch.setattr(stac, "refresh_catalog", lambda: [])
-    assert refresh_stac.main() == 0
+    assert refresh_stac.main([]) == 0
+    assert _paths(posts) == [*LISTINGS, *_layer("left_over")]
+
+
+def test_the_refresh_job_owns_the_id_it_is_given(posts, monkeypatch):
+    """The console's marker may be gone by the time the job runs; the job marks the id itself
+    before its refresh, so its flush still invalidates it."""
+    from scripts import refresh_stac
+    order: list = []
+    monkeypatch.setattr(stac, "refresh_catalog", lambda: order.append(_pending()) or [])
+    assert refresh_stac.main(["--mark", "hazards_qfaults"]) == 0
+    assert order == [["hazards_qfaults"]]
     assert _paths(posts) == [*LISTINGS, *_layer("hazards_qfaults")]
 
 
@@ -265,3 +278,27 @@ def test_a_refresh_takes_over_from_one_that_died(monkeypatch):
     gcs.put_bytes(str(time.time() - 1).encode(), stac.REFRESH_LEASE, content_type="text/plain")
     monkeypatch.setattr(stac, "_refresh_catalog", lambda **k: ["ran"])
     assert stac.refresh_catalog() == ["ran"]
+
+
+def test_a_refresh_past_its_lease_says_so(monkeypatch, capsys):
+    monkeypatch.setattr(stac, "REFRESH_LEASE_TTL_S", 0)
+    monkeypatch.setattr(stac, "_refresh_catalog", lambda **k: [])
+    stac.refresh_catalog()
+    assert "past the 0s lease" in capsys.readouterr().err
+
+
+# --- the raster push handler ----------------------------------------------------------------
+
+def test_a_raster_promote_does_not_wait_out_a_long_refresh(monkeypatch):
+    """It runs inside a push request: a refresh already running is left to index the item later."""
+    from ugs_warehouse.raster import consume
+    waits: list = []
+
+    def busy(wait_s):
+        waits.append(wait_s)
+        raise gcs.LeaseTimeout("held")
+    monkeypatch.setattr(consume.source, "fetch_record", lambda item_id: {"item_id": item_id})
+    monkeypatch.setattr(consume, "promote", lambda record: "stac/path.json")
+    monkeypatch.setattr(stac, "refresh_catalog", busy)
+    assert consume.consume("slope_OFR1_20260101") == "stac/path.json"
+    assert waits == [consume.REFRESH_WAIT_S] and consume.REFRESH_WAIT_S < 60

@@ -210,6 +210,16 @@ def run_mode(key: str, mode: str) -> dict:
     return _start(job, f"started {job.name} {' '.join(args)}", args, tasks=1)
 
 
+def run_catalog_refresh(item_id: str) -> dict:
+    """Refresh the catalog, then invalidate `item_id` on the CDN (an override edit)."""
+    job = JOBS["restyle"]
+    args = [*MODE_ARGS["restyle"]["refresh"], "--mark", item_id]
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
+                "dry_run": True}
+    return _start(job, f"started {job.name} {' '.join(args)}", args, tasks=1)
+
+
 # The retire job shares the ingest image + entrypoint (`python -m $RUN_MODULE "$@"`), so the topic
 # arrives as CLI args. `--yes` skips the CLI's own typed confirmation, which the console has already
 # taken from the operator — see views.retire_execute, which re-checks it server-side.

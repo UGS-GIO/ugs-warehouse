@@ -30,9 +30,14 @@ state, not the item body.
 """
 from __future__ import annotations
 
+import sys
+
 from ..core import config, gcs, stac
 from . import sink_stac, source
 from .identity import Raster
+
+# Seconds the push handler waits for another catalog refresh to finish.
+REFRESH_WAIT_S = 20
 
 # raw.raster_catalog column -> STAC property key. snake_case columns map to the ugs: namespace.
 _PROP_MAP = {
@@ -166,5 +171,11 @@ def consume(item_id: str) -> str | None:
     if record is None:
         return None
     path = promote(record)
-    stac.refresh_catalog()  # rebuild collection.json/catalog.json to include the new item
+    # Inside a push request, so a short wait. The refresh that holds the lease may have listed
+    # before this item; the next one lists it (the nightly ingest at the latest).
+    try:
+        stac.refresh_catalog(wait_s=REFRESH_WAIT_S)
+    except gcs.LeaseTimeout:
+        print(f"[{item_id}] another catalog refresh is running; the next one indexes this item",
+              file=sys.stderr)
     return path

@@ -21,7 +21,9 @@ serving_revision=$(gcloud run services describe "$service" --region="$REGION" --
   | python3 -c 'import json, sys
 live = [t for t in json.load(sys.stdin).get("status", {}).get("traffic", [])
         if t.get("percent", 0) > 0 and t.get("revisionName")]
-print(max(live, key=lambda t: t["percent"])["revisionName"] if live else "")' || true)
+top = max((t["percent"] for t in live), default=0)
+# On a tie, the older revision (its zero-padded generation sorts first): the build that was serving.
+print(min((t["revisionName"] for t in live if t["percent"] == top), default=""))' || true)
 served=""
 if [ -n "$serving_revision" ]; then
   served=$(gcloud run revisions describe "$serving_revision" --region="$REGION" --format=json \

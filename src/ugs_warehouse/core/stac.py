@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from typing import NamedTuple
 
 from . import catalog_docs, config, feature_service, gcs, item_mirror, styles
@@ -1319,10 +1320,17 @@ REFRESH_LEASE_TTL_S = 900
 REFRESH_LEASE_WAIT_S = 1200
 
 
-def refresh_catalog(*, strict: bool = False) -> list[str]:
-    """`_refresh_catalog` under REFRESH_LEASE. Raises gcs.LeaseTimeout past REFRESH_LEASE_WAIT_S."""
-    with gcs.lease(REFRESH_LEASE, ttl_s=REFRESH_LEASE_TTL_S, wait_s=REFRESH_LEASE_WAIT_S, poll_s=5):
-        return _refresh_catalog(strict=strict)
+def refresh_catalog(*, strict: bool = False, wait_s: float | None = None) -> list[str]:
+    """`_refresh_catalog` under REFRESH_LEASE. Raises gcs.LeaseTimeout past `wait_s`
+    (default REFRESH_LEASE_WAIT_S)."""
+    wait_s = REFRESH_LEASE_WAIT_S if wait_s is None else wait_s
+    with gcs.lease(REFRESH_LEASE, ttl_s=REFRESH_LEASE_TTL_S, wait_s=wait_s, poll_s=5):
+        started = time.monotonic()
+        problems = _refresh_catalog(strict=strict)
+    if (took := time.monotonic() - started) > REFRESH_LEASE_TTL_S:
+        print(f"[catalog] refresh took {took:.0f}s, past the {REFRESH_LEASE_TTL_S}s lease: another "
+              "refresh may have run beside it; raise REFRESH_LEASE_TTL_S", file=sys.stderr)
+    return problems
 
 
 def _refresh_catalog(*, strict: bool = False) -> list[str]:

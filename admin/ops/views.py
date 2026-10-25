@@ -348,7 +348,7 @@ def overrides_save(request, item_id):
     try:
         result = overrides.save(item_id, request.POST.get("description", ""), request.POST.get("title", ""))
         if result.get("serving_topic"):
-            result["refresh"] = jobs.run_mode("restyle", "refresh")
+            result["refresh"] = jobs.run_catalog_refresh(item_id)
         return render(request, "ops/_overrides_saved.html", {"item_id": item_id, "result": result})
     except Exception as e:  # noqa: BLE001
         return render(request, "ops/_overrides_saved.html",

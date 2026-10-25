@@ -27,7 +27,7 @@ esac
 
 
 def _deploy(tmp_path, *, dockerfile: str, serving: str | None, clear_rc: int = 0,
-            prod_tag_on_new: bool = False):
+            prod_tag_on_new: bool = False, split: bool = False):
     (tmp_path / "bin").mkdir()
     stub = tmp_path / "bin" / "gcloud"
     stub.write_text(GCLOUD)
@@ -36,6 +36,9 @@ def _deploy(tmp_path, *, dockerfile: str, serving: str | None, clear_rc: int = 0
     traffic = [{"revisionName": "svc-old", "percent": 0}]
     if serving is not None:
         traffic.append({"revisionName": "svc-live", "percent": 100})
+    if split:
+        traffic = [{"revisionName": "svc-00009-new", "percent": 50},
+                   {"revisionName": "svc-00008-old", "percent": 50}]
     if prod_tag_on_new:
         traffic.append({"revisionName": "svc-new", "tag": "prod", "percent": 0})
     (tmp_path / "service.json").write_text(json.dumps({"status": {"traffic": traffic}}))
@@ -108,3 +111,9 @@ def test_a_rerun_after_a_failed_traffic_move_still_clears(tmp_path):
     assert run.returncode == 0, run.stderr
     assert "run revisions describe svc-live --region=us-central1 --format=json" in calls
     assert "invalidate-cdn-cache" in calls[-1]
+
+
+def test_an_even_split_reads_the_older_revision(tmp_path):
+    run, calls = _deploy(tmp_path, dockerfile=DOCKERFILE, serving=_build(DOCKERFILE), split=True)
+    assert run.returncode == 0, run.stderr
+    assert "run revisions describe svc-00008-old --region=us-central1 --format=json" in calls

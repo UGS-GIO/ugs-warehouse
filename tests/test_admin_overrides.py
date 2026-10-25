@@ -245,3 +245,15 @@ def test_a_publication_override_marks_nothing_for_the_cdn(ov, store):
     _put(store, COLL_OBJ, {"id": "OFR-1"})
     _put(store, SERIES_CATALOG, {})
     assert "serving_topic" not in ov.save("OFR-1", title="T")
+
+
+def test_a_failed_cdn_mark_is_not_a_failed_live_patch(ov, store, monkeypatch):
+    from ugs_warehouse.core import cdn
+
+    def fail(ids):
+        raise RuntimeError("403")
+    monkeypatch.setattr(cdn, "mark", fail)
+    _put(store, TOPIC_OBJ, {"id": "hazards_qfaults", "properties": {"title": "Old"}})
+    result = ov.save("hazards_qfaults", title="Quaternary faults")
+    assert result["applied"] and result["serving_topic"] and "apply_error" not in result
+    assert result["cdn_error"] == "RuntimeError: 403"

@@ -139,8 +139,12 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
             # The FeatureServer serves a topic's title and description: the console's catalog
             # refresh (views.overrides_save) then invalidates it on the CDN.
             if result["applied"] and f"/{_TOPICS}/" in target[0]:
-                cdn.mark([item_id])
                 result["serving_topic"] = True
+                try:
+                    cdn.mark([item_id])
+                except Exception as e:  # noqa: BLE001 — the refresh job marks it again
+                    log.exception("override for %s applied but not marked for the CDN", item_id)
+                    result["cdn_error"] = f"{type(e).__name__}: {e}"
     except Exception as e:  # noqa: BLE001
         log.exception("override for %s saved but not applied live", item_id)
         result["apply_error"] = f"{type(e).__name__}: {e}"

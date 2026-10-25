@@ -445,8 +445,9 @@ steps:
       - --set-secrets=DB_PASS=${_SECRET}:latest
       - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.retire@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@CDN_URL_MAP=${_CDN_URL_MAP}@CDN_PROJECT=${_CDN_PROJECT}@CDN_HOST=${_CDN_HOST}
       - --command=scripts/cloudrun_entrypoint.sh
-      # One topic: a listing, a table drop and a few hundred deletes. Nothing like a compaction.
-      - --task-timeout=1800
+      # One topic: a listing, a table drop and a few hundred deletes, then up to 1200s waiting for
+      # another catalog refresh, the refresh, and the 360s wait before the CDN invalidation.
+      - --task-timeout=3600
       - --max-retries=0
       - --cpu=1
       - --memory=2Gi
@@ -605,7 +606,8 @@ steps:
       - --set-env-vars=TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB},CDN_URL_MAP=${_CDN_URL_MAP},CDN_PROJECT=${_CDN_PROJECT},CDN_HOST=${_CDN_HOST}
       - --command=python
       - --args=-m,ugs_warehouse.restyle
-      - --task-timeout=1800
+      # Room for the refresh lease wait (up to 1200s), the refresh and the CDN flush's 360s wait.
+      - --task-timeout=3600
       - --max-retries=1
       - --cpu=1
       - --memory=2Gi

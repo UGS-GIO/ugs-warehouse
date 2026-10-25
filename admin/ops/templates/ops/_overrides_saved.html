@@ -1,5 +1,5 @@
 {% if error %}<span class="text-red-600">{{ error }}</span>
 {% elif result.cleared %}<span class="text-green-600">Override cleared ✓ — reingest this item to restore the source value.</span>
 {% elif result.apply_error %}<span class="text-red-600">Saved ({{ result.fields|join:", " }}), but the live copy was not updated: {{ result.apply_error }}. It applies on the next ingest.</span>
-{% elif result.applied %}<span class="text-green-600">Saved + applied live ({{ result.fields|join:", " }}) ✓</span>{% if result.refresh %} <span class="{% if result.refresh.ok %}text-green-600{% else %}text-red-600{% endif %}">Catalog refresh and CDN invalidation: {{ result.refresh.message }}</span>{% endif %}
+{% elif result.applied %}<span class="text-green-600">Saved + applied live ({{ result.fields|join:", " }}) ✓</span>{% if result.cdn_error %} <span class="text-red-600">Not marked for the CDN: {{ result.cdn_error }}. The refresh below marks it again.</span>{% endif %}{% if result.refresh %} <span class="{% if result.refresh.ok %}text-green-600{% else %}text-red-600{% endif %}">Catalog refresh and CDN invalidation: {{ result.refresh.message }}</span>{% endif %}
 {% else %}<span class="text-green-600">Saved ({{ result.fields|join:", " }}) ✓ — not yet published; applies on the next ingest.</span>{% endif %}

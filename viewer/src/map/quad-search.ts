@@ -25,7 +25,10 @@ export async function quadSearch(rows: [string, string][]): Promise<QuadSearch> 
   return (q) => {
     const text = norm(q);
     if (text.length < 2) return [];
-    const rank = (name: string) => (name.toLowerCase() === text ? 0 : name.toLowerCase().startsWith(text) ? 1 : 2);
+    const rank = (name: string) => {
+      const lower = name.toLowerCase();
+      return lower === text ? 0 : lower.startsWith(text) ? 1 : 2;
+    };
     return index.search(text)
       .map((h, i) => ({ name: String(h.name), code: String(h.id), i }))
       .sort((a, b) => rank(a.name) - rank(b.name) || a.i - b.i)

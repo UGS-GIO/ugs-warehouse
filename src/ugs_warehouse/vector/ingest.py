@@ -7,6 +7,8 @@ For each topic:
   4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
   5. Build PMTiles via tippecanoe (`sink_pmtiles`)
   6. Write STAC item (`sink_stac`)
+  7. Mark the layer pending on the CDN when what the FeatureServer serves changed (`core.cdn`);
+     the run invalidates every pending layer after its catalog refresh
 
 Each sink is independent: failure in one does not corrupt the others.
 
@@ -20,7 +22,7 @@ import logging
 import sys
 from types import ModuleType
 
-from ..core import gcs, jobs, logs, stac
+from ..core import cdn, gcs, jobs, logs, stac
 from . import (
     fingerprint,
     related,
@@ -122,14 +124,38 @@ def _run_sink(topic: Topic, name: str, fn) -> bool:
         return False
 
 
-def _refresh_catalog(topic: Topic) -> bool:
-    """Rebuild the catalog; False (logged) on failure."""
+def _refresh_catalog(topic: Topic) -> list[str] | None:
+    """Rebuild the catalog; the problems it reported, or None (logged) on failure."""
     try:
-        stac.refresh_catalog()
-        return True
+        return stac.refresh_catalog()
     except Exception:
         log.exception("[%s] stac catalog refresh FAILED", topic.fqn, extra={"topic": topic.fqn})
+        return None
+
+
+def _mark_pending(topic: Topic) -> bool:
+    """Mark the topic pending on the CDN; False (logged) on failure."""
+    try:
+        cdn.mark([topic.stem])
+        return True
+    except Exception:
+        log.exception("[%s] CDN mark FAILED", topic.fqn, extra={"topic": topic.fqn})
         return False
+
+
+def _flush_cdn(problems: list[str] | None) -> int:
+    """Invalidate the pending layers on the CDN after a refresh that reported `problems`; 1 (logged)
+    on failure. Without a refresh (None) the servers would reload the old catalog, so the layers
+    stay pending for the next run."""
+    if problems is None:
+        log.warning("catalog not refreshed; CDN invalidations stay pending")
+        return 0
+    try:
+        cdn.flush(problems)
+        return 0
+    except Exception:
+        log.exception("CDN invalidation FAILED; the layers stay pending")
+        return 1
 
 
 def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
@@ -176,17 +202,22 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
             rc = 1
             data_failed = True
 
+    item_changed = False
+
     def _stac() -> None:
+        nonlocal item_changed
         # The hash vouches for the published artifacts, so it only moves when they were all
         # rewritten. Stamping it after a failed data sink would make the next --skip-unchanged run
         # skip the rebuild.
         content_hash = fingerprint.published_hash(topic) if data_failed else fp
-        sink_stac.write(topic, con, view, metadata=meta, related=related_info,
-                        content_hash=content_hash, file_meta=written)
+        item_changed = sink_stac.write(topic, con, view, metadata=meta, related=related_info,
+                                       content_hash=content_hash, file_meta=written)
 
     if not _run_sink(topic, "stac", _stac):
         rc = 1
-    if not skip_refresh and not _refresh_catalog(topic):
+    if (data_sinks or item_changed) and not _mark_pending(topic):
+        rc = 1
+    if not skip_refresh and _refresh_catalog(topic) is None:
         rc = 1
     return rc
 
@@ -302,25 +333,34 @@ def main() -> int:
                 rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
                                    skip_unchanged=skip_unchanged)
 
+        problems = None
         if not args.skip_refresh:
             try:
                 log.info("running final STAC catalog refresh...")
-                stac.refresh_catalog()
+                problems = stac.refresh_catalog()
             except Exception:
                 log.exception("final stac catalog refresh FAILED")
                 rc = 1
         if not args.dry_run:
             jobs.start_topic_thumbs()
+            rc |= _flush_cdn(problems)
         return rc
 
     topic = Topic.parse(args.topic)
-    rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
+    # The refresh runs here rather than in ingest_topic, so the CDN flush knows whether it did.
+    rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=True,
                       skip_unchanged=skip_unchanged)
+    problems = None
+    if not args.dry_run and not args.skip_refresh:
+        problems = _refresh_catalog(topic)
+        if problems is None:
+            rc = 1
     # Previews in minutes rather than at the nightly thumbnail run, which stays the backstop. Started
     # even after a failed sink, since the layer may still have been republished; the thumbnail job
     # works out whether anything it draws changed.
     if not args.dry_run:
         jobs.start_topic_thumbs([topic.stem])
+        rc |= _flush_cdn(problems)
     return rc
 
 

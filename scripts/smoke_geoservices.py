@@ -29,9 +29,14 @@ BIG_KEY_LAYER = "enmin_ccs_co2_sources"
 # A publication COG, and a tile inside it.
 IMAGE_ID = "M-103"
 IMAGE_TILE = "12/1580/768"
+# Added to every server request, so the run checks what the servers serve now and not a copy the
+# CDN kept from before a deploy. check_cache repeats one URL, so it still sees the CDN.
+RUN = str(int(time.time()))
 
 
 def fetch(url: str, headers: dict | None = None) -> tuple[int, dict, bytes]:
+    if url != ITEMS_URL:
+        url += ("&" if "?" in url else "?") + f"_smoke={RUN}"
     req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip", **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=60) as r:

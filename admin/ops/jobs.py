@@ -196,18 +196,24 @@ MODE_ARGS = {
 }
 
 
-def run_mode(key: str, mode: str) -> dict:
-    """Run a job with a variant's args in place of its configured ones."""
+def run_mode(key: str, mode: str, extra: list[str] | None = None) -> dict:
+    """Run a job with a variant's args, plus `extra`, in place of its configured ones."""
     job = JOBS.get(key)
     args = MODE_ARGS.get(key, {}).get(mode)
     if not job:
         return {"ok": False, "message": f"unknown job {key!r}"}
     if not args:
         return {"ok": False, "message": f"unknown mode {mode!r} for {key!r}"}
+    args = [*args, *(extra or [])]
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
                 "dry_run": True}
     return _start(job, f"started {job.name} {' '.join(args)}", args, tasks=1)
+
+
+def run_catalog_refresh(item_id: str) -> dict:
+    """Refresh the catalog, then invalidate `item_id` on the CDN (an override edit)."""
+    return run_mode("restyle", "refresh", ["--mark", item_id])
 
 
 # The retire job shares the ingest image + entrypoint (`python -m $RUN_MODULE "$@"`), so the topic

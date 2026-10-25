@@ -30,6 +30,13 @@ def _in_memory_gcs(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_cdn_ids_from_other_tests(monkeypatch):
+    """core.cdn remembers the ids this process marked; each test starts with none."""
+    from ugs_warehouse.core import cdn
+    monkeypatch.setattr(cdn, "_own", set())
+
+
+@pytest.fixture(autouse=True)
 def _crossref_registry(monkeypatch):
     """Serve a fixed DOI registry, so an ingest never reaches Crossref. A test of pubs.dois
     restores the real `_fetch` and stubs the HTTP call itself."""

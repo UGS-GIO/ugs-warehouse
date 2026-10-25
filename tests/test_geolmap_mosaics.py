@@ -417,13 +417,80 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
     assert captured["bounds"] == extent                               # real footprint, not UTAH_BBOX
 
     t12 = tile_argv(12)
-    assert t12[t12.index("--resampling") + 1] == "average"            # capped below native
+    assert t12[t12.index("--resampling") + 1] == "nearest"            # the z12 grid VRT copies through
+    assert t12[-2].endswith("24k-z12.vrt")
+    z12 = next(c for c in calls if c[0] == "gdalbuildvrt" and "-tr" in c)
+    assert z12[z12.index("-tr") + 1] == str(gm._WEBMERC_Z0_MPP / 2 ** 12) and "-tap" in z12
 
     off = tile_argv(17, aligned=False)
     assert off[off.index("--resampling") + 1] == "average"            # native zoom, but off-grid source
 
     up = tile_argv(18)
     assert up[up.index("--resampling") + 1] == "nearest"              # on-grid, upsampled past native
+    assert up[-2].endswith("24k.vrt")
+
+
+@pytest.mark.parametrize("maxz,aligned,cog_zoom,grid_vrts", [
+    (17, True, 15, ["24k-z15.vrt"]),               # native z17 PMTiles, COG on the z15 grid
+    (15, True, 15, ["24k-z15.vrt"]),               # the PMTiles and the COG share one grid VRT
+    (12, True, 12, ["24k-z12.vrt"]),               # a tier capped below z15 caps its COG too
+    (None, True, 15, ["24k-z15.vrt"]),
+])
+def test_build_tier_writes_a_webp_cog_from_a_grid_vrt(tmp_path, maxz, aligned, cog_zoom, grid_vrts):
+    calls: list[list[str]] = []
+    uploads: list[tuple] = []
+
+    def rec(cmd, *a, **k):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch.object(gm.subprocess, "run", side_effect=rec), \
+         patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, aligned, [-112, 39, -111, 40])), \
+         patch.object(gm, "_band_types", return_value={"M-1": ["Byte"] * 4}), \
+         patch.object(gm, "_check_vrt_sources"), \
+         patch.object(gm, "_write_pmtiles", return_value=(1, 4, 17)), \
+         patch.object(gm.os.path, "getsize", return_value=1 << 20), \
+         patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
+         patch.object(gm.gcs, "upload", side_effect=lambda *a, **k: uploads.append((a, k))), \
+         patch.object(gm, "MOSAIC_WORK_DIR", str(tmp_path)):
+        gm.build_tier("24k", ["M-1"], {"M-1": {}}, maxz=maxz, suffix="-test-current",
+                      write_stac_item=False)
+    built = [c[-1].rsplit("/", 1)[1] for c in calls if c[0] == "gdalbuildvrt"]
+    assert built == ["24k.vrt", *grid_vrts]                           # one grid VRT, never two
+    cog = next(c for c in calls if c[0] == "gdal_translate")
+    assert cog[2].endswith(grid_vrts[-1]) and cog[cog.index("-of") + 1] == "COG"
+    for co in ("TILING_SCHEME=GoogleMapsCompatible", f"ZOOM_LEVEL={cog_zoom}", "COMPRESS=WEBP",
+               f"QUALITY={gm.TILE_QUALITY}", "WARP_RESAMPLING=nearest", "OVERVIEW_RESAMPLING=average",
+               "BIGTIFF=YES"):
+        assert co in cog
+    (path, obj), kw = uploads[-1]
+    assert obj == f"{identity.MOSAIC_PREFIX}/geologic-maps-24k-test-current.cog.tif"
+    assert kw["content_type"] == gm.config.COG_MIME
+
+
+def test_cog_asset_is_a_visual_geotiff_with_header_fields(tmp_path):
+    """The ImageServer lists an item by a GeoTIFF asset keyed visual/cog/data."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    path = tmp_path / "m.cog.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=4, height=4, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(0, 0, 4.77, 4.77)) as ds:
+        ds.write(np.zeros((4, 4, 4), dtype="uint8"))
+    asset = gm._cog_asset(str(path), "geolmap/mosaics/geologic-maps-100k.cog.tif",
+                          gm.gcs.FileMeta(123, "1220ab"), "100k")
+    assert asset["type"].startswith("image/tiff") and asset["roles"] == ["visual"]
+    assert asset["href"].endswith("/geolmap/mosaics/geologic-maps-100k.cog.tif")
+    assert asset["proj:code"] == "EPSG:3857" and len(asset["bands"]) == 4
+    assert asset["file:size"] == 123
+
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("100k", [], gm.mosaic_object("100k"), {}, bounds=[-112, 39, -111, 40],
+                       published=gm.PublishedPubs(frozenset(), frozenset()), cog=asset)
+    assets = captured["item"]["assets"]
+    assert assets["visual"] == asset and assets["tiles"]["type"] == gm.PMTILES_MIME
 
 
 @pytest.mark.parametrize("built,scales,rc", [

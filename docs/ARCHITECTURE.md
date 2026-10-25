@@ -85,6 +85,13 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   request's `maxAllowableOffset`. Downloads and tables read `data`. A layer whose GeoParquet is
   1 MB or less also gets a `geojson` asset, gzipped on the CDN, for web maps that load the whole
   layer in one request.
+- **CDN invalidation.** The ingest marks a layer pending when its data or a field the FeatureServer
+  serves changed; restyle, retire and an ops-console override edit mark the layers they touch
+  (`core/cdn.py`). After a catalog refresh, which runs one at a time under a lease, a run marks its
+  own layers again, waits for the servers to reload, then invalidates the layer list and services
+  directory and each pending layer's `/ugs/rest/services/{id}` paths, its own or ones an earlier
+  run left. A layer the refresh reported a problem for stays pending. A marker goes only once its
+  invalidation succeeded, so the CDN can keep these responses long.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.
@@ -442,8 +449,8 @@ which preserves object paths.
   tables. The code is [cloud-native-geoservices](https://github.com/UGS-GIO/cloud-native-geoservices);
   `Dockerfile.geoservices` pins the release deployed. `scripts/smoke_geoservices.py` checks the
   public service end to end after each deploy.
-- `ugs-warehouse-imageserver`: an ArcGIS ImageServer per geologic-map COG (24k series and publication
-  COGs), from the same repo on titiler; `Dockerfile.imageserver` pins the release and lists the STAC
+- `ugs-warehouse-imageserver`: an ArcGIS ImageServer per geologic-map COG (24k series, publication
+  COGs and each scale-tier mosaic's WebP COG), from the same repo on titiler; `Dockerfile.imageserver` pins the release and lists the STAC
   collections. The load balancer sends `/ugs/rest/services/{id}/ImageServer` paths to it.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
 - External catalogs (USWB) federate in as children of the root, so one catalog URL covers them.

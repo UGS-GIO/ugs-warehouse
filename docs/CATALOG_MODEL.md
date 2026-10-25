@@ -150,7 +150,8 @@ data itself.
 - **Editions.** `predecessor-version`, `successor-version` and `latest-version` links connect a
   publication's Collections. The viewer shows them as the publication's history.
 - **Mosaics.** A scale-tier mosaic's `derived_from` links point at each source plate Item, or at
-  the publication Collection when the plate is its only data file.
+  the publication Collection when the plate is its only data file. Its `tiles` asset is the raster
+  PMTiles and its `visual` asset a Web Mercator WebP COG, which the ImageServer serves.
 - **Geologic units under a raster.** A plate or mosaic Item whose maps have unit polygons carries a
   `units` asset (PMTiles of unit code, name, age and description, from each map's own data). The
   viewer reads it to show the unit at a clicked point.

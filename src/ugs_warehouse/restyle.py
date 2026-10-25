@@ -27,7 +27,7 @@ import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from .core import config, gcs, jobs, stac, styles
+from .core import cdn, config, gcs, jobs, stac, styles
 
 
 def _clear_renders(item: dict) -> bool:
@@ -198,23 +198,47 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
         results = list(executor.map(process_task, tasks))
     changed = sum(1 for r in results if r)
 
-    if refresh and not dry_run:
-        stac.refresh_catalog()
-    topic_rebound = any(r and cp.split("/")[0] == stac.SERVING_TOPICS_CATALOG
-                        for (cp, _), r in zip(tasks, results, strict=True))
-    if topic_rebound and not dry_run:
+    rebound_topics = [iid for (cp, iid), r in zip(tasks, results, strict=True)
+                      if r and iid and cp.split("/")[0] == stac.SERVING_TOPICS_CATALOG]
+    if rebound_topics and not dry_run:
         # A style change is a preview change. Every styled topic item in scope is rewritten, so in
         # practice a topic restyle always starts a run; its content-hash skip re-renders only what the
         # new styles affect. Started for all topics, not the rebound ids: an id list runs as a single
         # task (core/jobs.py), and here it would name nearly every topic.
         jobs.start_topic_thumbs()
+    refresh, cdn_error = (False, None) if dry_run else _publish(rebound_topics, refresh)
     print(f"[restyle] {'would rebind' if dry_run else 'rebound'} {changed} item(s)"
           + ("" if refresh or dry_run else " (run --refresh to refresh items.json asset summaries)"))
     _raise_on_read_failures(failures)
     if not dry_run and (drifted := _verify(groups)):
         # A run that wrote stale renders must not exit 0; see _verify.
         raise RuntimeError(f"restyle wrote {len(drifted)} render(s) that don't match the manifest")
+    if cdn_error:
+        raise RuntimeError("restyle could not invalidate the CDN") from cdn_error
     return changed
+
+
+def _publish(rebound_topics: list[str], refresh: bool) -> tuple[bool, Exception | None]:
+    """Refresh the catalog when asked or when invalidating, then invalidate the pending topics.
+
+    The FeatureServer draws each render from its Esri JSON, which a publish can change in place, and
+    reads the bindings from items.json, so an invalidation needs the refresh first. Returns whether
+    it refreshed, and a CDN failure for the caller to raise after its checks."""
+    invalidating = bool(rebound_topics) and cdn.enabled()
+    error = _cdn_step(lambda: cdn.mark(rebound_topics)) if invalidating else None
+    if not (refresh or invalidating):
+        return False, error
+    problems = stac.refresh_catalog()
+    return True, _cdn_step(lambda: cdn.flush(problems)) or error
+
+
+def _cdn_step(fn) -> Exception | None:
+    """Run a CDN step; its failure is returned for the caller to raise after its checks."""
+    try:
+        fn()
+        return None
+    except Exception as e:  # noqa: BLE001
+        return e
 
 
 def _raise_on_read_failures(failures: list[str]) -> None:

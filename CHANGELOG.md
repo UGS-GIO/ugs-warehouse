@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.16.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.15.1...v1.16.0) (2026-10-25)
+
+
+### Features
+
+* **cdn:** invalidate the api CDN when a layer or a server release changes ([#654](https://github.com/UGS-GIO/ugs-warehouse/issues/654)) ([102c39d](https://github.com/UGS-GIO/ugs-warehouse/commit/102c39d21ea7769e0b30917c6945081793d5c1c0))
+* **mosaics:** bake each mosaic tier as a WebP COG beside its PMTiles ([#650](https://github.com/UGS-GIO/ugs-warehouse/issues/650)) ([87e9904](https://github.com/UGS-GIO/ugs-warehouse/commit/87e9904bb4df8ae33dd1251f3332376b9747d6c7))
+* **viewer:** link the ArcGIS ImageServer and Map Viewer from the item endpoints panel ([#659](https://github.com/UGS-GIO/ugs-warehouse/issues/659)) ([a3e529e](https://github.com/UGS-GIO/ugs-warehouse/commit/a3e529edeef765fa2bd6250ecbb6108eed0528a8))
+
 ## [1.15.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.15.0...v1.15.1) (2026-10-25)
 
 

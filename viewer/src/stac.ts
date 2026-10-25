@@ -153,6 +153,7 @@ export type Asset = {
 export type StacDoc = {
   id?: string;
   type?: string;
+  collection?: string;
   description?: string;
   links?: Link[];
   geometry?: GeoJSON.Geometry | null;
@@ -386,8 +387,9 @@ export const FEATURES_BASE = (
 ).replace(/\/+$/, "");
 
 // ArcGIS FeatureServer (the geoservices service) for Map Viewer, Experience Builder and
-// StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a layer, one per render,
-// and a topic without renders is served as `default`.
+// StoryMaps. Same shape as FEATURES_BASE. Every topic with a GeoParquet is a one-layer service per
+// render, and a topic without renders is served as `default`. The service URL, not its layer `/0`:
+// Map Viewer adds a service URL as a layer.
 const GEOSERVICES_BASE = (
   new URLSearchParams(LOC.search).get("geoservices")
   || ((import.meta as { env?: Record<string, string> }).env?.VITE_GEOSERVICES_BASE)
@@ -395,8 +397,35 @@ const GEOSERVICES_BASE = (
 ).replace(/\/+$/, "");
 export const featureServerUrl = (id: string, render = "default"): string | undefined =>
   GEOSERVICES_BASE
-    ? `${GEOSERVICES_BASE}/ugs/rest/services/${encodeURIComponent(id)}/${encodeURIComponent(render)}/FeatureServer/0`
+    ? `${GEOSERVICES_BASE}/ugs/rest/services/${encodeURIComponent(id)}/${encodeURIComponent(render)}/FeatureServer`
     : undefined;
+
+export const imageServerUrl = (id: string): string | undefined =>
+  GEOSERVICES_BASE ? `${GEOSERVICES_BASE}/ugs/rest/services/${encodeURIComponent(id)}/ImageServer` : undefined;
+
+// ArcGIS Online Map Viewer, opened with a service added as a layer.
+export const mapViewerUrl = (service: string): string =>
+  `https://www.arcgis.com/apps/mapviewer/index.html?url=${encodeURIComponent(service)}`;
+
+// The collections the ImageServer reads (STAC_COLLECTION_URL in Dockerfile.imageserver): the 24k
+// series, the geologic-map mosaics and these publication series.
+const IMAGE_SERVED_COLLECTIONS = new Set([
+  "geolmap_24k_series", "ugs-geologic-maps",
+  ..."B BU BYU C CI CR GQ HD I M MB MF MO MP MUS OF OFR Q SS TEM TP".split(" "),
+]);
+
+// Whether the ImageServer serves this item: one in those collections with a GeoTIFF (or untyped)
+// asset keyed visual, cog or data, the server's ASSET_KEYS.
+// An index entry has no `collection`; its self link sits under its collection's folder.
+const collectionIdOf = (d: StacDoc | undefined): string =>
+  d?.collection ?? collKeyOf(d?.links?.find((l) => l.rel === "self")?.href)?.split("/").pop() ?? "";
+
+export const isImageServed = (d: StacDoc | undefined): boolean =>
+  IMAGE_SERVED_COLLECTIONS.has(collectionIdOf(d))
+  && ["visual", "cog", "data"].some((k) => {
+    const a = d?.assets?.[k];
+    return a && (a.type || "image/tiff").startsWith("image/tiff");
+  });
 
 const isCog = (a: Asset) =>
   a.type?.includes("profile=cloud-optimized")

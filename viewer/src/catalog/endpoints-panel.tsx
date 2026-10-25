@@ -1,10 +1,13 @@
 // How to use an item from other software, in STAC's terms: its assets (the files on the CDN) and its
-// links (live services: OGC API Features, ArcGIS FeatureServer).
+// links (live services: OGC API Features, ArcGIS FeatureServer and ImageServer).
 import { useEffect, useRef, useState } from "react";
 
 import { featureEndpoints } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, featureServerUrl, FEATURES_BASE, isOverview, isServingTopic, parquetAsset, rendersOf, type StacDoc } from "@/stac";
+import {
+  assetKind, featureServerUrl, FEATURES_BASE, imageServerUrl, isImageServed, isOverview, isServingTopic, mapViewerUrl,
+  parquetAsset, rendersOf, type StacDoc,
+} from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
 
@@ -79,7 +82,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       items={renders.map((r) => ({ value: r, label: r }))}
       className="max-w-[11rem] shrink-0 text-sm" />
   ) : undefined;
-  type Row = { label: string; desc: string; url: string; pick?: React.ReactNode };
+  type Row = { label: string; desc: string; url: string; pick?: React.ReactNode; esri?: boolean };
   const rows: Row[] = [];
   // Only an item with its own `rel=service` link is served (featureEndpoints).
   rows.push(...featureEndpoints(item, FEATURES_BASE));
@@ -92,6 +95,16 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       desc: "ArcGIS Online Map Viewer, Experience Builder, StoryMaps. Popups, tables and symbology included",
       url: fs,
       pick: renderPick,
+      esri: true,
+    });
+  }
+  const is = isImageServed(item) ? imageServerUrl(id) : undefined;
+  if (is) {
+    rows.push({
+      label: "ArcGIS image layer",
+      desc: "ArcGIS Online Map Viewer, ArcGIS Pro, Experience Builder. The map image as a dynamic image service",
+      url: is,
+      esri: true,
     });
   }
   if (!rows.length) return null;
@@ -103,6 +116,10 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       <span className="min-w-0 flex-1" title={r.url} />
       <CopyBtn text={r.url} />
       <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+      {r.esri && (
+        <a href={mapViewerUrl(r.url)} target="_blank" rel="noopener" aria-label="Open in Map Viewer" title="Open in ArcGIS Online Map Viewer"
+          className="text-primary no-underline">Map Viewer ↗</a>
+      )}
     </div>
   );
   return (

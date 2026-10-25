@@ -64,32 +64,44 @@ export function hits(type: number, geometry: P[][], p: P, tol: number): boolean 
  */
 export async function identifyAt(url: string, lon: number, lat: number, mapZoom: number,
   source?: PMTiles): Promise<Hit[]> {
+  return (await identifyPoints(url, [[lon, lat]], mapZoom, source))[0];
+}
+
+/** identifyAt for several points, reading each tile they fall in once. */
+export async function identifyPoints(url: string, points: [number, number][], mapZoom: number,
+  source?: PMTiles): Promise<Hit[][]> {
   const p = source ?? archiveFor(url);
   const h = await p.getHeader();
-  if (h.tileType !== TileType.Mvt) return [];            // raster archive: nothing to hit
+  // A raster archive has nothing to hit.
+  if (h.tileType !== TileType.Mvt) return points.map(() => []);
   const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
-  if (z < h.minZoom) return [];
+  if (z < h.minZoom) return points.map(() => []);
   const n = 2 ** z;
-  const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
-  const fx = at.x * n, fy = at.y * n;
-  const x = Math.floor(fx), y = Math.floor(fy);
-  const tile = await p.getZxy(z, x, y);
-  if (!tile) return [];
-
-  const vt = new VectorTile(new Pbf(new Uint8Array(tile.data)));
-  const out: Hit[] = [];
-  for (const name of Object.keys(vt.layers)) {
-    const layer = vt.layers[name];
-    const point = { x: (fx - x) * layer.extent, y: (fy - y) * layer.extent };
-    // MapLibre draws a vector tile 512 px wide at its own zoom, so at map zoom Z one tile spans
-    // 512 * 2^(Z - z) px; the pixel tolerance, converted to tile units.
-    const tol = (TOLERANCE_PX * layer.extent) / (512 * 2 ** (mapZoom - z));
-    for (let i = 0; i < layer.length; i++) {
-      const f = layer.feature(i);
-      if (hits(f.type, f.loadGeometry(), point, tol)) out.push({ layer: name, properties: f.properties });
+  const tiles = new Map<string, Promise<VectorTile | null>>();
+  return Promise.all(points.map(async ([lon, lat]) => {
+    const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
+    const fx = at.x * n, fy = at.y * n;
+    const x = Math.floor(fx), y = Math.floor(fy);
+    const key = `${x}/${y}`;
+    if (!tiles.has(key)) {
+      tiles.set(key, p.getZxy(z, x, y).then((t) => (t ? new VectorTile(new Pbf(new Uint8Array(t.data))) : null)));
     }
-  }
-  return out;
+    const vt = await tiles.get(key);
+    const out: Hit[] = [];
+    if (!vt) return out;
+    for (const name of Object.keys(vt.layers)) {
+      const layer = vt.layers[name];
+      const point = { x: (fx - x) * layer.extent, y: (fy - y) * layer.extent };
+      // MapLibre draws a vector tile 512 px wide at its own zoom, so at map zoom Z one tile spans
+      // 512 * 2^(Z - z) px; the pixel tolerance, converted to tile units.
+      const tol = (TOLERANCE_PX * layer.extent) / (512 * 2 ** (mapZoom - z));
+      for (let i = 0; i < layer.length; i++) {
+        const f = layer.feature(i);
+        if (hits(f.type, f.loadGeometry(), point, tol)) out.push({ layer: name, properties: f.properties });
+      }
+    }
+    return out;
+  }));
 }
 
 /** Whether an archive (a raster mosaic, say) has a tile at the point: its real coverage, which its

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
 import type { Bbox } from "./guards";
-import { mostDetailed, probeOf, quadsFor, saveBbox, scaleOf, type Target, unitOf, whatsHere } from "./whats-here";
+import {
+  caveatOf, mostDetailed, otherUnit, probeOf, quadsFor, ringAround, saveBbox, scaleOf, type Target, toleranceM, unitOf,
+  whatsHere,
+} from "./whats-here";
 
 const STATE = [-114.05, 37, -109.04, 42];
 const layers: ActiveLayer[] = [
@@ -85,6 +88,23 @@ describe("geology", () => {
   it("prefers the most detailed scale, unknown scales last", () => {
     expect(mostDetailed([{ id: "a", scale: 500000 }, { id: "b" }, { id: "c", scale: 24000 }])?.id).toBe("c");
     expect(mostDetailed([])).toBeUndefined();
+  });
+
+  it("warns by scale: nothing at 1:24,000, ±50 m at 1:100,000, generalized at 1:500,000", () => {
+    expect(caveatOf(24000)).toBeNull();
+    expect(caveatOf(undefined)).toBeNull();
+    expect(caveatOf(100000)).toBe("Boundaries approximate (about ±50 m).");
+    expect(caveatOf(500000)).toMatch(/^Generalized statewide map; boundaries can be off by several hundred meters/);
+  });
+
+  it("looks a map's tolerance away for another unit", () => {
+    expect(toleranceM(500000)).toBe(250);
+    const ring = ringAround(-111.7, 40.5594, 250);
+    expect(ring).toHaveLength(8);
+    expect(ring[2][1] - 40.5594).toBeCloseTo(250 / 111_320, 6);   // due north, 250 m
+    const ti = { symbol: "Ti" };
+    expect(otherUnit(ti, [ti, null, { symbol: "Qal", name: "alluvium" }])?.name).toBe("alluvium");
+    expect(otherUnit(ti, [ti, undefined])).toBeUndefined();
   });
 
   it("carries a plate's units archive through", () => {

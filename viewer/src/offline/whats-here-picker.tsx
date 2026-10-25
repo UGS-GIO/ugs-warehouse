@@ -4,7 +4,7 @@
 // on or off at a tap. "Save offline…" there, or "Save this area" (the view), switches it to
 // saving: everything that overlaps the quad or view, ticked, with its exact size.
 import { Dialog } from "@base-ui/react/dialog";
-import { useMutation, useQueries } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import { Drawer } from "@base-ui/react/drawer";
 import { DETENTS } from "@/map/map-model";
@@ -25,11 +25,12 @@ import { planTableArea } from "./table-area";
 import * as queue from "./queue";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
-import { type Hit, hitLabel, identifyAt, tileAt } from "./identify";
+import { type Hit, hitLabel, identifyAt, identifyPoints, tileAt } from "./identify";
 import * as opfs from "./opfs";
 import { useOffline } from "./store";
 import {
-  type Here, isSaveable, isUnitLayer, mostDetailed, probeOf, quadsFor, REFERENCE_IDS, saveBbox, scaleOf, type Target,
+  caveatOf, type Here, isSaveable, isUnitLayer, mostDetailed, otherUnit, probeOf, quadsFor, REFERENCE_IDS, ringAround,
+  saveBbox, scaleOf, type Target, toleranceM,
   type Unit, unitOf, whatsHere,
 } from "./whats-here";
 
@@ -47,6 +48,15 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
     if (next) next(); else running--;
   }
 }
+
+// A long press asks every layer what is at the point, through the same queue. One read is a header
+// and a tile; one that takes longer than this is dropped from the list instead of holding it.
+const PROBE_MS = 8_000;
+const probe = <T,>(fn: () => Promise<T>): Promise<T> => limit(() => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timed out")), PROBE_MS); });
+  return Promise.race([fn(), late]).finally(() => clearTimeout(timer));
+});
 
 const BASEMAP = "__basemap__";
 
@@ -159,7 +169,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const identified = useQueries({
     queries: vectors.map((h) => ({
       queryKey: ["identify", h.save.url, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
-      queryFn: (): Promise<Hit[]> => limit(() => target.kind === "point"
+      queryFn: (): Promise<Hit[]> => probe(() => target.kind === "point"
         ? identifyAt(h.save.url, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
       enabled: querying,
       staleTime: 5 * 60_000,
@@ -170,7 +180,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const tiled = useQueries({
     queries: mosaics.map((h) => ({
       queryKey: ["tile-at", h.save.url, at],
-      queryFn: (): Promise<boolean> => limit(() => target.kind === "point"
+      queryFn: (): Promise<boolean> => probe(() => target.kind === "point"
         ? tileAt(h.save.url, target.lon, target.lat) : Promise.resolve(true)),
       enabled: querying,
       staleTime: 5 * 60_000,
@@ -182,7 +192,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const unitHits = useQueries({
     queries: unitMaps.map((h) => ({
       queryKey: ["identify", h.unitsHref, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
-      queryFn: (): Promise<Hit[]> => limit(() => target.kind === "point" && h.unitsHref
+      queryFn: (): Promise<Hit[]> => probe(() => target.kind === "point" && h.unitsHref
         ? identifyAt(h.unitsHref, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
       enabled: querying,
       staleTime: 5 * 60_000,
@@ -196,17 +206,37 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
 
   // The geologic unit under the point, from the most detailed map that names one, and the most
   // detailed published map here, which may only be a scan.
-  const unit = mostDetailed<Unit & { from: Here }>([
+  // `read` turns one point's hits into the unit there, so the same source can be asked around it.
+  type Source = Unit & { from: Here; url: string; read: (hits: Hit[]) => Unit | null };
+  const unitMapRead = (h: Here) => (hits: Hit[]): Unit | null => {
+    const u = topUnit(hits);
+    return u ? { symbol: u.code, name: u.name, age: u.age, description: u.description, scale: scales.get(h.id) } : null;
+  };
+  const unit = mostDetailed<Source>([
     ...vectors.filter((h) => isUnitLayer(h.id)).flatMap((h) => {
-      const u = hitsOf(h).map((x) => unitOf(h.id, x.properties)).find(Boolean);
-      return u ? [{ ...u, from: h }] : [];
+      const read = (hits: Hit[]) => hits.map((x) => unitOf(h.id, x.properties)).find(Boolean) ?? null;
+      const u = read(hitsOf(h));
+      return u ? [{ ...u, from: h, url: h.save.url, read }] : [];
     }),
     ...unitMaps.flatMap((h, i) => {
-      const u = topUnit(unitHits[i]?.data ?? []);
-      return u ? [{ symbol: u.code, name: u.name, age: u.age, description: u.description,
-                    scale: scales.get(h.id), from: h }] : [];
+      const read = unitMapRead(h);
+      const u = read(unitHits[i]?.data ?? []);
+      return u && h.unitsHref ? [{ ...u, from: h, url: h.unitsHref, read }] : [];
     }),
   ]);
+  // Another unit within the map's own tolerance of the point: the contact may run under the finger.
+  const tol = unit?.scale ? toleranceM(unit.scale) : 0;
+  const near = useQuery({
+    queryKey: ["near-contact", unit?.url, at, tol],
+    queryFn: async () => {
+      if (!unit || target.kind !== "point") return null;
+      const ring = await identifyPoints(unit.url, ringAround(target.lon, target.lat, tol), target.zoom ?? 12);
+      return otherUnit(unit, ring.map(unit.read)) ?? null;
+    },
+    enabled: querying && !!unit && tol > 0,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
   const detailedMap = mostDetailed(here.filter((h) => h.group === "map" && isThere(h))
     .map((h) => ({ h, scale: scales.get(h.id) })).filter((m) => m.scale));
 
@@ -258,7 +288,9 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     : querying ? here.filter(isThere)
     : here.filter((h) => h.group !== "table");   // a table is only something to save
   // What the geology card shows is not listed again below it.
-  const inCard = new Set(querying ? [unit?.from.id, detailedMap?.h.id] : []);
+  const better = detailedMap && detailedMap.h.id !== unit?.from.id
+    && (detailedMap.scale ?? Infinity) < (unit?.scale ?? Infinity) ? detailedMap : undefined;
+  const inCard = new Set(querying ? [unit?.from.id, better?.h.id] : []);
   const rows = listed.filter((h) => !inCard.has(h.id));
   const groups = [
     { name: "Data layers", rows: rows.filter((h) => h.group === "layer" && !REFERENCE_IDS.has(h.id)) },
@@ -334,16 +366,32 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     );
   };
 
-  // The geologic unit under the point leads, since it is what most long presses ask; then the most
-  // detailed published map here. Each is a switch for its layer, as the rows below are.
-  const ratio = (s?: number) => (s ? ` · 1:${s.toLocaleString()}` : "");
-  const card = querying && (unit || detailedMap) && (
+  // How the point is mapped, worded no surer than the map's scale allows: its unit with a caveat
+  // for the scale and any contact within that scale's tolerance, and a more detailed published
+  // map when there is one, first when it is a 1:24,000 quadrangle. Each is a switch for its layer.
+  const ratio = (s?: number) => (s ? `1:${s.toLocaleString()}` : "");
+  const betterFirst = !!better && (better.scale ?? Infinity) <= 24000;
+  const caveat = caveatOf(unit?.scale);
+  const mapRow = better && (
+    <button type="button" role="switch" aria-checked={ctx.isActive(better.h.id)}
+      onClick={() => ctx.toggleLayers([better.h.id], !ctx.isActive(better.h.id))}
+      className={`flex w-full items-center gap-3 rounded-lg text-left ${betterFirst
+        ? "mt-1 bg-primary/10 p-2" : "mt-2 border-t border-border pt-2"}`}>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-semibold text-primary">Better source · more detailed map · {ratio(better.scale)}</span>
+        <span className="block truncate text-sm" title={better.h.title}>{better.h.title}</span>
+      </span>
+      <Knob on={ctx.isActive(better.h.id)} />
+    </button>
+  );
+  const card = querying && (unit || better) && (
     <section className="mx-3 mb-1 mt-1 rounded-xl border border-border bg-card p-3">
-      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Geology here</div>
+      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Mapped as</div>
+      {betterFirst && mapRow}
       {unit && (
         <button type="button" role="switch" aria-checked={ctx.isActive(unit.from.id)}
           onClick={() => ctx.toggleLayers([unit.from.id], !ctx.isActive(unit.from.id))}
-          className="mt-1 flex w-full items-start gap-3 text-left">
+          className={`flex w-full items-start gap-3 text-left ${betterFirst ? "mt-2 border-t border-border pt-2" : "mt-1"}`}>
           <span className="min-w-0 flex-1">
             <span className="block text-lg font-semibold leading-snug">
               {unit.symbol && <span className="mr-1.5 rounded bg-muted px-1.5 font-mono text-base">{unit.symbol}</span>}
@@ -351,24 +399,20 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
             </span>
             {unit.age && <span className="block text-sm">{unit.age}</span>}
             {unit.description && <span className="mt-1 line-clamp-4 block text-sm text-muted-foreground">{unit.description}</span>}
-            <span className="mt-1 block text-xs text-muted-foreground">From {unit.from.title}{ratio(unit.scale)}</span>
+            {near.data && (
+              <span className="mt-1 block text-sm">Near contact with {near.data.name ?? near.data.symbol}</span>
+            )}
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {unit.from.title}{unit.scale ? ` · ${ratio(unit.scale)}` : ""}{caveat ? `. ${caveat}` : ""}
+            </span>
           </span>
           <Knob on={ctx.isActive(unit.from.id)} />
         </button>
       )}
-      {detailedMap && detailedMap.h.id !== unit?.from.id && (
-        <button type="button" role="switch" aria-checked={ctx.isActive(detailedMap.h.id)}
-          onClick={() => ctx.toggleLayers([detailedMap.h.id], !ctx.isActive(detailedMap.h.id))}
-          className={`flex w-full items-center gap-3 text-left ${unit ? "mt-2 border-t border-border pt-2" : "mt-1"}`}>
-          <span className="min-w-0 flex-1">
-            <span className="block text-xs text-muted-foreground">Most detailed map here{ratio(detailedMap.scale)}</span>
-            <span className="block truncate text-sm" title={detailedMap.h.title}>{detailedMap.h.title}</span>
-          </span>
-          <Knob on={ctx.isActive(detailedMap.h.id)} />
-        </button>
-      )}
+      {!betterFirst && mapRow}
     </section>
   );
+
 
   const btn = "rounded-md border border-border px-3 py-1.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11";
   const list = (
@@ -457,7 +501,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
         }}>
         <Drawer.Portal>
           {/* Above the Utah header, which sits at z-index 3000. */}
-          <Drawer.Viewport className="pointer-events-none fixed inset-0 flex items-end" style={{ zIndex: 3101 }}>
+          <Drawer.Viewport className="pointer-events-none fixed inset-0 z-3101 flex items-end">
             <Drawer.Popup initialFocus={false} style={{ height: `${FULL * 100}%` }} className={SHEET_POPUP}>
               <SheetGrabber label={snap === HALF ? "Expand panel to full height" : "Collapse panel"}
                 onStep={() => setSnap(snap === HALF ? FULL : HALF)} onArrow={(s) => setSnap(s > 0 ? FULL : HALF)} />

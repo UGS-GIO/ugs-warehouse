@@ -115,6 +115,29 @@ export function unitOf(layerId: string, props: Record<string, unknown>): Unit | 
            scale: typeof f.scale === "number" ? f.scale : scaleOf(props[f.scale]) };
 }
 
+/** How far a mapped line can sit from the ground, by the usual ±0.5 mm at map scale, in meters. */
+export const toleranceM = (scale: number) => scale * 0.0005;
+
+/** A plain warning matched to a map's scale: none at 1:24,000 or more detailed. */
+export function caveatOf(scale?: number): string | null {
+  if (!scale || scale <= 24000) return null;
+  if (scale <= 100000) return `Boundaries approximate (about ±${Math.round(toleranceM(scale))} m).`;
+  return "Generalized statewide map; boundaries can be off by several hundred meters. Check a more detailed map.";
+}
+
+/** Eight points `r` meters around a point, to look for another unit within a map's tolerance. */
+export function ringAround(lon: number, lat: number, r: number): [number, number][] {
+  const dLat = r / 111_320, dLon = r / (111_320 * Math.cos((lat * Math.PI) / 180));
+  return Array.from({ length: 8 }, (_, i) => {
+    const a = (i * Math.PI) / 4;
+    return [lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)];
+  });
+}
+
+/** Another unit among those found around the point, if any: the point is near a contact. */
+export const otherUnit = (at: Unit, around: (Unit | null | undefined)[]): Unit | undefined =>
+  around.find((u): u is Unit => !!u && u.symbol !== at.symbol);
+
 /** The most detailed of several: the smallest scale denominator, unknown scales last. */
 export const mostDetailed = <T extends { scale?: number }>(xs: T[]): T | undefined =>
   xs.reduce<T | undefined>((a, x) => (!a || (x.scale ?? Infinity) < (a.scale ?? Infinity) ? x : a), undefined);

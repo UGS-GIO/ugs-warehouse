@@ -207,19 +207,25 @@ def test_force_runs_every_sink_even_when_unchanged():
     stac_write.assert_called_once()
 
 
-def test_a_rebuilt_topic_is_marked_for_cdn_invalidation():
-    changed: list[str] = []
-    _run_unchanged(skip_unchanged=False, changed=changed)
-    assert changed == ["enmin_ucrc_wells"]
+@pytest.fixture
+def pending(monkeypatch):
+    """The ids marked pending on the CDN, with invalidation configured."""
+    from ugs_warehouse.core import cdn, gcs
+    monkeypatch.setattr(cdn, "URL_MAP", "lb")
+    monkeypatch.setattr(cdn, "PROJECT", "p")
+    return lambda: [p.rsplit("/", 1)[-1] for p in gcs.list_paths(f"{cdn.PENDING_PREFIX}/")]
 
 
-def test_an_unchanged_topic_is_not_marked_for_cdn_invalidation():
-    changed: list[str] = []
-    _run_unchanged(changed=changed)
-    assert changed == []
+def test_a_rebuilt_topic_is_marked_pending_on_the_cdn(pending):
+    _run_unchanged(skip_unchanged=False)
+    assert pending() == ["enmin_ucrc_wells"]
 
 
-def test_a_metadata_edit_is_marked_for_cdn_invalidation():
-    changed: list[str] = []
-    _run_unchanged(item_changed=True, changed=changed)
-    assert changed == ["enmin_ucrc_wells"]
+def test_an_unchanged_topic_is_not_marked_pending(pending):
+    _run_unchanged()
+    assert pending() == []
+
+
+def test_a_metadata_edit_is_marked_pending(pending):
+    _run_unchanged(item_changed=True)
+    assert pending() == ["enmin_ucrc_wells"]

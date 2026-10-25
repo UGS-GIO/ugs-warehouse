@@ -85,9 +85,11 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   request's `maxAllowableOffset`. Downloads and tables read `data`. A layer whose GeoParquet is
   1 MB or less also gets a `geojson` asset, gzipped on the CDN, for web maps that load the whole
   layer in one request.
-- **CDN invalidation.** After a run, the ingest invalidates the FeatureServer paths,
-  `/ugs/rest/services/{id}/*`, of each layer whose data or item changed (`core/cdn.py`), so the CDN
-  can keep them long. A restyle does the same for the layers it rebinds.
+- **CDN invalidation.** The ingest marks a layer pending when its data or a field the FeatureServer
+  serves changed; restyle and retire mark the layers they touch (`core/cdn.py`). After its catalog
+  refresh, each run waits for the servers to reload, then invalidates `/` (the layer list) and
+  `/ugs/rest/services/{id}/*` for every pending layer, its own or one an earlier run left. A marker
+  goes only once its invalidation succeeded, so the CDN can keep these responses long.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.

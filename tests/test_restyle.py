@@ -297,20 +297,39 @@ def test_restyle_rebinds_a_publication_collection_but_not_a_serving_topic_layer_
     assert R._single_file_collections("all", {}, [pub, topic]) == ["ugs-publications/OFR/OFR-1"]
 
 
-def test_a_restyle_invalidates_the_rebound_topics_on_the_cdn(monkeypatch):
+@pytest.fixture
+def cdn_calls(monkeypatch) -> list:
+    """Invalidation configured; records the mark, refresh and flush calls in order."""
+    calls: list = []
+    monkeypatch.setattr(R.cdn, "URL_MAP", "lb")
+    monkeypatch.setattr(R.cdn, "PROJECT", "p")
+    monkeypatch.setattr(R.cdn, "mark", lambda ids: calls.append(("mark", ids)))
+    monkeypatch.setattr(R.cdn, "flush", lambda: calls.append("flush"))
+    monkeypatch.setattr(R.stac, "refresh_catalog", lambda: calls.append("refresh"))
+    return calls
+
+
+def test_a_restyle_refreshes_the_catalog_then_invalidates_the_rebound_topics(monkeypatch, cdn_calls):
+    """The FeatureServer reads the bindings from items.json, so the refresh comes first."""
     _styled_wells(monkeypatch)
-    sent: list = []
-    monkeypatch.setattr(R.cdn, "invalidate_features", sent.append)
     R.restyle()
-    assert sent == [["enmin_ucrc_wells"]]
+    assert cdn_calls == [("mark", ["enmin_ucrc_wells"]), "refresh", "flush"]
 
 
-def test_a_failed_cdn_invalidation_fails_the_restyle_after_its_writes(monkeypatch):
+def test_a_restyle_without_cdn_invalidation_refreshes_only_when_asked(monkeypatch, cdn_calls):
+    monkeypatch.setattr(R.cdn, "URL_MAP", "")
+    _styled_wells(monkeypatch)
+    R.restyle()
+    assert cdn_calls == []
+
+
+def test_a_failed_cdn_invalidation_fails_the_restyle_after_its_writes(monkeypatch, cdn_calls):
     kicked = _styled_wells(monkeypatch)
 
-    def fail(item_ids):
+    def fail():
         raise RuntimeError("403")
-    monkeypatch.setattr(R.cdn, "invalidate_features", fail)
+    monkeypatch.setattr(R.cdn, "flush", fail)
     with pytest.raises(RuntimeError, match="invalidate the CDN"):
         R.restyle()
     assert kicked == [None]
+    assert cdn_calls == [("mark", ["enmin_ucrc_wells"]), "refresh"]

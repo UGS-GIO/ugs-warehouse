@@ -17,7 +17,7 @@ import sys
 
 import duckdb
 
-from ..core import config, gcs, stac
+from ..core import cdn, config, gcs, stac
 from . import ducklake, introspect, sink_archive
 from .topics import Topic
 
@@ -226,8 +226,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           row_count: int | None = None, related: dict | None = None,
           content_hash: str | None = None,
           file_meta: dict[str, gcs.FileMeta] | None = None) -> bool:
-    """Write the topic's item; True when it differs from the published one beyond its datetime,
-    which falls back to the clock."""
+    """Write the topic's item; True when what the FeatureServer serves from it changed."""
     rel = related or {}
     rel_links = rel.get("links") or []
     bb = bbox if bbox is not None else _bbox(con, view)
@@ -269,7 +268,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     before = _published(topic)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")
-    return _undated(before) != _undated(json.loads(json.dumps(item)))
+    return cdn.feature_fields(before) != cdn.feature_fields(json.loads(json.dumps(item)))
 
 
 def _published(topic: Topic) -> dict | None:
@@ -279,9 +278,3 @@ def _published(topic: Topic) -> dict | None:
     except FileNotFoundError:
         return None
 
-
-def _undated(item: dict | None) -> dict | None:
-    if item is None:
-        return None
-    props = {k: v for k, v in (item.get("properties") or {}).items() if k != "datetime"}
-    return {**{k: v for k, v in item.items() if k != "_collection_path"}, "properties": props}

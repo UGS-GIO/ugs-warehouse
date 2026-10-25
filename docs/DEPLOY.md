@@ -279,7 +279,7 @@ rotting because the script fails when the table is wrong. See `scripts/check_gra
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/firebasehosting.admin | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — granted out-of-band for #220 (2026-09-03). Missing this and both Firebase deploy workflows fail closed with no image published |
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseIapDeploy | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — the app stack applies AS this SA, which cannot manage its own privileged role. Without it the deploy cannot set IAP IAM/settings on review-api. Permission list lives in `infra/roles/warehouseIapDeploy.yaml` |
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudbuild.builds.editor | project | ut-dnr-ugs-backend-tools | **NOT Terraform-managed** — needed to manage Cloud Build triggers, which live in the build project, not `project_id`. |
-| warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseCdnInvalidate | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — the URL map is outside tofu. Without it the ingest and restyle jobs cannot invalidate a changed layer's FeatureServer paths and exit 1. Permission list lives in `infra/roles/warehouseCdnInvalidate.yaml` |
+| warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseCdnInvalidate | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — the URL map is outside tofu. Without it the ingest, restyle and retire jobs cannot invalidate a changed layer's FeatureServer paths; the layers stay pending and the run fails. Permission list lives in `infra/roles/warehouseCdnInvalidate.yaml` |
 | 534590904912-compute@developer.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseCdnInvalidate | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed**, as above. Without it `deploy-geoservices` or `deploy-imageserver` fails after the rollout when a new release must clear the CDN cache |
 <!-- check-grants:end -->
 
@@ -322,10 +322,13 @@ gcloud scheduler jobs create http warehouse-nightly \
 - **ImageServer** (`ugs-warehouse-imageserver`): `deploy-imageserver` creates it, then
   `infra/imageserver.tf` imports it and adds the NEG and CDN backend; the maps-assets URL map routes
   its paths (route rules in that file). `smoke-geoservices` fails until that route exists.
-- **CDN cache on deploy.** Each FeatureServer and ImageServer revision is named after the release
-  its Dockerfile pins. A deploy that changes the release clears the CDN cache of
-  `api.geology.utah.gov` (the FeatureServer clears `/*`, the ImageServer `/ugs/rest/services/*`);
-  any other deploy keeps it.
+- **CDN cache on deploy.** `scripts/deploy_geoservice.sh` sets `SERVED_BUILD` on each FeatureServer
+  and ImageServer revision: the release its Dockerfile pins plus a hash of that Dockerfile. When it
+  differs from the revision that serves `prod`, the deploy clears the CDN cache of
+  `api.geology.utah.gov` (the FeatureServer `/*`, the ImageServer `/ugs/rest/services/*`); any
+  other deploy keeps it. If the clear fails, the step prints the command and fails. A rerun of the
+  build does not clear again, because the new revision already serves that build: run the printed
+  command.
 
 ## Environment variables
 
@@ -376,9 +379,10 @@ separate deploy such as review.
 | `INGEST_JOB`, `INGEST_JOB_REGION`, `INGEST_JOB_PROJECT` | `ugs-warehouse-ingest`, `us-central1`, none (required) | Job the push handler starts |
 | `INGEST_INLINE` | `0` | `1` ingests inside the handler (local dev, tests) |
 | `RETIRE_REQUESTED_BY` | none | Operator identity the ops console passes to a retire run |
-| `CDN_URL_MAP`, `CDN_PROJECT` | none | URL map whose CDN the ingest and restyle jobs invalidate a changed layer's FeatureServer paths on (`core/cdn.py`); unset invalidates nothing |
+| `CDN_URL_MAP`, `CDN_PROJECT` | none | URL map whose CDN the ingest, restyle and retire jobs invalidate a changed layer's FeatureServer paths on (`core/cdn.py`); unset marks and invalidates nothing |
 | `CDN_HOST`, `CDN_SERVICES_PATH` | none, `/ugs/rest/services` | Host and path prefix of the invalidated paths, `{CDN_SERVICES_PATH}/{item id}/*` |
-| `CDN_INVALIDATE_DELAY_S` | `0` | Seconds to wait first, so the FeatureServer has reloaded the layer before the CDN refetches it |
+| `CDN_INVALIDATE_DELAY_S` | `360` | Seconds to wait first, so the servers have reloaded the layer (`CACHE_TTL` 300 + 60) before the CDN refetches it |
+| `CDN_PENDING_PREFIX` | `_cdn/pending` | Where a job marks a layer pending, one object per item id, until its invalidation succeeds |
 
 ### DuckLake maintenance (`vector/maintain.py`)
 

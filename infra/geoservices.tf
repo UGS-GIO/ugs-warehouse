@@ -57,6 +57,8 @@ resource "google_cloud_run_v2_service" "geoservices" {
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
+      # SERVED_BUILD, set by scripts/deploy_geoservice.sh to decide when to clear the CDN cache.
+      template[0].containers[0].env,
       template[0].revision,
       traffic,
       client,

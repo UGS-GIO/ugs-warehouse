@@ -4,11 +4,13 @@ import { useRef, useState } from "react";
 import type { ItemRef } from "@/catalog/browse";
 import { setPin } from "@/map/camera";
 import { type Bounds, locate, suggest, type Suggestion } from "@/map/place-locator";
+import { isStrongQuad, loadQuadSearch, type QuadHit } from "@/map/quad-search";
 import { buildCatalogSearch, type ItemHit } from "./header-search-model";
 import { addRecent, clearRecent, type RecentPick, useRecent } from "./recent-searches";
 
 type Row =
   | { type: "place"; key: string; label: string; sub: string; place: Suggestion }
+  | { type: "quad"; key: string; label: string; sub: string; quad: QuadHit }
   | { type: "item"; key: string; label: string; sub: string; hit: ItemHit }
   | { type: "recent"; key: string; label: string; sub: string; pick: RecentPick }
   | { type: "try"; key: string; label: string; sub: string };
@@ -34,13 +36,15 @@ function bindSlash(el: HTMLInputElement | null) {
 }
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
+const quadRow = (quad: QuadHit): Row =>
+  ({ type: "quad", key: `quad:${quad.code}`, label: `${quad.name} quad`, sub: `7.5' quad · ${quad.code}`, quad });
 
 export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAll, defaultQuery, onClear,
   className = "" }: {
   items: ItemRef[];
   loadKey: string;
   isLayer: (r: ItemRef) => boolean;
-  onPlace: (b: Bounds, label: string) => void;
+  onPlace: (b: Bounds, label: string, outline?: boolean) => void;
   onItem: (hit: { href: string; bbox?: Bounds }) => void;
   onSearchAll: (q: string) => void;
   defaultQuery?: string;   // the search already applied (Discover's ?q=)
@@ -66,18 +70,30 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
     enabled: text.length >= 2,
     staleTime: Infinity,
   });
+  const quads = useQuery({
+    queryKey: ["quad-gazetteer"],
+    queryFn: ({ signal }) => loadQuadSearch(signal),
+    staleTime: Infinity,
+  });
   const place = useMutation({
     mutationFn: locate,
     onSuccess: (bounds, s) => { addRecent({ kind: "place", label: s.text, bounds }); onPlace(bounds, s.text); },
   });
 
   const found = text.length >= 2 ? catalog.data?.(text) : undefined;
+  const quadHits = text.length >= 2 ? quads.data?.(text) ?? [] : [];
+  // Quads named by what was typed lead the places; looser quad matches follow the locator's.
+  const strong = quadHits.filter((h) => isStrongQuad(h, text));
   const groups: Group[] = text.length >= 2
     ? [
         { value: "Exact match", items: found?.exact ? [itemRow(found.exact)] : [] },
         { value: "Layers", items: (found?.layers ?? []).map(itemRow) },
-        { value: "Places", items: (places.data ?? []).slice(0, 5).map((s): Row =>
-            ({ type: "place", key: s.magicKey, label: s.text, sub: "Place", place: s })) },
+        { value: "Places", items: [
+            ...strong.map(quadRow),
+            ...(places.data ?? []).slice(0, 5).map((s): Row =>
+              ({ type: "place", key: s.magicKey, label: s.text, sub: "Place", place: s })),
+            ...quadHits.filter((h) => !strong.includes(h)).slice(0, 3).map(quadRow),
+          ] },
         { value: "Publications", items: (found?.publications ?? []).map(itemRow) },
       ].filter((g) => g.items.length)
     : [
@@ -95,9 +111,13 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
   };
   const pick = (row: Row) => {
     if (row.type === "place") place.mutate(row.place);
+    else if (row.type === "quad") {
+      addRecent({ kind: "place", label: row.label, bounds: row.quad.bbox, outline: true });
+      onPlace(row.quad.bbox, row.label, true);
+    }
     else if (row.type === "item") pickItem(row.hit);
     else if (row.type === "try") setQ(row.label);
-    else if (row.pick.kind === "place") { addRecent(row.pick); onPlace(row.pick.bounds, row.pick.label); }
+    else if (row.pick.kind === "place") { addRecent(row.pick); onPlace(row.pick.bounds, row.pick.label, row.pick.outline); }
     else { addRecent(row.pick); onItem(row.pick); }
   };
 

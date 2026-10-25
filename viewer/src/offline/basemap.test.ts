@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MercatorCoordinate } from "maplibre-gl";
-import { OVERVIEW_MAXZOOM, overviewUrl, quadAt, quadsInBbox, quadUrl, redundantWithState } from "./basemap";
+import { OVERVIEW_MAXZOOM, overviewUrl, quadAt, quadOf, quadsInBbox, quadUrl, redundantWithState } from "./basemap";
 import { archiveFor, pickArchive, tileCenter } from "./basemap-protocol";
 
 /** The z/x/y tile containing a point (standard web-mercator XYZ). */
@@ -27,6 +27,20 @@ describe("quadAt", () => {
     expect(q.east - q.west).toBeCloseTo(0.125);
     expect(q.west).toBeLessThanOrEqual(-111.89);
     expect(q.east).toBeGreaterThanOrEqual(-111.89);
+  });
+});
+
+describe("quadOf", () => {
+  it("is the inverse of quadAt", () => {
+    for (const code of ["40111g8", "40111a1", "37109g4", "42114h8"]) {
+      const q = quadOf(code);
+      expect(q.code).toBe(code);
+      expect(q.north - q.south).toBeCloseTo(0.125);
+    }
+  });
+
+  it("rejects what is not a quad code", () => {
+    expect(() => quadOf("40111i1")).toThrow();
   });
 });
 

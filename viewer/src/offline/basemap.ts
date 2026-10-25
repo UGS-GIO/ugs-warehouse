@@ -39,6 +39,15 @@ export function quadAt(lon: number, lat: number): Quad {
   return { code, west: east - CELL, south, east, north: south + CELL };
 }
 
+/** The quad a USGS Ohio code names: the inverse of quadAt. */
+export function quadOf(code: string): Quad {
+  const m = /^(\d{2})(\d{3})([a-h])([1-8])$/.exec(code);
+  if (!m) throw new Error(`not a 7.5-minute quad code: ${code}`);
+  const lat = Number(m[1]) + ROWS.indexOf(m[3]) * CELL;
+  const lon = -(Number(m[2]) + (Number(m[4]) - 1) * CELL);
+  return quadAt(lon - CELL / 2, lat + CELL / 2);
+}
+
 /** Stored partial-basemap files the statewide one makes redundant: the overview and every quad. */
 export function redundantWithState(saved: Iterable<string>, base = BASEMAP_BASE): string[] {
   return [...saved].filter((u) => u === overviewUrl(base) || u.startsWith(`${base}quads/`));

@@ -475,6 +475,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Source>
       )}
 
+      {shownPin?.outline && (
+        <Source id="pin-outline" type="geojson"
+          data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(shownPin.outline) } }}>
+          <Layer id="pin-outline-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2.5 }} />
+        </Source>
+      )}
+
       {item?.geometry && hasFootprint(item) && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
           <Layer id="fp-line" type="line" paint={{ "line-color": "#888", "line-width": 1, "line-dasharray": [2, 2] }} />

@@ -22,7 +22,7 @@ substitutions:
   _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
   _FTS_JOB: ugs-pubs-fts                  # Cloud Run job: build the all-pub full-text-search DuckDB (BM25 FTS) → CDN, queried by duckdb-wasm
   _EMBED_JOB: ugs-pubs-embed              # Cloud Run job: chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN, for semantic search
-  _MOSAICS_JOB: ugs-geolmap-mosaics       # Cloud Run job: per-scale raster PMTiles mosaics of the published geologic maps (GDAL + pmtiles)
+  _MOSAICS_JOB: ugs-geolmap-mosaics       # Cloud Run job: per-scale raster PMTiles + WebP COG mosaics of the published geologic maps (GDAL + pmtiles)
   _GRAPH_JOB: ugs-pubs-graph              # Cloud Run job: build the pubs knowledge graph (nodes/edges Parquet) — citation + co-author + semantic edges
   _THREED_JOB: ugs-pubs-threed            # Cloud Run job: convert 3D GeMS pubs (gdb+.mapx) → GeoParquet-3D + glTF + classes sidecar; --all auto-discovers, pubs-ingest binds the assets
   _VECTORS_JOB: ugs-pubs-vectors          # Cloud Run job: extract every layer + companion table from new pubs' GIS zips → GeoParquet; skip-existing, pubs-ingest binds them
@@ -655,7 +655,7 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Raster PMTiles mosaics of the geologic maps, one per portal layer: only 500k builds here. The 24k
+  # Raster PMTiles + WebP COG mosaics of the geologic maps, one per portal layer: only 500k builds here. The 24k
   # (z17) and 100k (z15) tiers need a real disk and run on Cloud Batch (scripts/submit_mosaics_batch.sh).
   # Add --scale 250k (the 1 x 2 degree sheets) here and in the admin console once one of those maps
   # has a COG; none does yet.

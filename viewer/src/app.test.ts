@@ -33,6 +33,13 @@ describe("toLayer on a publication's tagged root-index entries", () => {
   it("draws the plate from its COG", () => {
     expect(toLayer(plate)).toMatchObject({ id: "M-246DM_plate", cogHref: "https://x/p.cog.tif" });
   });
+
+  it("draws a mosaic tier from its PMTiles, though it carries a COG too", () => {
+    const mosaic = { id: "geologic-maps-100k", bbox: [-114, 37, -109, 42], properties: { title: "100k" },
+      assets: { pmtiles: { href: "https://x/m.pmtiles", type: "application/vnd.pmtiles", "ugs:render": "raster" },
+                visual: { href: "https://x/m.cog.tif", type: "image/tiff; application=geotiff; profile=cloud-optimized", roles: ["visual"] } } };
+    expect(toLayer({ collId: "", href: "geologic-maps-100k", data: mosaic })).toMatchObject({ rasterPmHref: "https://x/m.pmtiles" });
+  });
 });
 
 describe("a publication's plate and layer in the Layers tray", () => {

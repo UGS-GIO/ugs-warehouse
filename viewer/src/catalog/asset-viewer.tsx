@@ -11,9 +11,10 @@ import { unitsHrefOf } from "@/map/identify";
 import { IdentifyCard } from "@/map/unit-card";
 import { footprintSpecOf, PreviewMapSlot, usePreviewMap } from "@/map/preview-map";
 import { vectorSpecOf } from "@/map/preview-spec";
-import { type Asset, type AssetKind, geopackageAsset, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
+import { type Asset, type AssetKind, cogRenderAsset, geopackageAsset, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset, usePlate } from "@/stac";
 import { C, toggle } from "@/ui/ui";
+import { UiSegmented } from "@/ui/segmented";
 import { useDataSaver } from "@/lib/data-saver";
 import { type AssetEntry, assetEntries, plateEntry, previewKindOf } from "./item-view";
 
@@ -53,11 +54,20 @@ export function FieldsPanel({ item }: { item: StacDoc }) {
 }
 
 // Raster mosaic (per-scale geologic-map tiles) preview — publishes a spec to the shared persistent map.
+// A tier baked as a COG too can switch between the two.
 function RasterMosaicPreview({ item }: { item: StacDoc }) {
-  const asset = rasterTilesAsset(item);
+  const pm = rasterTilesAsset(item);
+  const cog = cogRenderAsset(item);
+  const [source, setSource] = useState<"rasterpm" | "cog">("rasterpm");
+  const kind = cog && (source === "cog" || !pm) ? "cog" : "rasterpm";
+  const asset = kind === "cog" ? cog : pm;
   return (
     <>
-      <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href, unitsHref: unitsHrefOf(item) } : null} />
+      {pm && cog && (
+        <UiSegmented className="mb-2 w-fit" value={kind} onValueChange={setSource}
+          items={[{ value: "rasterpm", label: "PMTiles" }, { value: "cog", label: "COG" }]} />
+      )}
+      <PreviewMapSlot spec={asset ? { kind, item, href: asset.href, unitsHref: unitsHrefOf(item) } : null} />
       <IdentifyResultCard />
     </>
   );

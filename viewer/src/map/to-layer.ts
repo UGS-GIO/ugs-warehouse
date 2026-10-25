@@ -5,7 +5,7 @@ import { cogRenderAsset, collectionHrefOf, defaultStyleUrl, idOf, parquetAsset, 
 import { cubeRenderRescale, cubeStepDims, cubeVariables, resolveSelection } from "@/stac/datacube";
 import { type CubePicks, pickedRescale, VAR } from "@/zarr/cube-picks";
 
-// An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
+// An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, raster mosaic, COG, datacube.
 // null when the item carries none of them — it isn't a layer.
 export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveLayer | null {
   if (!ref?.data) return null;
@@ -24,9 +24,10 @@ export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveL
   }
   const cog = cogRenderAsset(ref.data);
   const identify = { unitsHref: unitsHrefOf(ref.data), pubTitle: pubOfEntry(ref.data)?.title };
-  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox, ...identify };
+  // A mosaic tier carries a COG too, for the ImageServer; the map draws its PMTiles.
   const raster = rasterTilesAsset(ref.data);
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox, ...identify };
+  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox, ...identify };
   const zarr = zarrAsset(ref.data);
   // No drawable variable → not a layer, rather than a row that can never render.
   const variables = Object.keys(cubeVariables(ref.data));

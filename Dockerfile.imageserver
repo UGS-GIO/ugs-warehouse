@@ -1,7 +1,7 @@
 # ArcGIS ImageServer over the geologic-map COGs, built from a pinned release of
 # github.com/UGS-GIO/cloud-native-geoservices (imageserver/). No build context:
 # `docker build - < Dockerfile.imageserver`. The stages follow the release's imageserver/Dockerfile.
-ARG IMAGESERVER_VERSION=v0.6.1
+ARG IMAGESERVER_VERSION=v0.7.0
 
 FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS build
 ARG IMAGESERVER_VERSION

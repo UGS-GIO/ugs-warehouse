@@ -30,6 +30,9 @@ import { type IdentifyResult, identifyAt, identifyClick } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
 import { IdentifyCard } from "./unit-card";
 
+// The outline drawn around a hovered footprint or a picked quad.
+const HIGHLIGHT_LINE = { "line-color": "#d1491c", "line-width": 2.5 };
+
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
 
@@ -471,14 +474,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         <Source id="discovery-highlight" type="geojson"
           data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(highlight) } }}>
           <Layer id="discovery-highlight-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.12 }} />
-          <Layer id="discovery-highlight-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2.5 }} />
+          <Layer id="discovery-highlight-line" type="line" paint={HIGHLIGHT_LINE} />
         </Source>
       )}
 
       {shownPin?.outline && (
         <Source id="pin-outline" type="geojson"
           data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(shownPin.outline) } }}>
-          <Layer id="pin-outline-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2.5 }} />
+          <Layer id="pin-outline-line" type="line" paint={HIGHLIGHT_LINE} />
         </Source>
       )}
 

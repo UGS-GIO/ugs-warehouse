@@ -1,7 +1,7 @@
 # ArcGIS ImageServer over the geologic-map COGs, built from a pinned release of
 # github.com/UGS-GIO/cloud-native-geoservices (imageserver/). No build context:
 # `docker build - < Dockerfile.imageserver`. The stages follow the release's imageserver/Dockerfile.
-ARG IMAGESERVER_VERSION=v0.6.0
+ARG IMAGESERVER_VERSION=v0.7.0
 
 FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS build
 ARG IMAGESERVER_VERSION
@@ -21,7 +21,8 @@ ARG IMAGESERVER_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/.venv /app/.venv
 # The release is the build id in the ETags. MALLOC_ARENA_MAX=2 keeps it inside 512 MB (upstream).
-ENV PATH=/app/.venv/bin:$PATH PORT=8080 PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 \
+# CDN_TTL: the CDN keeps a response a day; the scans rarely change, so a rewrite shows within a day.
+ENV PATH=/app/.venv/bin:$PATH PORT=8080 PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 CDN_TTL=86400 \
     GIT_SHA=${IMAGESERVER_VERSION} \
     PUBLIC_URL=https://api.geology.utah.gov \
     STAC_COLLECTION_URL=https://maps-assets.geology.utah.gov/warehouse/stac/ugs-rasters/geolmap_24k_series/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/B/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/BU/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/BYU/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/C/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/CI/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/CR/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/GQ/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/HD/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/I/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/M/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/MB/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/MF/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/MO/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/MP/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/MUS/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OF/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/Q/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/SS/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/TEM/items.json,https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/TP/items.json

@@ -5,7 +5,7 @@ import Pbf from "pbf";
 import { FileSource, PMTiles } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { describe, expect, it } from "vitest";
-import { hitLabel, hits, identifyAt, inRings, tileAt, toSegment } from "./identify";
+import { hitLabel, hits, identifyAt, identifyPoints, inRings, tileAt, toSegment } from "./identify";
 
 describe("geometry", () => {
   const square = [[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }]];
@@ -90,6 +90,25 @@ describe("identifyAt (real PMTiles)", () => {
     expect(got.some((g) => g.layer === layer)).toBe(true);
 
     expect(await identifyAt("fixture", -100, 30, 15, archive())).toEqual([]);   // Texas: not in this quad
+  });
+
+  it("answers the other points when one tile fails to load", async () => {
+    const p = archive();
+    const h = await p.getHeader();
+    const real = p.getZxy.bind(p);
+    let calls = 0;
+    p.getZxy = (...a: Parameters<PMTiles["getZxy"]>) => (calls++ === 0 ? Promise.reject(new Error("network")) : real(...a));
+    const mid: [number, number] = [(h.minLon + h.maxLon) / 2, (h.minLat + h.maxLat) / 2];
+    const got = await identifyPoints("fixture", [[-100, 30], mid], 15, p);
+    expect(got[0]).toEqual([]);
+    expect(Array.isArray(got[1])).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("rejects when aborted", async () => {
+    const ac = new AbortController();
+    ac.abort(new Error("timed out"));
+    await expect(identifyAt("fixture", -100, 30, 15, archive(), ac.signal)).rejects.toThrow("timed out");
   });
 
   it("has a tile where the archive covers, and none outside it", async () => {

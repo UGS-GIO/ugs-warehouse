@@ -63,15 +63,25 @@ export function hits(type: number, geometry: P[][], p: P, tol: number): boolean 
  * how many tile units the pixel tolerance spans.
  */
 export async function identifyAt(url: string, lon: number, lat: number, mapZoom: number,
-  source?: PMTiles): Promise<Hit[]> {
-  return (await identifyPoints(url, [[lon, lat]], mapZoom, source))[0];
+  source?: PMTiles, signal?: AbortSignal): Promise<Hit[]> {
+  return (await identifyPoints(url, [[lon, lat]], mapZoom, source, signal))[0];
 }
 
-/** identifyAt for several points, reading each tile they fall in once. */
+/** Rejects when `signal` aborts. pmtiles cannot cancel a header read, so the read finishes into its
+ *  cache and only this caller stops waiting. */
+const unlessAborted = <T,>(work: Promise<T>, signal?: AbortSignal): Promise<T> => (!signal ? work
+  : new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    work.then(resolve, reject);
+  }));
+
+/** identifyAt for several points, reading each tile they fall in once. A tile that fails to load
+ *  answers nothing at its points rather than failing them all; an abort still rejects. */
 export async function identifyPoints(url: string, points: [number, number][], mapZoom: number,
-  source?: PMTiles): Promise<Hit[][]> {
+  source?: PMTiles, signal?: AbortSignal): Promise<Hit[][]> {
   const p = source ?? archiveFor(url);
-  const h = await p.getHeader();
+  const h = await unlessAborted(p.getHeader(), signal);
   // A raster archive has nothing to hit.
   if (h.tileType !== TileType.Mvt) return points.map(() => []);
   const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
@@ -84,7 +94,9 @@ export async function identifyPoints(url: string, points: [number, number][], ma
     const x = Math.floor(fx), y = Math.floor(fy);
     const key = `${x}/${y}`;
     if (!tiles.has(key)) {
-      tiles.set(key, p.getZxy(z, x, y).then((t) => (t ? new VectorTile(new Pbf(new Uint8Array(t.data))) : null)));
+      tiles.set(key, p.getZxy(z, x, y, signal)
+        .then((t) => (t ? new VectorTile(new Pbf(new Uint8Array(t.data))) : null))
+        .catch((e: unknown) => { if (signal?.aborted) throw e; return null; }));
     }
     const vt = await tiles.get(key);
     const out: Hit[] = [];
@@ -106,13 +118,15 @@ export async function identifyPoints(url: string, points: [number, number][], ma
 
 /** Whether an archive (a raster mosaic, say) has a tile at the point: its real coverage, which its
  *  bbox overstates wherever the mosaic is patchy. */
-export async function tileAt(url: string, lon: number, lat: number, source?: PMTiles): Promise<boolean> {
+export async function tileAt(url: string, lon: number, lat: number, source?: PMTiles,
+  signal?: AbortSignal): Promise<boolean> {
   const p = source ?? archiveFor(url);
-  const h = await p.getHeader();
+  const h = await unlessAborted(p.getHeader(), signal);
   const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
+  if (z < h.minZoom) return false;
   const n = 2 ** z;
   const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
-  return !!(await p.getZxy(z, Math.floor(at.x * n), Math.floor(at.y * n)));
+  return !!(await p.getZxy(z, Math.floor(at.x * n), Math.floor(at.y * n), signal));
 }
 
 // Keys and values that identify a row rather than describe it: a label made of them reads as noise

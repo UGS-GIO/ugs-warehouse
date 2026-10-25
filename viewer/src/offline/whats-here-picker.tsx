@@ -26,6 +26,7 @@ import * as queue from "./queue";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
 import { type Hit, hitLabel, identifyAt, identifyPoints, tileAt } from "./identify";
+import { limit, probe } from "./limit";
 import * as opfs from "./opfs";
 import { useOffline } from "./store";
 import {
@@ -33,30 +34,6 @@ import {
   saveBbox, scaleOf, type Target, toleranceM,
   type Unit, unitOf, whatsHere,
 } from "./whats-here";
-
-// Pricing walks each archive's directory; four at a time keeps a busy area from opening dozens
-// of range requests at once on a phone connection.
-// A finishing task hands its slot straight to the next waiter, so a caller arriving in between
-// cannot take it too and push the count past four.
-let running = 0;
-const waiting: (() => void)[] = [];
-async function limit<T>(fn: () => Promise<T>): Promise<T> {
-  if (running >= 4) await new Promise<void>((r) => waiting.push(r));
-  else running++;
-  try { return await fn(); } finally {
-    const next = waiting.shift();
-    if (next) next(); else running--;
-  }
-}
-
-// A long press asks every layer what is at the point, through the same queue. One read is a header
-// and a tile; one that takes longer than this is dropped from the list instead of holding it.
-const PROBE_MS = 8_000;
-const probe = <T,>(fn: () => Promise<T>): Promise<T> => limit(() => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timed out")), PROBE_MS); });
-  return Promise.race([fn(), late]).finally(() => clearTimeout(timer));
-});
 
 const BASEMAP = "__basemap__";
 
@@ -169,8 +146,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const identified = useQueries({
     queries: vectors.map((h) => ({
       queryKey: ["identify", h.save.url, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
-      queryFn: (): Promise<Hit[]> => probe(() => target.kind === "point"
-        ? identifyAt(h.save.url, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
+      queryFn: (): Promise<Hit[]> => probe((signal) => target.kind === "point"
+        ? identifyAt(h.save.url, target.lon, target.lat, target.zoom ?? 12, undefined, signal) : Promise.resolve([])),
       enabled: querying,
       staleTime: 5 * 60_000,
       retry: false,
@@ -180,8 +157,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const tiled = useQueries({
     queries: mosaics.map((h) => ({
       queryKey: ["tile-at", h.save.url, at],
-      queryFn: (): Promise<boolean> => probe(() => target.kind === "point"
-        ? tileAt(h.save.url, target.lon, target.lat) : Promise.resolve(true)),
+      queryFn: (): Promise<boolean> => probe((signal) => target.kind === "point"
+        ? tileAt(h.save.url, target.lon, target.lat, undefined, signal) : Promise.resolve(true)),
       enabled: querying,
       staleTime: 5 * 60_000,
       retry: false,
@@ -192,8 +169,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const unitHits = useQueries({
     queries: unitMaps.map((h) => ({
       queryKey: ["identify", h.unitsHref, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
-      queryFn: (): Promise<Hit[]> => probe(() => target.kind === "point" && h.unitsHref
-        ? identifyAt(h.unitsHref, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
+      queryFn: (): Promise<Hit[]> => probe((signal) => target.kind === "point" && h.unitsHref
+        ? identifyAt(h.unitsHref, target.lon, target.lat, target.zoom ?? 12, undefined, signal) : Promise.resolve([])),
       enabled: querying,
       staleTime: 5 * 60_000,
       retry: false,
@@ -494,7 +471,11 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   if (!isDesktop) {
     return (
       <Drawer.Root open modal={false} snapPoints={[HALF, FULL]} snapPoint={snap}
-        onSnapPointChange={(p) => { if (p === null) onClose(); else setSnap(p); }}
+        onSnapPointChange={(p, details) => {
+          if (p !== null) setSnap(p);
+          else if (save.isPending) details.cancel();   // as the dialog: a save in progress keeps it open
+          else onClose();
+        }}
         onOpenChange={(open, details) => {
           if (open) return;
           if (save.isPending) details.cancel(); else onClose();

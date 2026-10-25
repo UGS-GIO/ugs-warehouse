@@ -7,6 +7,7 @@ For each topic:
   4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
   5. Build PMTiles via tippecanoe (`sink_pmtiles`)
   6. Write STAC item (`sink_stac`)
+  7. Invalidate the layer's FeatureServer paths on the CDN (`core.cdn`), once the run is done
 
 Each sink is independent: failure in one does not corrupt the others.
 
@@ -20,7 +21,7 @@ import logging
 import sys
 from types import ModuleType
 
-from ..core import gcs, jobs, logs, stac
+from ..core import cdn, gcs, jobs, logs, stac
 from . import (
     fingerprint,
     related,
@@ -132,8 +133,18 @@ def _refresh_catalog(topic: Topic) -> bool:
         return False
 
 
+def _invalidate_cdn(stems: list[str]) -> int:
+    """Invalidate the changed layers on the CDN; 1 (logged) on failure."""
+    try:
+        cdn.invalidate_features(stems)
+        return 0
+    except Exception:
+        log.exception("CDN invalidation FAILED for %s", stems)
+        return 1
+
+
 def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
-               skip_unchanged: bool = True) -> int:
+               skip_unchanged: bool = True, changed: list[str] | None = None) -> int:
     """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
     transformed table → catalog refresh.
 
@@ -188,11 +199,13 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         rc = 1
     if not skip_refresh and not _refresh_catalog(topic):
         rc = 1
+    if data_sinks and changed is not None:
+        changed.append(topic.stem)
     return rc
 
 
 def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
-            skip_unchanged: bool = True) -> int:
+            skip_unchanged: bool = True, changed: list[str] | None = None) -> int:
     backend = _backend()
     # One DuckDB connection streams Postgres scan → transform → materialize (no pyarrow, no
     # Python-held rows; DuckDB spills under its memory cap). The sinks read the materialized table.
@@ -202,17 +215,18 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
     # The sinks read `view` through `con`, so the close waits until they're done. Without it the
     # Cloud Run handler leaks a connection — ATTACHed Postgres + materialized table — per push.
     try:
-        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh, skip_unchanged)
+        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh, skip_unchanged, changed)
     finally:
         con.close()
 
 
 def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
-                 skip_unchanged: bool = True) -> int:
+                 skip_unchanged: bool = True, changed: list[str] | None = None) -> int:
     """Ingest a single Topic. Top-level entry point for callers (CLI + service).
 
     `skip_unchanged` defaults on — an unchanged topic (fingerprint matches the published item) is
-    skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild."""
+    skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild.
+    A topic whose data sinks ran is appended to `changed`."""
     try:
         if dry_run:
             return _ingest(topic, dry_run=True, skip_refresh=skip_refresh,
@@ -220,7 +234,8 @@ def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False
         # Two publishes for one topic would both rewrite its artifacts. The second waits, then
         # runs; the fingerprint skip makes it cheap when nothing changed.
         with gcs.lease(f"_locks/ingest/{topic.fqn}", ttl_s=LOCK_TTL_S, wait_s=LOCK_WAIT_S):
-            return _ingest(topic, skip_refresh=skip_refresh, skip_unchanged=skip_unchanged)
+            return _ingest(topic, skip_refresh=skip_refresh, skip_unchanged=skip_unchanged,
+                           changed=changed)
     except Exception as e:
         # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
         # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)
@@ -277,6 +292,7 @@ def main() -> int:
     args = ap.parse_args()
     logs.setup()
     skip_unchanged = not args.force
+    changed: list[str] = []
 
     if args.all:
         backend = _backend()
@@ -294,13 +310,13 @@ def main() -> int:
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 def run_one(t: Topic) -> int:
                     return ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
-                                        skip_unchanged=skip_unchanged)
+                                        skip_unchanged=skip_unchanged, changed=changed)
                 results = list(executor.map(run_one, discovered))
             rc = 1 if any(r != 0 for r in results) else 0
         else:
             for t in discovered:
                 rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
-                                   skip_unchanged=skip_unchanged)
+                                   skip_unchanged=skip_unchanged, changed=changed)
 
         if not args.skip_refresh:
             try:
@@ -311,16 +327,18 @@ def main() -> int:
                 rc = 1
         if not args.dry_run:
             jobs.start_topic_thumbs()
+            rc |= _invalidate_cdn(changed)
         return rc
 
     topic = Topic.parse(args.topic)
     rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
-                      skip_unchanged=skip_unchanged)
+                      skip_unchanged=skip_unchanged, changed=changed)
     # Previews in minutes rather than at the nightly thumbnail run, which stays the backstop. Started
     # even after a failed sink, since the layer may still have been republished; the thumbnail job
     # works out whether anything it draws changed.
     if not args.dry_run:
         jobs.start_topic_thumbs([topic.stem])
+        rc |= _invalidate_cdn(changed)
     return rc
 
 

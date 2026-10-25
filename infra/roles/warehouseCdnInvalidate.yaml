@@ -1,0 +1,9 @@
+# Lets the ingest job invalidate a changed layer's FeatureServer paths on the maps-assets CDN.
+#
+# NOT Terraform-managed: the URL map is outside tofu. Apply needs Role Admin; command in
+# docs/DEPLOY.md §6, which also checks the BINDING; this file is the permission list.
+title: Warehouse CDN Invalidate
+description: Invalidate Cloud CDN paths on the maps-assets URL map. Applied out-of-band.
+stage: GA
+includedPermissions:
+  - compute.urlMaps.invalidateCache

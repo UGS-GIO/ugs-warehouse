@@ -205,3 +205,15 @@ def test_force_runs_every_sink_even_when_unchanged():
     archive.assert_called_once()
     pmtiles.assert_called_once()
     stac_write.assert_called_once()
+
+
+def test_a_rebuilt_topic_is_marked_for_cdn_invalidation():
+    changed: list[str] = []
+    _run_unchanged(skip_unchanged=False, changed=changed)
+    assert changed == ["enmin_ucrc_wells"]
+
+
+def test_an_unchanged_topic_is_not_marked_for_cdn_invalidation():
+    changed: list[str] = []
+    _run_unchanged(changed=changed)
+    assert changed == []

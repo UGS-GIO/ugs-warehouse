@@ -258,7 +258,10 @@ steps:
       # and /tmp is RAM on Cloud Run anyway), so peak RSS tracks the layer's geometry, not this cap.
       # TOPIC_THUMBS_JOB: after publishing a topic the ingest starts the thumbnail job for it
       # (core/jobs.py). Prod only; the review job leaves it unset so it starts nothing.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB@TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
+      # CDN_*: then it invalidates the changed layers' FeatureServer paths (core/cdn.py), also prod
+      # only. The 660s delay is the FeatureServer's CACHE_TTL (300s) twice plus items.json's max-age
+      # (60s): stale-while-revalidate on items.json can hand the server the old catalog once.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB@TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}@CDN_URL_MAP=ut-dnr-ugs-maps-prod-public-lb@CDN_PROJECT=ut-dnr-ugs-maps-prod@CDN_HOST=api.geology.utah.gov@CDN_INVALIDATE_DELAY_S=660
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600

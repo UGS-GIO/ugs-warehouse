@@ -184,7 +184,7 @@ def test_retire_invalidates_the_topic_after_the_refresh(fake_gcs, monkeypatch):
     _, refreshed = fake_gcs
     calls: list = []
     monkeypatch.setattr(retire.cdn, "mark", lambda ids: calls.append(("mark", ids, len(refreshed))))
-    monkeypatch.setattr(retire.cdn, "flush", lambda: calls.append(("flush", len(refreshed))))
+    monkeypatch.setattr(retire.cdn, "flush", lambda p: calls.append(("flush", len(refreshed))))
     assert retire.retire(TOPIC, assume_yes=True) == 0
     assert calls == [("mark", [TOPIC.stem], 0), ("flush", 1)]
 
@@ -192,7 +192,7 @@ def test_retire_invalidates_the_topic_after_the_refresh(fake_gcs, monkeypatch):
 def test_a_failed_invalidation_fails_the_retire_after_the_refresh(fake_gcs, monkeypatch):
     _, refreshed = fake_gcs
 
-    def fail():
+    def fail(problems):
         raise RuntimeError("403")
     monkeypatch.setattr(retire.cdn, "mark", lambda ids: None)
     monkeypatch.setattr(retire.cdn, "flush", fail)

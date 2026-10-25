@@ -7,7 +7,8 @@
 #
 # Env: REGION, CDN_URL_MAP, CDN_PROJECT, CDN_HOST.
 # SERVED_BUILD is the release the Dockerfile pins plus a hash of the Dockerfile, so an ENV edit
-# counts too. It is compared with the revision that serves `prod`, not the latest one.
+# counts too. It is compared with the revision that takes the most traffic, not the latest one or
+# the `prod` tag, so a rerun after a failed traffic move still sees the old build serving.
 set -euo pipefail
 service=$1 dockerfile=$2 version_arg=$3 clear_path=$4
 shift 4
@@ -16,13 +17,14 @@ version=$(sed -n "s/^ARG ${version_arg}=//p" "$dockerfile" | head -n1 | tr -d "\
 [ -n "$version" ] || { echo "no ${version_arg} in ${dockerfile}" >&2; exit 1; }
 build="${version}-$(sha256sum "$dockerfile" | cut -c1-8)"
 
-prod_revision=$(gcloud run services describe "$service" --region="$REGION" --format=json \
+serving_revision=$(gcloud run services describe "$service" --region="$REGION" --format=json \
   | python3 -c 'import json, sys
-print(next((t["revisionName"] for t in json.load(sys.stdin).get("status", {}).get("traffic", [])
-            if t.get("tag") == "prod" and t.get("revisionName")), ""))' || true)
+live = [t for t in json.load(sys.stdin).get("status", {}).get("traffic", [])
+        if t.get("percent", 0) > 0 and t.get("revisionName")]
+print(max(live, key=lambda t: t["percent"])["revisionName"] if live else "")' || true)
 served=""
-if [ -n "$prod_revision" ]; then
-  served=$(gcloud run revisions describe "$prod_revision" --region="$REGION" --format=json \
+if [ -n "$serving_revision" ]; then
+  served=$(gcloud run revisions describe "$serving_revision" --region="$REGION" --format=json \
     | python3 -c 'import json, sys
 env = json.load(sys.stdin)["spec"]["containers"][0].get("env", [])
 print(next((e.get("value", "") for e in env if e["name"] == "SERVED_BUILD"), ""))')

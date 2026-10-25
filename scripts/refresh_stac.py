@@ -10,16 +10,24 @@ write auth (ADC). Does NOT need WAREHOUSE_PUBLIC_BASE_URL — item asset hrefs a
 fixed at ingest time; the catalog only holds relative links to the items.
 
     python -m scripts.refresh_stac
+
+Then invalidates on the CDN the layers a job marked pending (core/cdn.py), e.g. an ops-console
+override edit. Exits 1 if that fails; the layers stay pending.
 """
 from __future__ import annotations
 
 import sys
 
-from ugs_warehouse.core import stac
+from ugs_warehouse.core import cdn, stac
 
 
 def main() -> int:
-    stac.refresh_catalog()
+    problems = stac.refresh_catalog()
+    try:
+        cdn.flush(problems)
+    except Exception as e:  # noqa: BLE001 — the catalog is refreshed; the layers stay pending
+        print(f"[refresh] CDN invalidation FAILED: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

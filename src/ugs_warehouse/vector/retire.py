@@ -127,10 +127,10 @@ def retire(topic: Topic, *, dry_run: bool = False, assume_yes: bool = False,
         return 0
 
     cdn.mark([stem])  # before the refresh, so a failed run leaves it for the next one to clear
-    stac.refresh_catalog()
+    problems = stac.refresh_catalog()
     print(f"[retire] {topic.fqn} retired")
     try:
-        cdn.flush()
+        cdn.flush(problems)
     except Exception as e:  # noqa: BLE001 — retired; only the CDN copy is left, and it stays pending
         print(f"[retire] CDN invalidation FAILED, {stem!r} stays pending: {e}", file=sys.stderr)
         return 1

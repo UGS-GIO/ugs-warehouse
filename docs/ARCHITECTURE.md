@@ -86,10 +86,12 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   1 MB or less also gets a `geojson` asset, gzipped on the CDN, for web maps that load the whole
   layer in one request.
 - **CDN invalidation.** The ingest marks a layer pending when its data or a field the FeatureServer
-  serves changed; restyle and retire mark the layers they touch (`core/cdn.py`). After its catalog
-  refresh, each run waits for the servers to reload, then invalidates `/` (the layer list) and
-  `/ugs/rest/services/{id}/*` for every pending layer, its own or one an earlier run left. A marker
-  goes only once its invalidation succeeded, so the CDN can keep these responses long.
+  serves changed; restyle, retire and an ops-console override edit mark the layers they touch
+  (`core/cdn.py`). After a catalog refresh, which runs one at a time under a lease, a run marks its
+  own layers again, waits for the servers to reload, then invalidates the layer list and services
+  directory and each pending layer's `/ugs/rest/services/{id}` paths, its own or ones an earlier
+  run left. A layer the refresh reported a problem for stays pending. A marker goes only once its
+  invalidation succeeded, so the CDN can keep these responses long.
 - **Layer collections.** The catalog refresh also publishes each topic as its own collection,
   `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
   item stays until the viewers read the collection.

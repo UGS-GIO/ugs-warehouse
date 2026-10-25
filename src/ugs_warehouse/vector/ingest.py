@@ -124,14 +124,13 @@ def _run_sink(topic: Topic, name: str, fn) -> bool:
         return False
 
 
-def _refresh_catalog(topic: Topic) -> bool:
-    """Rebuild the catalog; False (logged) on failure."""
+def _refresh_catalog(topic: Topic) -> list[str] | None:
+    """Rebuild the catalog; the problems it reported, or None (logged) on failure."""
     try:
-        stac.refresh_catalog()
-        return True
+        return stac.refresh_catalog()
     except Exception:
         log.exception("[%s] stac catalog refresh FAILED", topic.fqn, extra={"topic": topic.fqn})
-        return False
+        return None
 
 
 def _mark_pending(topic: Topic) -> bool:
@@ -144,14 +143,15 @@ def _mark_pending(topic: Topic) -> bool:
         return False
 
 
-def _flush_cdn(refreshed: bool) -> int:
-    """Invalidate the pending layers on the CDN; 1 (logged) on failure. Without a refresh the
-    servers would reload the old catalog, so the layers stay pending for the next run."""
-    if not refreshed:
+def _flush_cdn(problems: list[str] | None) -> int:
+    """Invalidate the pending layers on the CDN after a refresh that reported `problems`; 1 (logged)
+    on failure. Without a refresh (None) the servers would reload the old catalog, so the layers
+    stay pending for the next run."""
+    if problems is None:
         log.warning("catalog not refreshed; CDN invalidations stay pending")
         return 0
     try:
-        cdn.flush()
+        cdn.flush(problems)
         return 0
     except Exception:
         log.exception("CDN invalidation FAILED; the layers stay pending")
@@ -217,7 +217,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         rc = 1
     if (data_sinks or item_changed) and not _mark_pending(topic):
         rc = 1
-    if not skip_refresh and not _refresh_catalog(topic):
+    if not skip_refresh and _refresh_catalog(topic) is None:
         rc = 1
     return rc
 
@@ -333,35 +333,34 @@ def main() -> int:
                 rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
                                    skip_unchanged=skip_unchanged)
 
-        refreshed = False
+        problems = None
         if not args.skip_refresh:
             try:
                 log.info("running final STAC catalog refresh...")
-                stac.refresh_catalog()
-                refreshed = True
+                problems = stac.refresh_catalog()
             except Exception:
                 log.exception("final stac catalog refresh FAILED")
                 rc = 1
         if not args.dry_run:
             jobs.start_topic_thumbs()
-            rc |= _flush_cdn(refreshed)
+            rc |= _flush_cdn(problems)
         return rc
 
     topic = Topic.parse(args.topic)
     # The refresh runs here rather than in ingest_topic, so the CDN flush knows whether it did.
     rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=True,
                       skip_unchanged=skip_unchanged)
-    refreshed = False
+    problems = None
     if not args.dry_run and not args.skip_refresh:
-        refreshed = _refresh_catalog(topic)
-        if not refreshed:
+        problems = _refresh_catalog(topic)
+        if problems is None:
             rc = 1
     # Previews in minutes rather than at the nightly thumbnail run, which stays the backstop. Started
     # even after a failed sink, since the layer may still have been republished; the thumbnail job
     # works out whether anything it draws changed.
     if not args.dry_run:
         jobs.start_topic_thumbs([topic.stem])
-        rc |= _flush_cdn(refreshed)
+        rc |= _flush_cdn(problems)
     return rc
 
 

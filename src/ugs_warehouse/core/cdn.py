@@ -1,14 +1,17 @@
 """Invalidate a layer's ArcGIS service paths on the Cloud CDN after a job changes the layer.
 
 A job marks each changed item id pending (one small object per id), refreshes the catalog, then
-flushes: it waits for the servers to reload, invalidates every pending id, and drops a marker only
-once its invalidation succeeded. A run that dies, or a call that fails, leaves the ids for the next
-run's flush. Unset `CDN_URL_MAP` or `CDN_PROJECT` does nothing (local dev, tests, review).
+flushes: it marks its own ids again, waits for the servers to reload, invalidates every pending id,
+and drops a marker only once its invalidation succeeded. A run that dies, or a call that fails,
+leaves the ids for the next run's flush. Unset `CDN_URL_MAP` or `CDN_PROJECT` does nothing (local
+dev, tests, review).
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
+import threading
 import time
 import uuid
 
@@ -24,8 +27,9 @@ PENDING_PREFIX = os.environ.get("CDN_PENDING_PREFIX", "_cdn/pending")
 # The servers keep the catalog and open files in memory for their CACHE_TTL (300s). An invalidation
 # sent before they reload refills the CDN with the old layer.
 DELAY_S = int(os.environ.get("CDN_INVALIDATE_DELAY_S", "360"))
-# The FeatureServer's layer list. An exact path: it covers every query string, nothing below it.
-ROOT_PATH = "/"
+# The FeatureServer's layer list and services directory. Exact paths: each covers every query
+# string and nothing below it. Only a trailing `*` is a wildcard.
+LISTING_PATHS = ("/", SERVICES_PATH, f"{SERVICES_PATH}/")
 _API = "https://compute.googleapis.com/compute/v1/projects/{}/global/urlMaps/{}/invalidateCache"
 
 
@@ -33,9 +37,13 @@ def enabled() -> bool:
     return bool(URL_MAP and PROJECT) and not config.IS_REVIEW_CATALOG
 
 
-def feature_path(item_id: str) -> str:
-    """Every render, layer and query of the item's FeatureServers."""
-    return f"{SERVICES_PATH}/{item_id}/*"
+_own: set[str] = set()  # the ids this process marked and has not flushed
+_own_lock = threading.Lock()
+
+
+def feature_paths(item_id: str) -> tuple[str, str]:
+    """The item's services folder, and every render, layer and query of its FeatureServers."""
+    return f"{SERVICES_PATH}/{item_id}", f"{SERVICES_PATH}/{item_id}/*"
 
 
 def feature_fields(item: dict | None) -> dict | None:
@@ -60,25 +68,59 @@ def mark(item_ids: list[str]) -> None:
     for item_id in item_ids:
         gcs.put_bytes(uuid.uuid4().hex.encode(), f"{PENDING_PREFIX}/{item_id}",
                       content_type="text/plain")
+    with _own_lock:
+        _own.update(item_ids)
 
 
-def flush() -> list[str]:
-    """Invalidate every pending id after DELAY_S, then drop the markers. Call only after a catalog
-    refresh succeeded. Raises, keeping every marker, if any invalidation failed."""
+def _pending() -> dict[str, bytes]:
+    """{marker path: token}, skipping a marker another run dropped since the listing."""
+    out = {}
+    for path in gcs.list_paths(f"{PENDING_PREFIX}/"):
+        try:
+            out[path] = gcs.get_bytes(path)
+        except FileNotFoundError:
+            continue
+    return out
+
+
+def _named(item_id: str, problem: str) -> bool:
+    return re.search(rf"(?<![\w-]){re.escape(item_id)}(?![\w-])", problem) is not None
+
+
+def flush(problems: list[str] | None = None) -> list[str]:
+    """Invalidate every pending id after DELAY_S, then drop the markers; returns the ids. Call right
+    after a catalog refresh, with the problems it reported: an id a problem names stays pending.
+
+    This process's own ids are marked again first: another run's flush may have taken their
+    markers before this refresh published them. Raises, keeping every marker, if any invalidation
+    failed."""
     if not enabled():
         return []
-    pending = {p: gcs.get_bytes(p) for p in gcs.list_paths(f"{PENDING_PREFIX}/")}
-    if not pending:
+    with _own_lock:
+        own = sorted(_own)
+    mark(own)
+    pending = _pending()
+    ids = sorted({p.rsplit("/", 1)[-1] for p in pending} | set(own))
+    held = [i for i in ids if any(_named(i, p) for p in problems or ())]
+    if held:
+        log.warning("catalog refresh reported problems for %s; they stay pending", held)
+    ids = [i for i in ids if i not in held]
+    if not ids:
         return []
-    ids = sorted(p.rsplit("/", 1)[-1] for p in pending)
     time.sleep(DELAY_S)
-    invalidate([ROOT_PATH, *map(feature_path, ids)])
+    invalidate([*LISTING_PATHS, *(p for i in ids for p in feature_paths(i))])
     for path, token in pending.items():
+        if path.rsplit("/", 1)[-1] not in ids:
+            continue
+        # Dropped only if no run marked it again since our read. obstore has no conditional delete,
+        # so a mark in the moment between this read and the delete is lost.
         try:
-            if gcs.get_bytes(path) == token:  # not re-marked by a run that wrote after our read
+            if gcs.get_bytes(path) == token:
                 gcs.delete(path)
         except FileNotFoundError:
             pass
+    with _own_lock:
+        _own.difference_update(ids)
     return ids
 
 

@@ -17,7 +17,11 @@ from ugs_warehouse.vector.topics import Topic
 
 API = ("https://compute.googleapis.com/compute/v1/projects/maps-prod/global/urlMaps/"
        "public-lb/invalidateCache")
-QFAULTS = "/ugs/rest/services/hazards_qfaults/*"
+LISTINGS = ["/", "/ugs/rest/services", "/ugs/rest/services/"]
+
+
+def _layer(item_id: str) -> list[str]:
+    return [f"/ugs/rest/services/{item_id}", f"/ugs/rest/services/{item_id}/*"]
 
 
 @pytest.fixture
@@ -57,17 +61,49 @@ def _pending() -> list[str]:
     return sorted(p.rsplit("/", 1)[-1] for p in gcs.list_paths(f"{cdn.PENDING_PREFIX}/"))
 
 
-def test_flush_invalidates_the_layer_list_and_every_pending_layer(posts):
+def test_flush_invalidates_the_listings_and_every_pending_layer(posts):
     cdn.mark(["hazards_qfaults"])
-    assert cdn.flush() == ["hazards_qfaults"]
-    assert posts == [(API, {"path": "/", "host": "api.geology.utah.gov"}),
-                     (API, {"path": QFAULTS, "host": "api.geology.utah.gov"})]
+    assert cdn.flush([]) == ["hazards_qfaults"]
+    assert posts == [(API, {"path": p, "host": "api.geology.utah.gov"})
+                     for p in [*LISTINGS, *_layer("hazards_qfaults")]]
     assert _pending() == []
+
+
+def test_a_layer_a_refresh_problem_names_stays_pending(posts):
+    cdn.mark(["hazards_qfaults", "hazards_qfaults_zones"])
+    problems = ["duplicate item id hazards_qfaults: ugs-serving-topics/a, ugs-serving-topics/b"]
+    assert cdn.flush(problems) == ["hazards_qfaults_zones"]
+    assert _pending() == ["hazards_qfaults"]
+
+
+def test_a_flush_by_another_run_cannot_take_this_runs_layer(posts, monkeypatch):
+    """Another run's flush drops our marker before our refresh published the layer; our own flush
+    still invalidates it, after its own wait."""
+    cdn.mark(["hazards_qfaults"])
+    gcs.delete(f"{cdn.PENDING_PREFIX}/hazards_qfaults")
+    waited: list = []
+    monkeypatch.setattr(cdn.time, "sleep", lambda s: waited.append(_pending()))
+    assert cdn.flush([]) == ["hazards_qfaults"]
+    assert waited == [["hazards_qfaults"]]  # marked again before the wait
+    assert _paths(posts)[-2:] == _layer("hazards_qfaults")
+
+
+def test_a_marker_dropped_between_list_and_read_is_skipped(posts, monkeypatch):
+    cdn.mark(["gone"])
+    cdn._own.clear()
+    real = gcs.get_bytes
+
+    def get(path, **kw):
+        if path.endswith("/gone"):
+            raise FileNotFoundError(path)
+        return real(path, **kw)
+    monkeypatch.setattr(gcs, "get_bytes", get)
+    assert cdn.flush([]) == []
 
 
 def test_nothing_pending_sends_nothing(posts, monkeypatch):
     monkeypatch.setattr(cdn.time, "sleep", lambda s: pytest.fail("waited with nothing pending"))
-    assert cdn.flush() == []
+    assert cdn.flush([]) == []
     assert posts == []
 
 
@@ -89,15 +125,16 @@ def test_the_review_catalog_marks_and_sends_nothing(posts, monkeypatch):
 def test_a_failed_path_still_tries_the_rest_and_keeps_every_marker(posts):
     cdn.mark(["bad", "hazards_qfaults"])
     with pytest.raises(RuntimeError, match="bad"):
-        cdn.flush()
-    assert _paths(posts) == ["/", "/ugs/rest/services/bad/*", QFAULTS]
+        cdn.flush([])
+    assert _paths(posts) == [*LISTINGS, *_layer("bad"), *_layer("hazards_qfaults")]
     assert _pending() == ["bad", "hazards_qfaults"]
 
 
 def test_a_layer_marked_again_during_the_wait_stays_pending(posts, monkeypatch):
     cdn.mark(["hazards_qfaults"])
-    monkeypatch.setattr(cdn.time, "sleep", lambda s: cdn.mark(["hazards_qfaults"]))
-    cdn.flush()
+    monkeypatch.setattr(cdn.time, "sleep", lambda s: gcs.put_bytes(
+        b"later", f"{cdn.PENDING_PREFIX}/hazards_qfaults", content_type="text/plain"))
+    cdn.flush([])
     assert _pending() == ["hazards_qfaults"]
 
 
@@ -155,6 +192,7 @@ def _main(monkeypatch, *argv: str, refresh_fails: bool = False) -> tuple[int, li
         order.append("refresh")
         if refresh_fails:
             raise RuntimeError("refresh")
+        return []
 
     monkeypatch.setattr(ingest, "_backend", lambda: SimpleNamespace(discover=lambda: topics))
     monkeypatch.setattr(ingest, "ingest_topic", ingest_topic)
@@ -168,7 +206,7 @@ def test_a_failed_invalidation_fails_the_run_after_everything_else(posts, monkey
     rc, order = _main(monkeypatch, "--all")
     assert rc == 1
     assert order == ["refresh", "thumbs"]
-    assert _paths(posts) == ["/", "/ugs/rest/services/bad/*", QFAULTS]
+    assert _paths(posts) == [*LISTINGS, *_layer("bad"), *_layer("hazards_qfaults")]
 
 
 @pytest.mark.parametrize("argv, refresh_fails", [(("--all",), True),
@@ -187,8 +225,7 @@ def test_the_next_run_invalidates_what_an_earlier_run_left_pending(posts, monkey
     cdn.mark(["left_over"])
     rc, order = _main(monkeypatch, "--topic", "hazards.hazards_qfaults_current")
     assert rc == 0 and order == ["refresh", "thumbs"]
-    assert _paths(posts) == ["/", "/ugs/rest/services/hazards_qfaults/*",
-                             "/ugs/rest/services/left_over/*"]
+    assert _paths(posts) == [*LISTINGS, *_layer("hazards_qfaults"), *_layer("left_over")]
     assert _pending() == []
 
 
@@ -196,3 +233,35 @@ def test_a_dry_run_invalidates_nothing(posts, monkeypatch):
     cdn.mark(["left_over"])
     rc, order = _main(monkeypatch, "--topic", "hazards.hazards_qfaults_current", "--dry-run")
     assert rc == 0 and order == [] and posts == []
+
+
+def test_a_layer_the_ingest_refresh_reports_a_problem_for_stays_pending(posts):
+    cdn.mark(["hazards_qfaults"])
+    assert ingest._flush_cdn(["items that failed to load: hazards/hazards_qfaults"]) == 0
+    assert posts == [] and _pending() == ["hazards_qfaults"]
+
+
+def test_the_refresh_job_invalidates_what_is_pending(posts, monkeypatch):
+    from scripts import refresh_stac
+    cdn.mark(["hazards_qfaults"])
+    monkeypatch.setattr(stac, "refresh_catalog", lambda: [])
+    assert refresh_stac.main() == 0
+    assert _paths(posts) == [*LISTINGS, *_layer("hazards_qfaults")]
+
+
+# --- one catalog refresh at a time ----------------------------------------------------------
+
+def test_a_refresh_waits_for_a_live_one(monkeypatch):
+    import time
+    monkeypatch.setattr(stac, "REFRESH_LEASE_WAIT_S", 0)
+    gcs.put_bytes(str(time.time() + 60).encode(), stac.REFRESH_LEASE, content_type="text/plain")
+    monkeypatch.setattr(stac, "_refresh_catalog", lambda **k: pytest.fail("ran beside a live one"))
+    with pytest.raises(gcs.LeaseTimeout):
+        stac.refresh_catalog()
+
+
+def test_a_refresh_takes_over_from_one_that_died(monkeypatch):
+    import time
+    gcs.put_bytes(str(time.time() - 1).encode(), stac.REFRESH_LEASE, content_type="text/plain")
+    monkeypatch.setattr(stac, "_refresh_catalog", lambda **k: ["ran"])
+    assert stac.refresh_catalog() == ["ran"]

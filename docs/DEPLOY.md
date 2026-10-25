@@ -324,7 +324,7 @@ gcloud scheduler jobs create http warehouse-nightly \
   its paths (route rules in that file). `smoke-geoservices` fails until that route exists.
 - **CDN cache on deploy.** `scripts/deploy_geoservice.sh` sets `SERVED_BUILD` on each FeatureServer
   and ImageServer revision: the release its Dockerfile pins plus a hash of that Dockerfile. When it
-  differs from the revision that serves `prod`, the deploy clears the CDN cache of
+  differs from the revision that takes the most traffic, the deploy clears the CDN cache of
   `api.geology.utah.gov` (the FeatureServer `/*`, the ImageServer `/ugs/rest/services/*`); any
   other deploy keeps it. If the clear fails, the step prints the command and fails. A rerun of the
   build does not clear again, because the new revision already serves that build: run the printed
@@ -380,7 +380,7 @@ separate deploy such as review.
 | `INGEST_INLINE` | `0` | `1` ingests inside the handler (local dev, tests) |
 | `RETIRE_REQUESTED_BY` | none | Operator identity the ops console passes to a retire run |
 | `CDN_URL_MAP`, `CDN_PROJECT` | none | URL map whose CDN the ingest, restyle and retire jobs invalidate a changed layer's FeatureServer paths on (`core/cdn.py`); unset marks and invalidates nothing |
-| `CDN_HOST`, `CDN_SERVICES_PATH` | none, `/ugs/rest/services` | Host and path prefix of the invalidated paths, `{CDN_SERVICES_PATH}/{item id}/*` |
+| `CDN_HOST`, `CDN_SERVICES_PATH` | none, `/ugs/rest/services` | Host and path prefix of the invalidated paths: `/`, `{CDN_SERVICES_PATH}` and `{CDN_SERVICES_PATH}/` exactly (the layer list and services directory), and per item `{CDN_SERVICES_PATH}/{item id}` exactly plus `{CDN_SERVICES_PATH}/{item id}/*`. A path without a trailing `*` matches only itself, with any query string |
 | `CDN_INVALIDATE_DELAY_S` | `360` | Seconds to wait first, so the servers have reloaded the layer (`CACHE_TTL` 300 + 60) before the CDN refetches it |
 | `CDN_PENDING_PREFIX` | `_cdn/pending` | Where a job marks a layer pending, one object per item id, until its invalidation succeeds |
 

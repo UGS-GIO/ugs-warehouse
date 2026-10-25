@@ -831,7 +831,8 @@ steps:
       - --iap
       - --no-allow-unauthenticated
       - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
-      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
+      # CDN_*: an override edit to a serving topic marks it pending on the CDN (ops/overrides.py).
+      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}|CDN_URL_MAP=${_CDN_URL_MAP}|CDN_PROJECT=${_CDN_PROJECT}|CDN_HOST=${_CDN_HOST}
 
   # NB: Pub/Sub topic + push subscription + run.invoker are NOT wired here — they're one-time infra,
   # provisioned out-of-band by `just provision` (scripts/provision.sh). Builds only build + deploy

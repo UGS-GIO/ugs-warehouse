@@ -304,7 +304,7 @@ def cdn_calls(monkeypatch) -> list:
     monkeypatch.setattr(R.cdn, "URL_MAP", "lb")
     monkeypatch.setattr(R.cdn, "PROJECT", "p")
     monkeypatch.setattr(R.cdn, "mark", lambda ids: calls.append(("mark", ids)))
-    monkeypatch.setattr(R.cdn, "flush", lambda: calls.append("flush"))
+    monkeypatch.setattr(R.cdn, "flush", lambda p: calls.append("flush"))
     monkeypatch.setattr(R.stac, "refresh_catalog", lambda: calls.append("refresh"))
     return calls
 
@@ -326,7 +326,7 @@ def test_a_restyle_without_cdn_invalidation_refreshes_only_when_asked(monkeypatc
 def test_a_failed_cdn_invalidation_fails_the_restyle_after_its_writes(monkeypatch, cdn_calls):
     kicked = _styled_wells(monkeypatch)
 
-    def fail():
+    def fail(problems):
         raise RuntimeError("403")
     monkeypatch.setattr(R.cdn, "flush", fail)
     with pytest.raises(RuntimeError, match="invalidate the CDN"):

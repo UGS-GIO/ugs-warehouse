@@ -83,9 +83,10 @@ def _locate(item_id: str) -> tuple[str, bool] | None:
     from ugs_warehouse.core import config, gcs, stac
     from ugs_warehouse.pubs import sink_stac, source
 
-    topic = f"{config.STAC_PREFIX}/{_TOPICS}/{item_id}/{item_id}.json"
-    if gcs.exists(topic):
-        return topic, False
+    # A topic's item is one level down, under its schema: <topics>/<schema>/<id>/<id>.json.
+    for path in gcs.list_paths(f"{config.STAC_PREFIX}/{_TOPICS}/"):
+        if path.endswith(f"/{item_id}/{item_id}.json"):
+            return path, False
     for p in source.read_pubs():
         sid = (p.get("series_id") or "").strip()
         if not sid or sid.upper() != item_id.upper():
@@ -113,7 +114,7 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
     """Write (or clear) the override sidecar AND patch the live item.json in place so the edit shows
     immediately (no full reingest). The sidecar stays the durable source — a later reingest reapplies
     it. Clearing deletes the sidecar; the source value is restored on the next reingest."""
-    from ugs_warehouse.core import gcs, stac
+    from ugs_warehouse.core import cdn, gcs, stac
 
     doc: dict = {"source": "manual"}
     if (description or "").strip():
@@ -135,6 +136,11 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
         if target is not None:
             result["applied"] = stac.patch_published(
                 target[0], updates, target="fields" if target[1] else "properties")
+            # The FeatureServer serves a topic's title and description: the console's catalog
+            # refresh (views.overrides_save) then invalidates it on the CDN.
+            if result["applied"] and f"/{_TOPICS}/" in target[0]:
+                cdn.mark([item_id])
+                result["serving_topic"] = True
     except Exception as e:  # noqa: BLE001
         log.exception("override for %s saved but not applied live", item_id)
         result["apply_error"] = f"{type(e).__name__}: {e}"

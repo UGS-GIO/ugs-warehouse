@@ -228,8 +228,8 @@ def _publish(rebound_topics: list[str], refresh: bool) -> tuple[bool, Exception 
     error = _cdn_step(lambda: cdn.mark(rebound_topics)) if invalidating else None
     if not (refresh or invalidating):
         return False, error
-    stac.refresh_catalog()
-    return True, _cdn_step(cdn.flush) or error
+    problems = stac.refresh_catalog()
+    return True, _cdn_step(lambda: cdn.flush(problems)) or error
 
 
 def _cdn_step(fn) -> Exception | None:

@@ -225,3 +225,23 @@ def test_save_keeps_the_sidecar_and_reports_a_live_patch_that_failed(ov, store, 
 
     assert res["applied"] is False and res["apply_error"].startswith("Changed")
     assert _get(store, stac.override_object("OFR-1"))["description"] == "Hand text"
+
+
+TOPIC_OBJ = stac.item_object_path("ugs-serving-topics/hazards", "hazards_qfaults")
+
+
+def test_a_serving_topic_override_patches_its_item_and_marks_it_for_the_cdn(ov, store, monkeypatch):
+    from ugs_warehouse.core import cdn
+    monkeypatch.setattr(cdn, "URL_MAP", "lb")
+    monkeypatch.setattr(cdn, "PROJECT", "p")
+    _put(store, TOPIC_OBJ, {"id": "hazards_qfaults", "properties": {"title": "Old"}})
+    result = ov.save("hazards_qfaults", title="Quaternary faults")
+    assert result["applied"] and result["serving_topic"]
+    assert _get(store, TOPIC_OBJ)["properties"]["title"] == "Quaternary faults"
+    assert f"{cdn.PENDING_PREFIX}/hazards_qfaults" in store
+
+
+def test_a_publication_override_marks_nothing_for_the_cdn(ov, store):
+    _put(store, COLL_OBJ, {"id": "OFR-1"})
+    _put(store, SERIES_CATALOG, {})
+    assert "serving_topic" not in ov.save("OFR-1", title="T")

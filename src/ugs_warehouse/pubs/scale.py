@@ -37,7 +37,7 @@ def denominator(raw: str) -> int | None:
         return int(min(nums)) if len(nums) == len(ratios) else None
     if (n := _number(s)) is not None:
         return int(n) if n >= 1 else None   # 0.18…: a spreadsheet time of day, not a scale
-    if m := re.fullmatch(r"(\d+)\s*k", s):
+    if m := re.fullmatch(r"([1-9]\d*)\s*k", s):
         return int(m[1]) * 1000
     if not (m := _VERBAL.search(s)):
         return None

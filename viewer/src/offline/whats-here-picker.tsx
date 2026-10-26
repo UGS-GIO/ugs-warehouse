@@ -90,7 +90,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const index = useBasemapIndex();
 
   // Every drawable layer the app knows about, resolved exactly as the map resolves them.
-  const { candidates, scales, years } = useMemo(() => {
+  const { candidates, scales, years, details } = useMemo(() => {
     const seen = new Map<string, ItemRef>();
     for (const r of [...ctx.mapItems, ...ctx.allItems]) if (!seen.has(r.href)) seen.set(r.href, r);
     const refs = [...seen.values()];
@@ -101,12 +101,26 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       const parent = pub && byId.get(pub.id);
       return scaleDenominator(r) ?? (parent ? scaleDenominator(parent) : undefined);
     };
+    // A publication's map image goes by the publication's title; its own reads "Map plate".
+    const named = (r: ItemRef): ActiveLayer | null => {
+      const l = toLayer(r);
+      const pub = pubOfEntry(r.data);
+      return l && pub && !l.pmHref ? { ...l, title: pub.title } : l;
+    };
+    // What tells two same-named maps apart: the series id, the scale and the year.
+    const detailOf = (r: ItemRef) => {
+      const s = scaleOf(r);
+      return [pubOfEntry(r.data)?.id ?? r.data?.properties?.["ugs:series_id"], s && `1:${s.toLocaleString()}`, year(r)]
+        .filter(Boolean).join(" · ");
+    };
     return {
-      candidates: refs.map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null),
+      candidates: refs.map(named).filter((l): l is ActiveLayer => l !== null),
       scales: new Map(refs.map((r) => [idOf(r.href), scaleOf(r)])),
       years: new Map(refs.map((r) => [idOf(r.href), year(r)])),
+      details: new Map(refs.map((r) => [idOf(r.href), detailOf(r)])),
     };
   }, [ctx.mapItems, ctx.allItems]);
+  const detail = (h: Here) => details.get(h.id.replace(/#table$/, ""));
   const here = useMemo(() => whatsHere(candidates, target), [candidates, target]);
   const bbox = saveBbox(target);
   const quads = quadsFor(target);
@@ -305,6 +319,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
                 <span className="block break-words font-semibold" title={labels.join(" · ")}>{labels.slice(0, 3).join(" · ")}</span>
               )}
               <span className={`block break-words ${labels.length ? "text-xs text-muted-foreground" : ""}`} title={h.title}>{h.title}</span>
+              {detail(h) && <span className="block text-xs text-muted-foreground">{detail(h)}</span>}
             </span>
           </LayerSwitch>
           {found.length > 0 ? (
@@ -343,7 +358,10 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       <label key={h.id} className={`flex items-center gap-2 px-3 py-1.5 pointer-coarse:min-h-12 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
         <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" disabled={disabled}
           checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
-        <span className="min-w-0 flex-1 break-words" title={h.title}>{h.title}</span>
+        <span className="min-w-0 flex-1 break-words" title={h.title}>
+          {h.title}
+          {detail(h) && <span className="block text-xs text-muted-foreground">{detail(h)}</span>}
+        </span>
         {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes)

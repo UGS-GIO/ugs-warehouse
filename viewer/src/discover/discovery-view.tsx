@@ -84,8 +84,9 @@ export function DiscoveryView({
   const st = parseDiscovery(sp);
   const { q, geometry, layout, density, area } = st;
   const sort = effectiveSort(st);
-  const { collections: colls, categories: cats, types, formats } = st;
+  const { collections: colls, categories: cats, types, formats, scales } = st;
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
+  const scalesK = scales.join("|");
   const areaK = area ? area.join(",") : "";
 
   // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
@@ -95,7 +96,7 @@ export function DiscoveryView({
     // `to: "."` is the current route — a same-route search patch, and it is what types the reducer.
     navigate({ to: ".", replace, search: (prev) => ({ ...prev, ...next }) });
   };
-  const toggleList = (key: "collections" | "categories" | "types" | "formats", value: string) => {
+  const toggleList = (key: "collections" | "categories" | "types" | "formats" | "scales", value: string) => {
     const cur = st[key];
     patch({ [key]: cur.includes(value) ? cur.filter((k) => k !== value) : [...cur, value] });
   };
@@ -174,15 +175,15 @@ export function DiscoveryView({
   const facets = useMemo(() => extractFacets(queried), [queried]);
 
   const results = useMemo(() => {
-    let base = applyFacets(queried, { collections: colls, categories: cats, types, formats, geometry });
+    let base = applyFacets(queried, { collections: colls, categories: cats, types, formats, scales, geometry });
     if (area) base = filterByViewport(base, area);
     return sortItems(base, sort);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queried, collsK, catsK, typesK, formatsK, geometry, areaK, sort]);
+  }, [queried, collsK, catsK, typesK, formatsK, scalesK, geometry, areaK, sort]);
 
   // Reset paging whenever the working set changes (new query/filter/sort) — reference parity. The
   // listed keys are all serialized primitives (none referenced in the body), so no disable is needed.
-  useEffect(() => setVisible(PAGE), [q, collsK, catsK, typesK, formatsK, geometry, areaK, sort, itemsKey]);
+  useEffect(() => setVisible(PAGE), [q, collsK, catsK, typesK, formatsK, scalesK, geometry, areaK, sort, itemsKey]);
   const shown = results.slice(0, visible);
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
@@ -240,7 +241,8 @@ export function DiscoveryView({
   // Nothing searched or filtered yet: the category list shows above the newest results.
   const noSearch = !q.trim() && activeFilters === 0 && !itemSelected;
   const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
+  const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], scales: [], geometry: "all",
+    area: null });
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -334,6 +336,8 @@ export function DiscoveryView({
             onToggle={(k) => toggleList("types", k)} />
           <FacetSection label="Format" facets={facets.formats} selected={new Set(formats)}
             onToggle={(k) => toggleList("formats", k)} />
+          <FacetSection label="Scale" facets={facets.scales} selected={new Set(scales)}
+            onToggle={(k) => toggleList("scales", k)} />
           <GeometrySection facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
           <div className="px-3 py-4 text-2xs leading-snug text-muted-foreground">
             Filters narrow the cards and the map together. Hover a card to find it on the map.

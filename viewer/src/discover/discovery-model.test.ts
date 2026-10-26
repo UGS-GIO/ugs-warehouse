@@ -3,7 +3,7 @@ import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
   discoverable, effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, parseDiscovery,
-  sortItems, typeOf,
+  scaleBucket, sortItems, typeOf,
 } from "./discovery-model";
 import { hasFootprint } from "@/stac";
 import { rootIndexItems } from "@/stac/items-index";
@@ -236,7 +236,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     });
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
-      formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
+      formats: ["PDF", "COG"], scales: [], geometry: "has", sort: "newest", layout: "list",
       density: "compact", area: [-114, 37, -109, 42],
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
@@ -245,7 +245,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
   it("serializes a state back, dropping defaults (a pristine view is a clean URL)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
-      formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
+      formats: undefined, scale: undefined, geometry: undefined, sort: undefined, layout: undefined,
       density: undefined, area: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
@@ -268,6 +268,59 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(parseDiscovery({ q: "salt lake" }).q).toBe("salt lake");
     // A whitespace-only query is still dropped (it's not a real search).
     expect(discoveryPatch({ ...DEFAULT_DISCOVERY, q: "   " }).q).toBeUndefined();
+  });
+});
+
+describe("scaleBucket", () => {
+  const cases: [string, string][] = [
+    ["1:24,000", "24k"], ["1:24000", "24k"], ["1 : 24,000", "24k"], ["1:24 000", "24k"],
+    ["1 inch = 2,000 feet", "24k"],
+    ["1:62,500", "62k"], ["1:62500", "62k"], ["1:62.500", "62k"],
+    ["1:100,000", "100k"], ["100k", "100k"],
+    ["1 inch = 200 feet", "lt24k"], ["1\" = 20'", "lt24k"], ["1:2,400", "lt24k"], ["1:720", "lt24k"],
+    ["1:42,240", "mid"], ["1:50,000", "mid"], ["1:24,001", "mid"], ["1 inch = 1 mile", "mid"],
+    ["2 inches = 1 mile", "mid"], ["1:63,360", "mid"], ["1 inch = 8,000 feet", "mid"],
+    ["1:125,000", "100k-250k"], ["1 inch = 2 miles", "100k-250k"],
+    ["1:250,000", "250k"], ["1:500,000", "250k"], ["500k", "250k"], ["1:2,950,000", "250k"],
+    ["1 inch = 20 miles", "250k"],
+  ];
+  it.each(cases)("buckets %s as %s", (raw, key) => expect(scaleBucket(raw)).toBe(key));
+
+  it("reads 10,000+ feet to the inch as a mistyped ratio (these maps are 7.5' and 15' quadrangles)", () => {
+    expect(scaleBucket("1 inch = 24,000 feet")).toBe("24k");
+    expect(scaleBucket("1 inch = 62,500 feet")).toBe("62k");
+    expect(scaleBucket("1 inch = 500,000 feet")).toBe("250k");
+  });
+
+  it("takes the largest scale when a map lists two", () => {
+    expect(scaleBucket("1:24,000 & 1:48,000")).toBe("24k");
+    expect(scaleBucket("1: 48,000 and 1:24,000")).toBe("24k");
+  });
+
+  it("puts unreadable values in Other and leaves a missing scale out", () => {
+    for (const raw of ["0.180555556", "0.25", "2 inch = 250,00 feet", "1/4 inch = 1 foot"])
+      expect(scaleBucket(raw)).toBe("other");
+    expect(scaleBucket(undefined)).toBeUndefined();
+    expect(scaleBucket("  ")).toBeUndefined();
+  });
+
+  it("lists the facet large scale to small and filters on it", () => {
+    const pubs = [
+      item("p", "a", { "ugs:scale": "1:100,000" }), item("p", "b", { "ugs:scale": "1:24,000" }),
+      item("p", "c", { "ugs:scale": "1:24000" }), item("p", "d", { "ugs:scale": "1 inch = 200 feet" }),
+      item("p", "e"),
+    ];
+    expect(extractFacets(pubs).scales.map((f) => [f.key, f.n])).toEqual([["lt24k", 1], ["24k", 2], ["100k", 1]]);
+    const sel = { collections: [], types: [], scales: ["24k"], geometry: "all" as const };
+    expect(applyFacets(pubs, sel).map((it) => it.data?.id)).toEqual(["b", "c"]);
+  });
+
+  it("round-trips the scale selection through the URL", () => {
+    const s = parseDiscovery({ scale: "24k,62k" });
+    expect(s.scales).toEqual(["24k", "62k"]);
+    expect(discoveryPatch(s).scale).toBe("24k,62k");
+    expect(activeChips(s, { collection: String, category: String }).map((c) => c.label))
+      .toEqual(["1:24,000 · 7.5' quadrangle", "1:62,500 · 15' quadrangle"]);
   });
 });
 

@@ -5,7 +5,7 @@
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
 import { CATEGORIES, categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
-  title, typeOf } from "@/catalog/item-view";
+  scale, title, typeOf } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
 import { hasFootprint, pubOfEntry } from "@/stac";
@@ -22,7 +22,7 @@ export const discoverable = (items: ItemRef[]): ItemRef[] => items.filter((it) =
 export type FacetCount = { key: string; label: string; n: number };
 export type Facets = {
   collections: FacetCount[]; categories: FacetCount[]; types: FacetCount[];
-  formats: FacetCount[]; geometry: FacetCount[];
+  formats: FacetCount[]; scales: FacetCount[]; geometry: FacetCount[];
 };
 
 // Geometry facet keys (also the `geometry` field of a FacetSelection).
@@ -37,6 +37,56 @@ const bump = (m: Map<string, FacetCount>, key: string, label: string) => {
   if (cur) cur.n++;
   else m.set(key, { key, label, n: 1 });
 };
+
+// Scale facet buckets, large scale to small. The key is the URL value.
+export const SCALE_BUCKETS = [
+  { key: "lt24k", label: "Larger than 1:24,000" },
+  { key: "24k", label: "1:24,000 · 7.5' quadrangle" },
+  { key: "mid", label: "1:25,000 to 1:99,999" },
+  { key: "62k", label: "1:62,500 · 15' quadrangle" },
+  { key: "100k", label: "1:100,000 · 30'×60'" },
+  { key: "100k-250k", label: "1:100,001 to 1:249,999" },
+  { key: "250k", label: "1:250,000 and smaller" },
+  { key: "other", label: "Other" },
+] as const;
+export const scaleLabel = (key: string): string =>
+  SCALE_BUCKETS.find((b) => b.key === key)?.label ?? key;
+
+// "24,000", "24 000", "62.500" (dot-grouped) or "24000" → a number; anything else → NaN.
+const scaleNum = (s: string): number =>
+  (/^\d{1,3}([,. ]\d{3})+$/.test(s) ? Number(s.replace(/[,. ]/g, ""))
+    : /^\d+(\.\d+)?$/.test(s) ? Number(s) : NaN);
+
+const INCHES = { feet: 12, foot: 12, ft: 12, "'": 12, mile: 63360, miles: 63360 } as const;
+
+// The scale denominator of a free-text ugs:scale. Several ratios ("1:24,000 & 1:48,000") give the
+// largest scale. "1 inch = 24,000 feet" would be 1:288,000, but the maps that say so are 7.5'
+// quadrangles: 10,000 feet or more to the inch is read as a mistyped ratio.
+function scaleDenominator(raw: string): number {
+  const ratios = [...raw.matchAll(/\b1\s*:\s*(\d[\d,. ]*\d|\d)/g)].map((m) => scaleNum(m[1]));
+  if (ratios.length) return Math.min(...ratios);
+  const k = /^(\d+)\s*k$/i.exec(raw);
+  if (k) return Number(k[1]) * 1000;
+  const m = /^([\d.]+)\s*(?:inch(?:es)?|")\s*=\s*([\d,. ]+?)\s*(feet|foot|ft|'|miles?)$/i.exec(raw);
+  if (!m) return NaN;
+  const [inches, n, unit] = [scaleNum(m[1]), scaleNum(m[2]), m[3].toLowerCase() as keyof typeof INCHES];
+  if (INCHES[unit] === 12 && inches === 1 && n >= 10000) return n;
+  return (n * INCHES[unit]) / inches;
+}
+
+// The SCALE_BUCKETS key for a ugs:scale value; undefined when the item has none.
+export function scaleBucket(raw: string | undefined): string | undefined {
+  const s = raw?.trim();
+  if (!s) return undefined;
+  const d = scaleDenominator(s);
+  if (!(d > 0)) return "other";
+  if (d < 24000) return "lt24k";
+  if (d === 24000) return "24k";
+  if (d === 62500) return "62k";
+  if (d === 100000) return "100k";
+  if (d < 100000) return "mid";
+  return d < 250000 ? "100k-250k" : "250k";
+}
 
 // Counts for each facet group over the full loaded set (stable — counts don't shift as filters
 // toggle, so the rail reads like a table of contents rather than jumping around).
@@ -60,6 +110,7 @@ export function extractFacets(items: ItemRef[]): Facets {
   const cats = new Map<string, FacetCount>();
   const types = new Map<string, FacetCount>();
   const formats = new Map<string, FacetCount>();
+  const scales = new Map<string, number>();
   let has = 0;
   let none = 0;
   for (const it of items) {
@@ -70,6 +121,8 @@ export function extractFacets(items: ItemRef[]): Facets {
     const t = typeOf(it);
     if (t) bump(types, t, t);
     for (const f of formatsOf(it)) bump(formats, f, f);
+    const sb = scaleBucket(scale(it));
+    if (sb) scales.set(sb, (scales.get(sb) ?? 0) + 1);
     if (hasFootprint(it.data)) has++;
     else none++;
   }
@@ -79,6 +132,8 @@ export function extractFacets(items: ItemRef[]): Facets {
   return {
     collections: ranked(colls), categories: ranked(cats), types: ranked(types),
     formats: ranked(formats), geometry,
+    scales: SCALE_BUCKETS.filter((b) => scales.has(b.key))
+      .map((b) => ({ key: b.key, label: b.label, n: scales.get(b.key) ?? 0 })),
   };
 }
 
@@ -87,22 +142,26 @@ export type FacetSelection = {
   types: string[];
   categories?: string[]; // one home category per item (categorize)
   formats?: string[];    // an item matches if it carries ANY selected format
+  scales?: string[];     // SCALE_BUCKETS keys
   geometry: "all" | typeof GEOM_HAS | typeof GEOM_NONE;
 };
 
 // Keep items matching every active facet group — AND across the groups, OR within a multi-select
-// group (collections / categories / types / formats). An item without loaded data is never a result.
+// group (collections / categories / types / formats / scales). An item without loaded data is
+// never a result.
 export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
   const colls = new Set(sel.collections);
   const cats = new Set(sel.categories ?? []);
   const types = new Set(sel.types);
   const formats = new Set(sel.formats ?? []);
+  const scales = new Set(sel.scales ?? []);
   return items.filter((it) => {
     if (!it.data) return false;
     if (colls.size && !colls.has(it.collId)) return false;
     if (cats.size && !cats.has(categorize(it).key)) return false;
     if (types.size && !types.has(typeOf(it))) return false;
     if (formats.size && !formatsOf(it).some((f) => formats.has(f))) return false;
+    if (scales.size && !scales.has(scaleBucket(scale(it)) ?? "")) return false;
     if (sel.geometry === GEOM_HAS && !hasFootprint(it.data)) return false;
     if (sel.geometry === GEOM_NONE && hasFootprint(it.data)) return false;
     return true;
@@ -179,7 +238,7 @@ export const effectiveSort = (s: DiscoveryState): SortKey =>
 // link reproduces the view. These two pure functions are the validated boundary: parse the raw search
 // (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
 // drops defaults (so a pristine view stays a clean `/`). Namespaced keys — q / collections
-// / types / category / formats / geometry / sort / layout / density / area — never touch App's c/i/l/s.
+// / types / category / formats / scale / geometry / sort / layout / density / area — never touch App's c/i/l/s.
 export type Layout = "gallery" | "list";
 export type Density = "comfortable" | "compact";
 export type Area = [number, number, number, number];
@@ -190,6 +249,7 @@ export type DiscoveryState = {
   categories: string[];
   types: string[];
   formats: string[];
+  scales: string[];
   geometry: FacetSelection["geometry"];
   sort: SortKey;
   layout: Layout;
@@ -198,7 +258,7 @@ export type DiscoveryState = {
 };
 
 export const DEFAULT_DISCOVERY: DiscoveryState = {
-  q: "", collections: [], categories: [], types: [], formats: [],
+  q: "", collections: [], categories: [], types: [], formats: [], scales: [],
   geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
 };
 
@@ -228,6 +288,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     categories: toStringArray(sp.category),
     types: toStringArray(sp.types),
     formats: toStringArray(sp.formats),
+    scales: toStringArray(sp.scale),
     geometry: oneOf(sp.geometry, GEOMETRIES, "all"),
     sort: oneOf(sp.sort, SORT_KEYS, "relevance"),
     layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
@@ -250,6 +311,7 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     category: csv(s.categories),
     types: csv(s.types),
     formats: csv(s.formats),
+    scale: csv(s.scales),
     geometry: s.geometry === "all" ? undefined : s.geometry,
     sort: s.sort === "relevance" ? undefined : s.sort,
     layout: s.layout === "gallery" ? undefined : s.layout,
@@ -273,6 +335,8 @@ export function activeChips(s: DiscoveryState, labelFor: {
     chips.push({ id: `type:${key}`, label: key, patch: { types: s.types.filter((k) => k !== key) } });
   for (const key of s.formats)
     chips.push({ id: `fmt:${key}`, label: key, patch: { formats: s.formats.filter((k) => k !== key) } });
+  for (const key of s.scales)
+    chips.push({ id: `scale:${key}`, label: scaleLabel(key), patch: { scales: s.scales.filter((k) => k !== key) } });
   if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
   if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
   if (s.area) chips.push({ id: "area", label: "Map area", patch: { area: null } });

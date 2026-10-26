@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.17.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.16.1...v1.17.0) (2026-10-26)
+
+
+### Features
+
+* **pubs:** write each publication's scale as a number and read more scale forms ([#679](https://github.com/UGS-GIO/ugs-warehouse/issues/679)) ([59115c0](https://github.com/UGS-GIO/ugs-warehouse/commit/59115c01f60c8926fa3804e657e5a51ccbdc823c))
+* **viewer:** live, filter-aware Discover search with scannable cards and year and scale filters ([502fbcf](https://github.com/UGS-GIO/ugs-warehouse/commit/502fbcfb605e5aad72eb09ade05b65c900b78370))
+* **viewer:** rework What's here, add field tools and cancel all offline downloads ([#670](https://github.com/UGS-GIO/ugs-warehouse/issues/670)) ([b042731](https://github.com/UGS-GIO/ugs-warehouse/commit/b0427313f6f40ee7b90025270f9015b84d98b492))
+* **viewer:** search the map by quadrangle, coordinates, PLSS and geologic unit ([#671](https://github.com/UGS-GIO/ugs-warehouse/issues/671)) ([229ab62](https://github.com/UGS-GIO/ugs-warehouse/commit/229ab62ecc2f776ea97f267df99c77f723613977))
+
+
+### Bug Fixes
+
+* **deps:** build the FeatureServer from cloud-native-geoservices v0.7.1 ([#682](https://github.com/UGS-GIO/ugs-warehouse/issues/682)) ([7a0e32a](https://github.com/UGS-GIO/ugs-warehouse/commit/7a0e32a37882b99ee960587a22cfbdebd6ac7516))
+* **vector:** skip raw layer names as item titles and fall back to the style's title ([#675](https://github.com/UGS-GIO/ugs-warehouse/issues/675)) ([58eb122](https://github.com/UGS-GIO/ugs-warehouse/commit/58eb122c2c1dc32826c57e34d7647158a1363de6))
+* **viewer:** show the ImageServer link on a publication page with a COG ([#681](https://github.com/UGS-GIO/ugs-warehouse/issues/681)) ([b3a84a5](https://github.com/UGS-GIO/ugs-warehouse/commit/b3a84a5e57fba8e07945a24079fc98eff4be845d))
+
 ## [1.16.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.16.0...v1.16.1) (2026-10-25)
 
 

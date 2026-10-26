@@ -28,6 +28,7 @@ def test_scale_vocabulary_constants():
     ("500k", 500000), ("1 inch = 200 feet", 2400), ("1 inch = 2,000 feet", 24000),
     ("1 inch = 8,000 feet", 96000), ("1 inch = 1 mile", 63360), ("2 inches = 1 mile", 31680),
     ("1 inch = 2 miles", 126720), ("1 inch = 20 miles", 1267200), ("1 inch = 2.500 miles", 158400),
+    ("1 inch = 12.500 miles", 792000),
     ("1\" = 20'", 240), ("1\" =  40'", 480), ("1\" =  50'", 600), ("1\" = 3200'", 38400),
     ("1/4 inch = 1 foot", 48),
 ])

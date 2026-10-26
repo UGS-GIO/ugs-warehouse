@@ -7,17 +7,18 @@ import re
 SCALE_LABEL = {"24k": "1:24,000", "250k": "1:250,000", "500k": "1:500,000"}
 DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> finest tier (+ logged)
 
-_GROUPED = re.compile(r"[1-9]\d{0,2}(?:[, ]\d{3})+|[1-9]\d{1,2}\.\d{3}")   # 24,000 / 24 000 / 62.500
+_GROUPED = re.compile(r"[1-9]\d{0,2}(?:[, ]\d{3})+")   # 24,000 / 24 000
+_DOT_GROUPED = re.compile(r"[1-9]\d{1,2}\.\d{3}")      # 1:62.500, in a ratio only
 _INCHES_PER = {"feet": 12, "foot": 12, "ft": 12, "'": 12, "mile": 63_360, "miles": 63_360}
 _RATIO = re.compile(r"\b1\s*:\s*(\d[\d,. ]*\d|\d)")
 _VERBAL = re.compile(r"(?<![\d./])([\d./]+)\s*(?:inch(?:es)?|in\.?|\")\s*=\s*([\d,. ]+?)\s*"
                      r"(feet|foot|ft|'|miles?)(?!\w)")
 
 
-def _number(s: str) -> float | None:
-    """'24,000', '62.500' (dot-grouped), '1/4' or '2.5' as a number; None for anything else."""
+def _number(s: str, dot_grouped: bool = False) -> float | None:
+    """'24,000', '1/4' or '2.5' as a number, and '62.500' when dot_grouped; None for anything else."""
     s = s.strip()
-    if _GROUPED.fullmatch(s):
+    if _GROUPED.fullmatch(s) or (dot_grouped and _DOT_GROUPED.fullmatch(s)):
         return float(re.sub(r"[,. ]", "", s))
     if m := re.fullmatch(r"(\d+)/(\d+)", s):
         return int(m[1]) / int(m[2]) if int(m[2]) else None
@@ -32,7 +33,7 @@ def denominator(raw: str) -> int | None:
     or more to the inch is read as a mistyped ratio: the maps that say so are 7.5' quadrangles."""
     s = (raw or "").strip().lower()
     if ratios := _RATIO.findall(s):
-        nums = [n for r in ratios if (n := _number(r)) and n >= 1]
+        nums = [n for r in ratios if (n := _number(r, dot_grouped=True)) and n >= 1]
         return int(min(nums)) if len(nums) == len(ratios) else None
     if (n := _number(s)) is not None:
         return int(n) if n >= 1 else None   # 0.18…: a spreadsheet time of day, not a scale

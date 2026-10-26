@@ -276,6 +276,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
     _fill_title(item, topic.stem)
     stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
+    stac.attach_style_assets(item)  # each render as a complete MapLibre style asset
     stac.stamp_file_meta(item)  # the style and thumbnail, which other jobs write
     before = _published(topic)
     path = stac.write_item(item)

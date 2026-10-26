@@ -80,6 +80,7 @@ def refresh() -> int:
     global _cache
     with _lock:
         _cache = None
+    fetch_layers.cache_clear()
     return len(_manifest())
 
 
@@ -161,7 +162,28 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     return renders, style_asset
 
 
-GENERATED_STYLE_MIME = "application/vnd.mapbox.style+json"  # serving-topic style assets stay application/json
+GENERATED_STYLE_MIME = "application/vnd.mapbox.style+json"
+
+
+def source_layer(item: dict) -> str:
+    """The PMTiles source-layer name: the web-map `pmtiles` link's `pmtiles:layers`, else the id."""
+    for link in item.get("links") or []:
+        if link.get("rel") == "pmtiles" and (link.get("pmtiles:layers") or []):
+            return link["pmtiles:layers"][0]
+    return item["id"]
+
+
+def compose_style(layers: list[dict], pmtiles_url: str, source_layer: str, *, name: str = "",
+                  sprite: str = "", glyphs: str = "", source: str = "v") -> dict:
+    """A complete MapLibre style (spec v8): a ugs-styles fragment's layers drawn from the PMTiles at
+    `pmtiles_url`. The fragment is layers-only; this binds each layer to the source."""
+    style: dict = {"version": 8}
+    style.update({k: v for k, v in (("name", name), ("sprite", sprite), ("glyphs", glyphs)) if v})
+    style["sources"] = {source: {"type": "vector", "url": f"pmtiles://{pmtiles_url}"}}
+    # A background layer draws no source.
+    style["layers"] = [lyr if lyr.get("type") == "background"
+                       else {**lyr, "source": source, "source-layer": source_layer} for lyr in layers]
+    return style
 
 
 def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
@@ -186,7 +208,7 @@ def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict 
 # (one color, no categories) are NOT a classification → no classes.
 
 @lru_cache(maxsize=128)
-def _fetch_layers(style_url: str) -> tuple:
+def fetch_layers(style_url: str) -> tuple:
     """Fetch a GL style fragment's `layers` (cached per URL). () on any failure (graceful)."""
     try:
         with urllib.request.urlopen(style_url, timeout=10) as resp:  # noqa: S310 (https CDN)
@@ -328,7 +350,7 @@ def _class_name(label: str, i: int) -> str:
 def classification_classes(style_url: str) -> list[dict]:
     """`classification:classes` for the item's default vector render, or [] (graceful)."""
     classes: list[dict] = []
-    for i, (label, color) in enumerate(_derive_classes(_fetch_layers(style_url))):
+    for i, (label, color) in enumerate(_derive_classes(fetch_layers(style_url))):
         # `name` is the machine token (regex-constrained); `title` carries the human label.
         cls: dict = {"value": i, "name": _class_name(str(label), i), "title": str(label)}
         hint = _color_hint(color)

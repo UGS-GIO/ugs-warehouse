@@ -57,8 +57,10 @@ items, so they would only read as orphans. The viewer reads a datacube's stretch
 has no field for a vector GL `style_url`), and its v2.0.0 schema *requires* a `rel:"render"` image
 link whenever `web-map-links` is present — which we don't have, since we render client-side. So the
 block is a UGS-prefixed custom field (strict-STAC: prefixed extras are spec-legal; no schema to fail).
-The warehouse also emits a standard `roles:["style"]` asset pointing at the same URL so asset-walking
-clients (incl. STAC Browser) find the style without knowing our field.
+The warehouse also writes each render as a complete MapLibre style (the fragment bound to the layer's
+PMTiles) in the item's `styles/` folder, so a STAC client styles the layer without knowing our field:
+the default render is the `style` asset (roles `style` + `default`), the others `style_<render>`, all
+typed `application/vnd.mapbox.style+json`. A render's Esri drawing info is the `esri_<render>` asset.
 
 ## Fonts
 

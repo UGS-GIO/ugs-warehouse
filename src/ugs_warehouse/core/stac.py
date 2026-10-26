@@ -630,6 +630,45 @@ def attach_classification(item: dict) -> None:
         exts.append(CLASSIFICATION_EXT)
 
 
+def attach_style_assets(item: dict) -> None:
+    """Publish each ugs-styles render as a complete MapLibre style in the item's `styles/` folder and
+    register it: the default render as `style` (roles style + default), the others as
+    `style_<render>`. A render's Esri drawing info is registered as `esri_<render>`.
+
+    With no `default` render, the first render is the default. Call after attach_renders, before
+    write_item. Best-effort: a fragment that won't fetch keeps the
+    render out, and an item without a `pmtiles` asset gets nothing.
+    """
+    assets = item.get("assets") or {}
+    pmtiles = (assets.get("pmtiles") or {}).get("href")
+    layout = item.get("_collection_path") or item.get("collection")
+    if not pmtiles or not layout:
+        return
+    folder = item_object_path(layout, item["id"]).rsplit("/", 1)[0]
+    # A publication's generated style is already a complete style.
+    renders = {r: b for r, b in (doc_fields(item).get("ugs:renders") or {}).items()
+               if b.get("style_url") and not b.get("generated")}
+    first = "default" if "default" in renders else next(iter(renders), None)
+    for render, block in renders.items():
+        title = block.get("title") or render
+        if block.get("esri_url"):
+            assets[f"esri_{render}"] = {"href": block["esri_url"], "type": "application/json",
+                                        "roles": ["metadata"], "title": f"Esri drawing info: {title}"}
+        layers = list(styles.fetch_layers(block["style_url"]))
+        if not layers:
+            continue
+        style = styles.compose_style(layers, pmtiles, styles.source_layer(item), name=title,
+                                     sprite=block.get("sprite", ""), glyphs=block.get("glyphs", ""))
+        path = f"{folder}/styles/{render}.json"
+        gcs.put_bytes(json.dumps(style).encode(), path, content_type=styles.GENERATED_STYLE_MIME,
+                      cache_control=gcs.CACHE_CATALOG)
+        default = render == first
+        assets["style" if default else f"style_{render}"] = {
+            "href": config.public_url(path), "type": styles.GENERATED_STYLE_MIME,
+            "roles": ["style", "default"] if default else ["style"], "title": f"MapLibre style: {title}",
+            **({"description": USAGE_STYLE} if default else {})}
+
+
 def write_item(item: dict) -> str:
     """Serialize + upload an item. Overwritten per ingest → short-lived edge cache + SWR."""
     path = item_object_path(_layout_path(item), item["id"])

@@ -18,7 +18,7 @@ import { useViewCtx } from "@/app";
 import { Chevron } from "@/ui/chevron";
 import { toLayer } from "@/map/to-layer";
 import type { ItemRef } from "@/catalog/browse";
-import { scaleDenominator } from "@/catalog/item-view";
+import { scaleDenominator, year } from "@/catalog/item-view";
 import type { ActiveLayer } from "@/map/map-model";
 import { planArea } from "./area";
 import { planCogArea } from "./cog-area";
@@ -33,9 +33,8 @@ import * as opfs from "./opfs";
 import { useOffline } from "./store";
 import { formatCoords, pointLink } from "@/map/share-point";
 import {
-  caveatOf, type Here, isSaveable, isUnitLayer, mostDetailed, otherUnit, probeOf, quadsFor, REFERENCE_IDS, ringAround,
-  saveBbox, type Target, toleranceM,
-  type Unit, unitOf, whatsHere,
+  bestMap, caveatOf, type Here, isSaveable, isUnitLayer, mapOrder, otherUnit, probeOf, quadsFor,
+  REFERENCE_IDS, ringAround, saveBbox, type Target, tierOf, toleranceM, type Unit, unitOf, whatsHere,
 } from "./whats-here";
 
 const BASEMAP = "__basemap__";
@@ -91,13 +90,14 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const index = useBasemapIndex();
 
   // Every drawable layer the app knows about, resolved exactly as the map resolves them.
-  const { candidates, scales } = useMemo(() => {
+  const { candidates, scales, years } = useMemo(() => {
     const seen = new Map<string, ItemRef>();
     for (const r of [...ctx.mapItems, ...ctx.allItems]) if (!seen.has(r.href)) seen.set(r.href, r);
     const refs = [...seen.values()];
     return {
       candidates: refs.map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null),
       scales: new Map(refs.map((r) => [idOf(r.href), scaleDenominator(r)])),
+      years: new Map(refs.map((r) => [idOf(r.href), year(r)])),
     };
   }, [ctx.mapItems, ctx.allItems]);
   const here = useMemo(() => whatsHere(candidates, target), [candidates, target]);
@@ -186,15 +186,15 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     : probeOf(h) === "tile" ? !!tiled[mosaics.findIndex((m) => m.id === h.id)]?.data : probeOf(h) === "bbox");
   const checking = querying ? [...identified, ...tiled, ...unitHits].filter((q) => q.isPending).length : 0;
 
-  // The geologic unit under the point, from the most detailed map that names one, and the most
-  // detailed published map here, which may only be a scan.
+  // The geologic unit under the point, from the best map that names one, and the best published
+  // map here, which may only be a scan.
   // `read` turns one point's hits into the unit there, so the same source can be asked around it.
   type Source = Unit & { from: Here; url: string; read: (hits: Hit[]) => Unit | null };
   const unitMapRead = (h: Here) => (hits: Hit[]): Unit | null => {
     const u = topUnit(hits);
     return u ? { symbol: u.code, name: u.name, age: u.age, description: u.description, scale: scales.get(h.id) } : null;
   };
-  const unit = mostDetailed<Source>([
+  const unit = bestMap<Source & { year?: number | null }>([
     ...vectors.filter((h) => isUnitLayer(h.id)).flatMap((h) => {
       const read = (hits: Hit[]) => hits.map((x) => unitOf(h.id, x.properties)).find(Boolean) ?? null;
       const u = read(hitsOf(h));
@@ -205,7 +205,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       const u = read(unitHits[i]?.data ?? []);
       return u && h.unitsHref ? [{ ...u, from: h, url: h.unitsHref, read }] : [];
     }),
-  ]);
+  ].map((s) => ({ ...s, year: years.get(s.from.id) })));
   // Another unit within the map's own tolerance of the point: the contact may run under the finger.
   const tol = unit?.scale ? toleranceM(unit.scale) : 0;
   const near = useQuery({
@@ -219,8 +219,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     staleTime: 5 * 60_000,
     retry: false,
   });
-  const detailedMap = mostDetailed(here.filter((h) => h.group === "map" && isThere(h))
-    .map((h) => ({ h, scale: scales.get(h.id) })).filter((m) => m.scale));
+  const detailedMap = bestMap(here.filter((h) => h.group === "map" && isThere(h))
+    .map((h) => ({ h, scale: scales.get(h.id), year: years.get(h.id) })).filter((m) => m.scale));
 
   // Ticks are set when the picker opens, possibly before the store's first read; what turns out to
   // be saved whole already is left out here rather than queued again.
@@ -270,8 +270,9 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     : querying ? here.filter(isThere)
     : here.filter((h) => h.group !== "table");   // a table is only something to save
   // What the geology card shows is not listed again below it.
-  const better = detailedMap && detailedMap.h.id !== unit?.from.id
-    && (detailedMap.scale ?? Infinity) < (unit?.scale ?? Infinity) ? detailedMap : undefined;
+  const source = { scale: unit?.scale, year: unit?.year };
+  const better = detailedMap && detailedMap.h.id !== unit?.from.id && mapOrder(detailedMap, source) < 0
+    ? detailedMap : undefined;
   const inCard = new Set(querying ? [unit?.from.id, better?.h.id] : []);
   const rows = listed.filter((h) => !inCard.has(h.id));
   const groups = [
@@ -356,7 +357,10 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       className={`flex w-full items-center gap-3 rounded-lg text-left ${betterFirst
         ? "mt-1 bg-primary/10 p-2" : "mt-2 border-t border-border pt-2"}`}>
       <span className="min-w-0 flex-1">
-        <span className="block text-xs font-semibold text-primary">Better source · more detailed map · {ratio(better.scale)}</span>
+        <span className="block text-xs font-semibold text-primary">
+          Better source · {tierOf(better.scale) < tierOf(source.scale) ? "more detailed" : "newer"} map
+          · {[ratio(better.scale), better.year].filter(Boolean).join(" · ")}
+        </span>
         <span className="block break-words text-sm" title={better.h.title}>{better.h.title}</span>
       </span>
     </LayerSwitch>

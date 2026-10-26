@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
 import type { Bbox } from "./guards";
 import {
-  caveatOf, mostDetailed, otherUnit, probeOf, quadsFor, ringAround, saveBbox, type Target, toleranceM, unitOf,
+  bestMap, caveatOf, mapOrder, otherUnit, probeOf, quadsFor, ringAround, saveBbox, type Target, toleranceM, unitOf,
   whatsHere,
 } from "./whats-here";
 
@@ -81,9 +81,18 @@ describe("geology", () => {
     expect(unitOf("constructor", {})).toBeNull();
   });
 
-  it("prefers the most detailed scale, unknown scales last", () => {
-    expect(mostDetailed([{ id: "a", scale: 500000 }, { id: "b" }, { id: "c", scale: 24000 }])?.id).toBe("c");
-    expect(mostDetailed([])).toBeUndefined();
+  it("prefers the most detailed scale tier, unknown scales last", () => {
+    expect(bestMap([{ id: "a", scale: 500000 }, { id: "b" }, { id: "c", scale: 24000 }])?.id).toBe("c");
+    expect(bestMap([])).toBeUndefined();
+  });
+
+  it("prefers the newer map within a scale tier, not an older finer one", () => {
+    const old = { id: "1975", scale: 12000, year: 1975 };
+    const recent = { id: "2015", scale: 24000, year: 2015 };
+    expect(bestMap([old, recent])?.id).toBe("2015");
+    expect(bestMap([{ id: "62k", scale: 62500, year: 2020 }, old])?.id).toBe("1975");
+    expect(mapOrder(recent, { scale: 24000, year: 1987 })).toBeLessThan(0);
+    expect(mapOrder({ scale: 24000, year: 1987 }, { scale: 24000, year: 1987 })).toBe(0);
   });
 
   it("warns by scale: nothing at 1:24,000, ±50 m at 1:100,000, generalized at 1:500,000", () => {

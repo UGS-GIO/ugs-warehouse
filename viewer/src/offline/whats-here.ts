@@ -133,6 +133,18 @@ export function ringAround(lon: number, lat: number, r: number): [number, number
 export const otherUnit = (at: Unit, around: (Unit | null | undefined)[]): Unit | undefined =>
   around.find((u): u is Unit => !!u && u.symbol !== at.symbol);
 
-/** The most detailed of several: the smallest scale denominator, unknown scales last. */
-export const mostDetailed = <T extends { scale?: number }>(xs: T[]): T | undefined =>
-  xs.reduce<T | undefined>((a, x) => (!a || (x.scale ?? Infinity) < (a.scale ?? Infinity) ? x : a), undefined);
+// Scales a reader treats as the same detail (7.5', 15', 30'x60' quads); within one, the newer map wins.
+const TIERS = [24000, 62500, 100000];
+export const tierOf = (scale?: number): number => {
+  if (!scale) return TIERS.length + 1;
+  const i = TIERS.findIndex((t) => scale <= t);
+  return i < 0 ? TIERS.length : i;
+};
+
+type Ranked = { scale?: number; year?: number | null };
+/** Best map first: the more detailed scale tier, then the newer map, then the finer scale. */
+export const mapOrder = (a: Ranked, b: Ranked): number =>
+  tierOf(a.scale) - tierOf(b.scale) || (b.year ?? 0) - (a.year ?? 0) || (a.scale ?? Infinity) - (b.scale ?? Infinity);
+
+/** The best of several maps by mapOrder. */
+export const bestMap = <T extends Ranked>(xs: T[]): T | undefined => [...xs].sort(mapOrder)[0];

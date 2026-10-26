@@ -26,7 +26,7 @@ export function PageHero({ eyebrow, title, lead, children }: {
           </p>
         )}
         <h1 className="font-display text-3xl tracking-tight drop-shadow-md sm:text-4xl">{title}</h1>
-        {lead && <p className="mt-3 max-w-[75ch] text-base drop-shadow-md">{lead}</p>}
+        {lead && <p className="mt-3 max-w-lead text-base drop-shadow-md">{lead}</p>}
         {children && <div className="mt-4">{children}</div>}
       </div>
     </header>

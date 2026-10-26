@@ -25,8 +25,6 @@ export function useMapItems(view: View, leafColls: CollectionSummary[], layerCol
   // How much of the map's data has loaded. The fallback count is what federated layers depend on:
   // they arrive only that way, and always after the indexes.
   const mapLoadKey = `root:${root.data?.count ?? 0}|` + indexed.loadKey;
-  // Still streaming, so Discover's category index doesn't show counts that are still climbing.
-  const mapItemsLoading = mapColls.length > 0 && (root.isLoading || indexed.isLoading);
   // Opened with no layers chosen, the Map shows the ones saved for offline, so a layer saved from
   // its page is on when you come back without a connection. Choosing layers (or none) takes over.
   const offline = useOffline();
@@ -49,5 +47,5 @@ export function useMapItems(view: View, leafColls: CollectionSummary[], layerCol
   }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mapLoadKey]);
-  return { mapItems, mapLoadKey, mapItemsLoading, layerIds, layerRows };
+  return { mapItems, mapLoadKey, layerIds, layerRows };
 }

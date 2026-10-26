@@ -416,12 +416,14 @@ const IMAGE_SERVED_COLLECTIONS = new Set([
 
 // Whether the ImageServer serves this item: one in those collections with a GeoTIFF (or untyped)
 // asset keyed visual, cog or data, the server's ASSET_KEYS.
-// An index entry has no `collection`; its self link sits under its collection's folder.
-const collectionIdOf = (d: StacDoc | undefined): string =>
-  d?.collection ?? collKeyOf(d?.links?.find((l) => l.rel === "self")?.href)?.split("/").pop() ?? "";
+// An index entry has no `collection`; its self link sits under its collection's folder. A
+// publication Collection has neither, so the caller passes the key it is listed under.
+const collectionIdOf = (d: StacDoc | undefined, listedUnder?: string): string =>
+  (d?.collection ?? listedUnder ?? collKeyOf(d?.links?.find((l) => l.rel === "self")?.href))
+    ?.split("/").pop() ?? "";
 
-export const isImageServed = (d: StacDoc | undefined): boolean =>
-  IMAGE_SERVED_COLLECTIONS.has(collectionIdOf(d))
+export const isImageServed = (d: StacDoc | undefined, listedUnder?: string): boolean =>
+  IMAGE_SERVED_COLLECTIONS.has(collectionIdOf(d, listedUnder))
   && ["visual", "cog", "data"].some((k) => {
     const a = d?.assets?.[k];
     return a && (a.type || "image/tiff").startsWith("image/tiff");

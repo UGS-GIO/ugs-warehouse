@@ -2,11 +2,17 @@
 // DuckDB path (download.ts) and the light hyparquet path (parquet-lite.ts), and kept apart from
 // both so the light path does not load the export code.
 
+import { union } from "@/lib/bbox";
+
 export const GEOM_NAMES = ["geom", "geometry", "wkb_geometry"];
 
 // The plain numeric bbox covering columns the warehouse writes (sink_archive). Read for row→map
 // zoom, hidden from the displayed table (noise) like the geometry column.
 export const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
+
+/** The extent of rows carrying the bbox columns, or undefined when none has one. */
+export const unionBbox = (rows: Record<string, unknown>[]): [number, number, number, number] | undefined =>
+  union(rows.map((r) => BBOX_COLS.map((c) => Number(r[c]))).filter((b) => b.every(Number.isFinite)));
 
 // The same extent as GeoParquet 1.1's covering struct, for spec-aware readers. Hidden and not
 // exported: it repeats the geometry's bounds.

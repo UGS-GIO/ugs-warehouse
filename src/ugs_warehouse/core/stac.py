@@ -120,6 +120,12 @@ def prettify(stem: str) -> str:
     return re.sub(r"[_\-]+", " ", stem).strip().title()
 
 
+def human_title(title: str | None) -> str | None:
+    """`title`, or None when it is a raw layer name such as `geolunits_500k`."""
+    title = (title or "").strip()
+    return None if not title or re.fullmatch(r"[a-z0-9_]+", title) else title
+
+
 def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     """A web-map-links `pmtiles` link so STAC Browser draws the vector layer.
 
@@ -872,8 +878,9 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 # (title, date, series/type/topic/scale/author, keywords for search). The long
 # `description`/citation is intentionally omitted; it loads with the full item on open.
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
-                    "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
-                    "ugs:layer", "ugs:layer_kind", "ugs:row_count", "ugs:volume", "keywords")
+                    "ugs:topic", "ugs:scale", "ugs:scale_denominator", "ugs:author", "ugs:county",
+                    "ugs:dbt_schema", "ugs:layer", "ugs:layer_kind", "ugs:row_count", "ugs:volume",
+                    "keywords")
 # `ugs:layer_kind` values for Items whose geometry is their publication's area of interest, not a
 # place on the map. The index leaves their bbox out and the viewer keeps them off the map.
 NON_MAPPABLE_KINDS = ("table", "supporting")

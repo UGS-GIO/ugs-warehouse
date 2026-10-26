@@ -11,6 +11,9 @@ import { type Flavor, GLYPHS, protomapsStyle } from "./basemap-style";
 import { basemapProtocol } from "@/offline/basemap-protocol";
 import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
+import { withOpacity } from "./layer-opacity";
+import { askHeading, lastFix, setFix, useFix, useHeading } from "./location";
+import { formatCoords, pinOf } from "./share-point";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { hasFootprint, type StacDoc } from "@/stac";
 import { useCogBoxes } from "@/stac/cog-extents";
@@ -24,11 +27,14 @@ import { type ActiveLayer, type Footprint, mapDefaultLayers, orderedSublayerIds,
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
-import { to2d } from "@/lib/bbox";
+import { to2d, union } from "@/lib/bbox";
 import { RelatedLinks } from "./related-links";
 import { type IdentifyResult, identifyAt, identifyClick } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
 import { IdentifyCard } from "./unit-card";
+
+// The outline drawn around a hovered footprint or a picked quad.
+const HIGHLIGHT_LINE = { "line-color": "#d1491c", "line-width": 2.5 };
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -102,13 +108,6 @@ export type OpenRelated = { itemHref: string; relatedKey: string; title: string;
 export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo;
   identify?: IdentifyResult };
 
-// Union of bboxes → [w,s,e,n], or null.
-function unionBbox(bs: number[][]): [number, number, number, number] | null {
-  if (!bs.length) return null;
-  return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])),
-          Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
-}
-
 // A [w,s,e,n] bbox → a closed rectangle ring (GeoJSON Polygon coordinates).
 const bboxRing = (b: number[]): GeoJSON.Position[][] =>
   [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]];
@@ -126,14 +125,35 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
   };
 }
 
+// Which way the phone points: a soft wedge from the blue dot, drawn north-up and turned by the marker.
+const HeadingCone = () => (
+  <svg aria-hidden="true" width="64" height="64" viewBox="0 0 64 64" className="pointer-events-none">
+    <defs>
+      <linearGradient id="heading-cone" x1="0" y1="1" x2="0" y2="0">
+        <stop offset="0" stopColor="#1da1f2" stopOpacity="0.55" /><stop offset="1" stopColor="#1da1f2" stopOpacity="0" />
+      </linearGradient>
+    </defs>
+    <path d="M32 32 L18 4 A30 30 0 0 1 46 4 Z" fill="url(#heading-cone)" />
+  </svg>
+);
+
+const PinGlyph = () => (
+  <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
+    <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
+    <circle cx="12" cy="11.5" r="4" fill="white" />
+  </svg>
+);
+
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search,
-  showPin = false, onPickAt }: {
+  showPin = false, onPickAt, pickedAt }: {
   item?: StacDoc; layers: ActiveLayer[];
   search?: ReactNode;   // drawn in the top-left corner (the desktop map search)
   showPin?: boolean;    // the map view shows the search's place pin; Discover's map does not
-  // "What's here" at a point: a long press on phones, a right-click on desktop. Optional.
+  // "What's here" at a point: a long press on phones, a right-click on desktop, or the device's
+  // location. Optional. `pickedAt` is the point it is open on, pinned until it closes.
   onPickAt?: (lon: number, lat: number, zoom: number) => void;
+  pickedAt?: { lng: number; lat: number } | null;
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -174,6 +194,31 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     timer?: ReturnType<typeof setTimeout>; x: number; y: number; lng?: number; lat?: number; armed?: boolean;
   } | null>(null);
   const cancelPress = () => { clearTimeout(press.current?.timer); press.current = null; };
+  // On a phone the picker's sheet covers the lower half, so the point moves up into the map above it.
+  const pickAt = (lng: number, lat: number, zoom = mapRef.current?.getZoom() ?? 12) => {
+    const m = mapRef.current;
+    if (m && !isDesktop) m.easeTo({ center: [lng, lat], zoom, offset: [0, -0.28 * m.getContainer().clientHeight], duration: 400 });
+    onPickAt?.(lng, lat, zoom);
+  };
+  // "What's under me": the same picker at the device's location, from the geolocate control's own
+  // watch. With the watch off it is started, and the picker opens on its first fix.
+  const geolocate = useRef<maplibregl.GeolocateControl>(null);
+  const awaitingFix = useRef(false);
+  const fix = useFix();
+  const heading = useHeading();
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const underZoom = () => Math.max(mapRef.current?.getZoom() ?? 0, 14);
+  const underMe = () => {
+    setGpsError(null);
+    void askHeading();
+    if (!navigator.geolocation) return setGpsError("This device can't share its location.");
+    const button = mapRef.current?.getContainer().querySelector(".maplibregl-ctrl-geolocate");
+    const watching = !!button && /geolocate-(active|background)(?!-error)/.test(button.className);
+    const f = lastFix();
+    if (watching && f) return pickAt(f.lng, f.lat, underZoom());
+    awaitingFix.current = true;
+    if (!button?.className.includes("geolocate-waiting")) geolocate.current?.trigger();
+  };
   const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
   // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
   // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
@@ -187,6 +232,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const highlight = validBbox(highlightBbox);
   // Report the viewport bbox on load + after every move: for Discover's "Search this area", and
   // for the map view's "Save basemap" panel, which downloads the quads in view.
+  const boundsSent = useRef(false);
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
     if (!m || !onBoundsChange) return;
@@ -242,7 +288,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
+  const fitBox = union(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
@@ -360,8 +406,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   };
 
   return (
+    // The geolocate button is maplibre's; a tap on it is where iOS lets the compass be asked for.
+    <div className="contents" onClickCapture={(e) => {
+      if (e.target instanceof Element && e.target.closest(".maplibregl-ctrl-geolocate")) void askHeading();
+    }}>
     <MapGL
-      ref={mapRef}
+      // Registered for outside camera moves as soon as the map exists: load waits for every tile.
+      ref={(m) => { mapRef.current = m; if (m) setMapTarget(mapRef); }}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
       mapStyle={basemapStyle.data ?? BLANK_STYLE}
@@ -373,10 +424,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseMove={onHover}
       onLoad={() => {
         setMapLoaded(true); reportBounds();
-        setMapTarget(mapRef);
+        const shared = showPin ? pinOf(location.search) : null;
+        if (shared) setPin({ ...shared, label: formatCoords(shared.lat, shared.lng) });
         const focus = takeFocus();
         if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
+      // Bounds from the first frame, so "Search this area" works before every tile has loaded.
+      onRender={() => { if (!boundsSent.current && mapRef.current) { boundsSent.current = true; reportBounds(); } }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onRotate={trackNorth}
       onPitch={trackNorth}
@@ -397,14 +451,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         // Swallow the click the browser synthesises after a touch: it would land on the picker
         // that just opened under the finger and toggle whichever row is there.
         e.originalEvent.preventDefault();
-        onPickAt?.(p.lng, p.lat, mapRef.current?.getZoom() ?? 12);
+        pickAt(p.lng, p.lat);
       }}
       onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
       onMouseUp={(e) => {
         if (e.originalEvent.button !== 2 || !press.current) return;
         const still = !moved(e.point.x, e.point.y);
         press.current = null;
-        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat, mapRef.current?.getZoom() ?? 12);
+        if (still) pickAt(e.lngLat.lng, e.lngLat.lat);
       }}
     >
       {search && <MapControl position="top-left">{search}</MapControl>}
@@ -416,17 +470,18 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               <button type="button" aria-label="Remove the pin" onClick={() => setPin(null)}
                 className="text-muted-foreground hover:text-foreground">×</button>
             </span>
-            <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
-              <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
-              <circle cx="12" cy="11.5" r="4" fill="white" />
-            </svg>
+            <PinGlyph />
           </div>
         </Marker>
+      )}
+      {pickedAt && (
+        <Marker longitude={pickedAt.lng} latitude={pickedAt.lat} anchor="bottom"><PinGlyph /></Marker>
       )}
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
-        {footprints.length > 0 && (
+        {/* Desktop only: on a phone a rectangle per item is clutter, not a way in. */}
+        {isDesktop && footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"
             className="cursor-pointer select-none rounded-md border border-input bg-card/95 px-2 py-1 text-foreground shadow hover:bg-hover data-[pressed]:bg-primary data-[pressed]:text-primary-foreground">
@@ -443,8 +498,46 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       <MapControl position="top-right">
         <BasemapMenu value={basemap} onValueChange={setBasemap} items={BASEMAP_IDS} thumbs={BASEMAP_THUMBS} />
       </MapControl>
-      <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
-        positionOptions={{ enableHighAccuracy: true }} />
+      {onPickAt && (
+        <MapControl position={isDesktop ? "top-right" : "bottom-right"} className="flex flex-row-reverse items-center gap-2">
+          <div className="maplibregl-ctrl maplibregl-ctrl-group" style={{ margin: 0 }}>
+            {/* Inline display: maplibre's unlayered `button { display: block }` beats the flex utility. */}
+            <button type="button" aria-label="What's under me" title="What's under me" onClick={underMe}
+              style={{ display: "flex" }} className="items-center justify-center text-foreground">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z" /><path d="M9.5 9a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1M12 15.5h.01" />
+              </svg>
+            </button>
+          </div>
+          {gpsError && (
+            <button type="button" role="alert" onClick={() => setGpsError(null)}
+              className="max-w-56 rounded-md border border-border bg-card px-2 py-1 text-left text-xs text-foreground shadow">
+              {gpsError}
+            </button>
+          )}
+        </MapControl>
+      )}
+      {/* The blue dot and follow mode: tracking keeps the map centred until a pan. */}
+      <GeolocateControl ref={geolocate} position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
+        positionOptions={{ enableHighAccuracy: true }}
+        onGeolocate={(e) => {
+          setFix({ lng: e.coords.longitude, lat: e.coords.latitude });
+          if (!awaitingFix.current) return;
+          awaitingFix.current = false;
+          pickAt(e.coords.longitude, e.coords.latitude, underZoom());
+        }}
+        onError={(e) => {
+          if (!awaitingFix.current) return;
+          awaitingFix.current = false;
+          setGpsError(e.code === e.PERMISSION_DENIED
+            ? "Location is blocked. Allow it for this site in your browser settings." : "Couldn't find your location. Try again.");
+        }} />
+      {fix && heading !== null && (
+        <Marker longitude={fix.lng} latitude={fix.lat} rotation={heading} rotationAlignment="map" pitchAlignment="map">
+          <HeadingCone />
+        </Marker>
+      )}
       {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
@@ -471,7 +564,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         <Source id="discovery-highlight" type="geojson"
           data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(highlight) } }}>
           <Layer id="discovery-highlight-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.12 }} />
-          <Layer id="discovery-highlight-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2.5 }} />
+          <Layer id="discovery-highlight-line" type="line" paint={HIGHLIGHT_LINE} />
+        </Source>
+      )}
+
+      {shownPin?.outline && (
+        <Source id="pin-outline" type="geojson"
+          data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(shownPin.outline) } }}>
+          <Layer id="pin-outline-line" type="line" paint={HIGHLIGHT_LINE} />
         </Source>
       )}
 
@@ -494,7 +594,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           return (
             <Fragment key={l.id}>
               <Source id={`rpm-${s}`} type="raster" url={`pmtiles://${l.rasterPmHref}`} tileSize={256}>
-                <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": 1 }} />
+                <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": l.opacity ?? 1 }} />
               </Source>
               {l.unitsHref && <IdentifyLayer slug={s} href={l.unitsHref} />}
             </Fragment>
@@ -507,7 +607,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           return (
             <Fragment key={l.id}>
               <Source id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-                <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 }} />
+                <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 * (l.opacity ?? 1) }} />
               </Source>
               {l.unitsHref && <IdentifyLayer slug={s} href={l.unitsHref} />}
             </Fragment>
@@ -524,6 +624,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
                   key={li}
                   {...({
                     ...sl,
+                    paint: withOpacity(sl.paint, sl.type, l.opacity ?? 1),
                     id: `pm-${s}-${li}`,
                     source: `pm-${s}`,
                     "source-layer": pmLayer,
@@ -536,7 +637,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               // source on the layers). Explicit `source` for the same reason — don't rely on inject.
               mapDefaultLayers(l.id).map(({ kind, type, filter, paint }) => (
                 <Layer key={kind} {...({ id: `pm-${s}-${kind}`, source: `pm-${s}`, type, "source-layer": pmLayer,
-                  filter, paint } as LayerProps)} />
+                  filter, paint: withOpacity(paint, type, l.opacity ?? 1) } as LayerProps)} />
               ))
             )}
           </Source>
@@ -567,6 +668,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Popup>
       )}
     </MapGL>
+    </div>
   );
 }
 
@@ -597,7 +699,7 @@ export function FeatureDetail({ feature, onOpenRelated, onClose }: {
     <div>
       <div className="mb-2.5 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</div>
+          <div className="text-3xs font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</div>
           <h3 className="truncate text-sm font-semibold text-foreground" title={feature.title}>{feature.title || "Feature"}</h3>
         </div>
         <button type="button" onClick={onClose} aria-label="Close feature detail" title="Close feature detail"

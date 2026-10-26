@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import type { Bounds } from "@/map/place-locator";
 
 export type RecentPick =
-  | { kind: "place"; label: string; bounds: Bounds }
+  | { kind: "place"; label: string; bounds: Bounds; outline?: boolean }
   | { kind: "layer" | "publication"; label: string; href: string; bbox?: Bounds };
 
 const KEY = "ugs:recent-searches";

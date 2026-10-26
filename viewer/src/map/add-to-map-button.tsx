@@ -37,7 +37,7 @@ export function AddToMapButton({ layerId, doc, compact = false, large = false }:
     e.stopPropagation();
     (on ? c.removeLayer : c.addLayer)(id);
   };
-  const size = compact ? "px-1.5 py-0.5 text-[11px]" : large ? "px-3 py-1.5 text-sm" : "px-2.5 py-1 text-xs";
+  const size = compact ? "px-1.5 py-0.5 text-2xs" : large ? "px-3 py-1.5 text-sm" : "px-2.5 py-1 text-xs";
 
   return (
     <button type="button" onClick={click} aria-pressed={on}

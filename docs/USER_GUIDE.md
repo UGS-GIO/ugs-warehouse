@@ -84,8 +84,15 @@ updated. Cite a dated copy when other people must get the same data.
 Open <https://data.geology.utah.gov/>.
 
 - Browse and search the catalog, and filter layers by attribute.
+- Search the map for a place, a quadrangle name, a PLSS township and section (`T3S R2E sec 12`),
+  latitude and longitude or UTM coordinates, or a geologic unit name. Click the empty search box
+  to see an example of each.
 - Open a layer to see it on a map and in a data table. You can sort and filter the table.
 - Select a feature on the map to highlight its row in the table, and the reverse.
+- Long-press the map (right-click on a computer) to see what is at that place: the map unit or
+  feature under it, from every layer, and the published maps that cover it. The geologic unit and
+  the most detailed geologic map are at the top. Tap a row to turn that layer on or off. To see
+  what is at your own location, tap the **What's under me** button on the map.
 - Export a layer, or the part in your map view, to Shapefile, GeoPackage, File Geodatabase,
   FlatGeobuf, GeoJSON or CSV. You can choose the coordinate system, for example NAD83 / UTM zone 12N
   (EPSG:26912). The export runs in your browser.
@@ -156,7 +163,8 @@ with no visit.
 ![Step 3: Download button beside a layer](img/offline/layer-download.png){ width="320" }
 
 To save only part of the state, zoom in on the map and tap **Save this area** under
-**Offline basemap**.
+**Offline basemap**. Or long-press the map and tap **Save this quadrangle offline** to save the 7.5'
+quadrangle at that place.
 
 Downloads run one at a time. If you close the app or lose signal, the download continues from
 where it stopped the next time you open the app. The **Offline data** page shows what is saved,

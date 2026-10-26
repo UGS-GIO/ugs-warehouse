@@ -23,8 +23,6 @@ const BUILD_SHA = sh("git rev-parse HEAD", "");
 const APP_VERSION: string = JSON.parse(
   readFileSync(new URL("../.release-please-manifest.json", import.meta.url), "utf8"),
 )["."];
-// HEAD commit date; if git is absent (tarball build), use the build date.
-const BUILD_DATE = sh("git log -1 --format=%cd --date=short", new Date().toISOString().slice(0, 10));
 
 // base has to be an ABSOLUTE mount path, not "./": path routes mean the document's own directory
 // varies with the route (/map vs /discover/x), so a relative asset URL resolves differently per
@@ -65,7 +63,8 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        globPatterns: ["**/*.{js,css,html,svg,woff2,png}", "basemap-*.json"],   // png: the phone header logo, colormaps, icons (~100 KB)
+        // png: the phone header logo, colormaps, icons (~100 KB). utah-quads.json: offline quad search.
+        globPatterns: ["**/*.{js,css,html,svg,woff2,png}", "basemap-*.json", "utah-quads.json"],
         // The duckdb-wasm loader and its `eh` worker (~1 MB) are precached so a table saved for
         // offline can open; the 36 MB .wasm is cached only when someone saves one (offline/engine.ts).
         // The `mvp` worker serves browsers without Wasm exceptions, which offline tables skip.
@@ -79,7 +78,6 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   define: {
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),
-    __BUILD_DATE__: JSON.stringify(BUILD_DATE),
     __BUILD_SHA__: JSON.stringify(BUILD_SHA),
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },

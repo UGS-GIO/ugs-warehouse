@@ -174,6 +174,20 @@ export async function remove(id: string): Promise<void> {
   if ("plan" in job) await sweepAreaSaves();
 }
 
+/**
+ * Take every job off the queue, stopping the one saving in this tab, and throw away what they had
+ * saved so far. Nothing resumes on the next visit.
+ */
+export async function cancelAll(): Promise<void> {
+  let gone: Job[] = [];
+  await change(() => { gone = jobs; jobs = []; });
+  misses.clear();
+  // Its partial is still being written until the save stops.
+  if (active) { active.ctl.abort(); await active.done; }
+  for (const j of gone) if (j.kind === "file") await opfs.discardPartial(j.url);
+  if (gone.some((j) => "plan" in j)) await sweepAreaSaves();
+}
+
 /** Remove area saves no queued job will finish. */
 async function sweepAreaSaves(): Promise<void> {
   const busy = (kinds: Job["kind"][]) => new Set(jobs.flatMap((j) => ("plan" in j && kinds.includes(j.kind) ? [j.plan.url] : [])));
@@ -206,7 +220,7 @@ async function replan(job: Job): Promise<Job | null> {
   return null;
 }
 
-async function perform(job: Job) {
+async function perform(job: Job, signal: AbortSignal) {
   // Saves report every network chunk (~20 KB), which re-renders every download control; a few
   // updates a second is all a percentage needs. The last one always goes through.
   let last = 0;
@@ -217,17 +231,17 @@ async function perform(job: Job) {
     update(job.id, { done, total });
   };
   if (job.kind === "file") {
-    await opfs.save(job.url, { onProgress: progress });
+    await opfs.save(job.url, { signal, onProgress: progress });
     for (const u of job.replaces ?? []) await opfs.remove(u);
   } else if (job.kind === "area") {
     const { saveArea } = await import("./area");
-    await saveArea(job.plan, progress);
+    await saveArea(job.plan, progress, signal);
   } else if (job.kind === "cog" || job.kind === "table") {
     const { saveCogArea } = await import("./block-store");
-    await saveCogArea(job.plan, progress);
+    await saveCogArea(job.plan, progress, signal);
   } else {
     const { saveEngine } = await import("./engine");
-    await saveEngine(progress);
+    await saveEngine(progress, signal);
   }
 }
 
@@ -257,6 +271,9 @@ let rerun = false;
 
 let swept = false;
 
+// The job saving in this tab, so cancelAll can stop it and wait for it to let go of its files.
+let active: { ctl: AbortController; done: Promise<void> } | null = null;
+
 async function work(): Promise<void> {
   // Another tab may have run jobs while this one waited for the lock: start from what is on disk.
   loaded = null;
@@ -279,19 +296,23 @@ async function work(): Promise<void> {
     if (!job) break;
     if (!onlineManager.isOnline()) break;   // resumed when the connection returns (below)
     await change(() => patch(job.id, { state: "running", error: undefined }));
+    const ctl = new AbortController();
+    let stopped!: () => void;
+    active = { ctl, done: new Promise((r) => { stopped = r; }) };
     try {
       try {
-        await perform(job);
+        await perform(job, ctl.signal);
       } catch (e) {
         // Republished mid-save: cut the same area again from the new version, once.
         const again = e instanceof FileChangedError ? await replan(job) : null;
         if (!again) throw e;
         await change(() => { jobs = jobs.map((j) => (j.id === job.id ? again : j)); });
-        await perform(again);
+        await perform(again, ctl.signal);
       }
       misses.delete(job.id);
       await change(() => { jobs = jobs.filter((j) => j.id !== job.id); });
     } catch (e) {
+      if (ctl.signal.aborted) continue;   // cancelled: cancelAll took it off the queue
       const tries = (misses.get(job.id) ?? 0) + 1;
       if (isNetworkError(e) && tries < MAX_MISSES) {
         // Lost the connection, or the server is out of reach: back in line, and try again when
@@ -305,6 +326,8 @@ async function work(): Promise<void> {
       misses.delete(job.id);
       await change(() => patch(job.id, { state: "failed", error: e instanceof Error ? e.message : String(e) }));
     } finally {
+      active = null;
+      stopped();
       settled.forEach((fn) => fn(job));
     }
   }

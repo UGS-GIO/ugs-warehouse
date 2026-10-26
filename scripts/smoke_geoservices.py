@@ -3,8 +3,9 @@
     python -m scripts.smoke_geoservices [--base https://api.geology.utah.gov]
 
 Each check reads real layers and compares with the published STAC catalog, so a change in the
-server, the catalog, the load balancer or the CDN that breaks a client fails here. Exits 1 when a
-check fails. Standard library only, so it runs in any image.
+server, the catalog, the load balancer or the CDN that breaks a client fails here. It also checks
+that the catalog still has the items the viewer's map search reads. Exits 1 when a check fails.
+Standard library only, so it runs in any image.
 """
 from __future__ import annotations
 
@@ -26,6 +27,10 @@ LAYERS = {
     "enmin_ccs_co2_sources": None,
 }
 BIG_KEY_LAYER = "enmin_ccs_co2_sources"
+# The items the viewer's map search reads: PLSS by these ids (viewer/src/map/plss.ts), geologic units
+# from any id with GEOLUNITS in it (viewer/src/map/unit-search.ts).
+PLSS_ITEMS = ("enmin_plss_townshiprange", "enmin_plss_sections")
+GEOLUNITS = "geolunits"
 # A publication COG, and a tile inside it.
 IMAGE_ID = "M-103"
 IMAGE_TILE = "12/1580/768"
@@ -67,10 +72,20 @@ def query(base: str, topic: str, **params) -> str:
     return f"{layer_url(base, topic)}/query?" + urllib.parse.urlencode({"f": "json", **params})
 
 
-def row_counts() -> dict[str, int]:
+def catalog_items() -> list[dict]:
     doc = get_json(ITEMS_URL)
-    items = doc.get("items") or doc.get("features") or []
+    return doc.get("items") or doc.get("features") or []
+
+
+def row_counts(items: list[dict]) -> dict[str, int]:
     return {i["id"]: i["properties"].get("ugs:row_count") for i in items if i["id"] in LAYERS}
+
+
+def check_search_sources(items: list[dict]) -> None:
+    """The map search's PLSS and geologic unit items are still in the catalog."""
+    ids = {i["id"] for i in items}
+    assert not (missing := set(PLSS_ITEMS) - ids), f"no PLSS item {sorted(missing)}"
+    assert any(GEOLUNITS in i for i in ids), f"no item id with {GEOLUNITS!r}"
 
 
 def check_layer(base: str, topic: str, geometry: str | None, rows: int | None) -> None:
@@ -171,9 +186,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--base", default="https://api.geology.utah.gov")
     base = ap.parse_args().base.rstrip("/")
-    rows = row_counts()
-    checks = [(f"layer {t}", lambda t=t, g=g: check_layer(base, t, g, rows.get(t)))
-              for t, g in LAYERS.items()]
+    items = catalog_items()
+    rows = row_counts(items)
+    checks = [("map search sources", lambda: check_search_sources(items))]
+    checks += [(f"layer {t}", lambda t=t, g=g: check_layer(base, t, g, rows.get(t)))
+               for t, g in LAYERS.items()]
     checks += [("big integer", lambda: check_big_integer(base)),
                ("errors", lambda: check_errors(base)), ("cache", lambda: check_cache(base)),
                ("image server", lambda: check_image(base))]

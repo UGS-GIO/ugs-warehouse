@@ -22,9 +22,9 @@ function PeekRow({ join, value, onOpen }: {
   if (v === undefined) return null;
   const total = data?.total ?? 0;
   const text = describeData({ table: true, rows: join.rows });
-  const descriptor = text && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{text}</span>;
+  const descriptor = text && <span className="ml-1.5 text-2xs font-normal text-muted-foreground">{text}</span>;
   // Beside "N related", the table's size reads "of 41 rows" so it isn't taken for the per-feature count.
-  const tableSize = text && <span className="text-[11px] text-muted-foreground">
+  const tableSize = text && <span className="text-2xs text-muted-foreground">
     {text.replace(/^table · /, "of ")}</span>;
   if (isFetching && !data) return <div className="py-0.5 text-xs text-muted-foreground">{join.title}…</div>;
   if (error) return <div className="py-0.5 text-xs text-destructive">{join.title}: couldn't load</div>;
@@ -91,7 +91,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
   return (
     <section className="mt-3 rounded-md border border-border bg-card p-3">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</span>
+        <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</span>
         <button type="button" onClick={onClear} aria-label="Clear selection" className="text-muted-foreground hover:text-foreground">✕</button>
       </div>
       <div className="flex items-start justify-between gap-2">
@@ -110,7 +110,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
       </div>
       {primary.length > 0 && (
         <div className="mt-2 border-t border-border pt-2">
-          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related</div>
+          <div className="mb-0.5 text-3xs font-semibold uppercase tracking-wider text-muted-foreground">Related</div>
           {primary.map((j) => <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />)}
         </div>
       )}

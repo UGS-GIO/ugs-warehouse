@@ -250,7 +250,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
       )}
       {/* One card: the map, sized by its width, with its legend as the footer when it has one. */}
       <div className="mt-2 overflow-hidden rounded-md border border-border">
-      <div className="aspect-[4/3] max-h-[75svh] w-full bg-muted sm:aspect-[16/10] lg:max-h-[55svh]">
+      <div className="aspect-4/3 max-h-preview w-full bg-muted sm:aspect-16/10 lg:max-h-preview-lg">
         <MapGL
           ref={mapRef}
           // The page scrolls past the map; zooming takes Ctrl/⌘ + scroll, or two fingers on a phone.

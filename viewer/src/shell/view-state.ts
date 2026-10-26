@@ -18,6 +18,7 @@ import {
 import { useIndexes } from "@/stac/items-index";
 import { useStyleLayersFor } from "@/stac/styles";
 import { parseCubeParam } from "@/zarr/cube-picks";
+import { parseOpacityParam } from "@/map/layer-opacity";
 
 export function useViewState() {
   const { sp, view, collectionUrl, itemUrl, urlLayerIds, seriesSel, go, openDiscoverSearch } = useNav();
@@ -59,7 +60,7 @@ export function useViewState() {
   const saver = useDataSaver();
   const { catalogDocs, cardsWithCovers } = useCovers(showsCards && !saver ? leafColls : [], cards, seriesChildren);
 
-  const { mapItems, mapLoadKey, mapItemsLoading, layerIds, layerRows } =
+  const { mapItems, mapLoadKey, layerIds, layerRows } =
     useMapItems(view, leafColls, layerCollIds, urlLayerIds);
   // Discover lists one entry per publication, not its layers and tables.
   const discoverItems = discoverable(mapItems);
@@ -171,8 +172,8 @@ export function useViewState() {
   // Header search picks. Both land on the map: a place flies there; an item opens its detail, joins
   // the layers when it draws as one, and the map zooms to it rather than to every layer.
   const searchIsLayer = (r: ItemRef) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data);
-  const pickPlace = (b: Bounds, label: string) => {
-    setPin({ lng: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, label });
+  const pickPlace = (b: Bounds, label: string, outline?: boolean) => {
+    setPin({ lng: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, label, outline: outline ? b : undefined });
     if (view === "map") flyTo(b);
     else { queueFocus(b); go({ view: "map", l: layerIds, s: seriesSel }); }
   };
@@ -211,8 +212,10 @@ export function useViewState() {
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
   const cubePicks = parseCubeParam(sp.cube);
+  const opacities = parseOpacityParam(sp.op);
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id), cubePicks[id]))
-    .filter((l): l is ActiveLayer => l !== null);
+    .filter((l): l is ActiveLayer => l !== null)
+    .map((l) => (l.id in opacities ? { ...l, opacity: opacities[l.id] } : l));
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
   // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset
@@ -243,7 +246,7 @@ export function useViewState() {
     layerRows.some((r) => r.id === id) || (!!itemUrl && idOf(itemUrl) === id && drawsAsLayer(item.data));
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
-    catalogDocs, mapItems, discoverItems, mapLoadKey, mapItemsLoading,
+    catalogDocs, mapItems, discoverItems, mapLoadKey,
     searchIsLayer, pickPlace, pickSearchItem,
     openItem, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, itemNotFound, partOf, collectionId, collectionUrl, layerIds, seriesSel,

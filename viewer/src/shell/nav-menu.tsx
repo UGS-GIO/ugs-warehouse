@@ -9,7 +9,7 @@ import { useState } from "react";
 
 import { copyCatalogUrl } from "@/catalog/stac-url-chip";
 import { CheckIcon, CopyIcon, GitHubIcon } from "@/shell/icons";
-import { BUILD_URL, LEGAL_LINKS, REPO_URL } from "./legal-footer";
+import { BUILD_URL, LEGAL_LINKS } from "./legal-footer";
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
@@ -50,7 +50,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-          <Menu.Popup className="max-h-[var(--available-height)] min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
+          <Menu.Popup className="max-h-(--available-height) min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
             {/* Views only where the tab row is hidden. */}
             {pages.length > 0 && (
               <div className="md:hidden">
@@ -79,13 +79,6 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 <Menu.Separator className="my-1 h-px bg-border md:hidden" />
               </div>
             )}
-            {/* Phones only: desktop has the header band and footer. */}
-            <Menu.Item className={`${ITEM} md:hidden`} nativeButton={false}
-              render={<a href={REPO_URL} target="_blank" rel="noreferrer" />}>
-              <GitHubIcon />
-              v{__APP_VERSION__}
-            </Menu.Item>
-            <Menu.Separator className="my-1 h-px bg-border md:hidden" />
             {/* The header chip is desktop-only, so below md this is the one way to get the URL. */}
             {catalogUrl && (
               <div className="md:hidden">
@@ -116,7 +109,8 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
               ))}
               <Menu.Item className={`${ITEM_BASE} text-xs text-muted-foreground`} nativeButton={false}
                 render={<a href={BUILD_URL} target="_blank" rel="noreferrer" title={`viewer build ${__BUILD_HASH__} on GitHub`} />}>
-                build {__BUILD_DATE__} · {__BUILD_HASH__}
+                <GitHubIcon size={12} />
+                v{__APP_VERSION__}
               </Menu.Item>
             </div>
           </Menu.Popup>

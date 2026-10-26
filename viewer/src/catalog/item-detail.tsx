@@ -156,7 +156,7 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
 function InferredMark({ fk }: { fk: ForeignKey | undefined }) {
   const inf = inferredKey(fk);
   return inf
-    ? <span title={inferredTitle(inf)} className="ml-1.5 cursor-help text-[10px] italic text-muted-foreground">inferred</span>
+    ? <span title={inferredTitle(inf)} className="ml-1.5 cursor-help text-3xs italic text-muted-foreground">inferred</span>
     : null;
 }
 
@@ -491,7 +491,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
               <CubeStepsPanel />
               <DownloadsPanel key={String(item.id)} item={item} />
             </div>
-            <EndpointsPanel item={item} />
+            <EndpointsPanel item={item} collectionId={collectionId} />
             <StacJson item={raw ?? item} title={`${item.id} — STAC JSON`} />
           </aside>
         </div>

@@ -99,6 +99,7 @@ export type ActiveLayer = {
   rasterPmHref?: string;
   unitsHref?: string;   // a plate or mosaic's `units` PMTiles, loaded as an invisible identify layer
   pubTitle?: string;    // the publication a plate belongs to, for the scan-only notice
+  opacity?: number;     // 0–1 from the URL (layer-opacity.ts); unset is fully opaque
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
   // pin. Resolved from STAC once, so the layer list and the map agree on what is drawn.
   // `variable`/`selection` = what is drawn (the URL's pick, else the defaults); `variables` and

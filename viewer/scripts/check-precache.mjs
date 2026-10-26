@@ -37,6 +37,9 @@ if (missing.length) {
 }
 if (![...precached].some((u) => /^assets\/index-[^/]+\.js$/.test(u))) fail("no assets/index-*.js entry chunk: sw-routes isShell installs nothing to boot from");
 
+// At the root, so sw-routes isShell installs it: quad search has to work offline.
+if (!precached.has("utah-quads.json")) fail("utah-quads.json not precached: quad search breaks offline");
+
 const present = js.filter((f) => EXPECTED_ABSENT.test(f) && precached.has(`assets/${f}`));
 if (present.length) fail(`mvp engine chunks precached, though offline tables never use them: ${present.join(", ")}`);
 

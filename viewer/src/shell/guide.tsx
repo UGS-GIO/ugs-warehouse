@@ -16,9 +16,9 @@ export function Guide({ developers }: { developers?: ReactNode }) {
   if (developers) toc.push("For developers");
   // Section nav pinned to the left gutter; the spacer on the right keeps the text centred.
   return (
-    <div className="mx-auto flex w-full max-w-[100rem] gap-10 px-4 sm:px-8">
+    <div className="mx-auto flex w-full max-w-400 gap-10 px-4 sm:px-8">
       <nav aria-label="On this page" className="sticky top-6 hidden h-fit w-56 shrink-0 py-8 lg:block">
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">On this page</p>
+        <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">On this page</p>
         <ul className="space-y-1 border-l border-border">
           {toc.map((t) => (
             <li key={t}>

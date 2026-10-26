@@ -158,7 +158,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
                   {c.covers.slice(0, 4).map((cv) => (
                     <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy" title={cv.title ?? ""}
                       onClick={(e) => { e.stopPropagation(); onOpenItem(cv.href); }}
-                      className="aspect-[3/4] w-full cursor-pointer rounded-sm border border-border bg-muted object-cover hover:border-primary" />
+                      className="aspect-3/4 w-full cursor-pointer rounded-sm border border-border bg-muted object-cover hover:border-primary" />
                   ))}
                 </div>
               )}
@@ -192,7 +192,7 @@ function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void
   return (
     <div onClick={() => onOpen(it.href)}
       className="cursor-pointer overflow-hidden rounded-md border border-border bg-card hover:border-primary">
-      <div className="flex aspect-[3/4] items-center justify-center overflow-hidden bg-muted">
+      <div className="flex aspect-3/4 items-center justify-center overflow-hidden bg-muted">
         {th && !saver ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
             : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
       </div>

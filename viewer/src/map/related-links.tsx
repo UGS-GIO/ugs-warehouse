@@ -18,7 +18,7 @@ export function RelatedLinks({ info, props, onOpen }: {
           className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary">
           {t.title} <span aria-hidden className="text-primary">→</span>
         </button>
-        {text && <span className="text-[11px] text-muted-foreground">{text}</span>}
+        {text && <span className="text-2xs text-muted-foreground">{text}</span>}
       </span>
     );
   };
@@ -27,7 +27,7 @@ export function RelatedLinks({ info, props, onOpen }: {
     <div className="mt-3 border-t border-border pt-2.5">
       {primary.length > 0 && (
         <>
-          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
+          <div className="mb-1.5 text-3xs font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
           <div className="flex flex-wrap gap-1.5">{primary.map(button)}</div>
         </>
       )}

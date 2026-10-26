@@ -38,6 +38,10 @@ describe("isCatalogJson", () => {
 });
 
 describe("isShell", () => {
+  it("installs the quad gazetteer, so quad search works offline", () => {
+    expect(isShell("utah-quads.json")).toBe(true);
+  });
+
   it("installs the page, its entry chunk and styles, and the files beside it", () => {
     expect(["index.html", "favicon.svg", "assets/index-Ab12.js", "assets/index-Ab12.css"].every(isShell)).toBe(true);
   });

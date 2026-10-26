@@ -107,5 +107,10 @@ export async function removeJob(id: string): Promise<void> {
   await refresh();
 }
 
+export async function cancelAllJobs(): Promise<void> {
+  await queue.cancelAll();
+  await refresh();
+}
+
 // Every download attempt that ends changes what is stored: a finished file, or a partial to show.
 queue.onSettled(() => { void refresh(); });

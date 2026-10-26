@@ -26,7 +26,7 @@ export function BasemapMenu<T extends string>({ value, onValueChange, items, thu
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
           <Menu.Popup className="min-w-48 rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
-            <div className="px-2 pb-1 pt-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Basemap</div>
+            <div className="px-2 pb-1 pt-1.5 text-2xs font-bold uppercase tracking-wider text-muted-foreground">Basemap</div>
             <Menu.RadioGroup value={value} onValueChange={(v) => onValueChange(v as T)}>
               {items.map((b) => (
                 <Menu.RadioItem key={b} value={b} className={ITEM} closeOnClick>

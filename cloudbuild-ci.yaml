@@ -30,7 +30,14 @@ steps:
         uv export --frozen --no-emit-project --extra dev -q -o /tmp/requirements.txt
         pip install -r /tmp/requirements.txt && pip install --no-deps -e .
         ruff check .
-        python -m pytest -q
+        STAC_FIXTURE_OUT=/workspace/stac-fixture python -m pytest -q
+
+  # ---- stac-node-validator on the catalog the Portolan fence builds (the backend step writes it) ----
+  - id: stac-validator
+    name: node:22
+    waitFor: ["backend"]
+    entrypoint: npx
+    args: ["-y", "stac-node-validator@2.0.0", "/workspace/stac-fixture", "--depth", "-1"]
 
   # ---- featureserv: the pygeoapi plugin against the pinned pygeoapi (the image build runs it too) ----
   - id: featureserv

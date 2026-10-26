@@ -1,15 +1,18 @@
 import { useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "@/shell/icons";
 
-// Absolute — a copied "/stac/…" from a relative ?catalog= override is useless elsewhere.
-export async function copyCatalogUrl(url: string): Promise<boolean> {
+/** Copies `text`; false when there is no clipboard (denied, or a non-secure origin). */
+export async function copyText(text: string): Promise<boolean> {
   try {
-    await navigator.clipboard.writeText(new URL(url, location.href).href);
+    await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    return false;   // denied, or a non-secure origin
+    return false;
   }
 }
+
+// Absolute — a copied "/stac/…" from a relative ?catalog= override is useless elsewhere.
+export const copyCatalogUrl = (url: string) => copyText(new URL(url, location.href).href);
 
 // The one string a QGIS/GeoLibre/pystac user needs, so copy is the primary action and the link is
 // secondary. Hidden below md — the bar has no room beside the view tabs; NavMenu carries it there.

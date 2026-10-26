@@ -31,4 +31,16 @@ describe("limit / probe", () => {
     await expect(read).rejects.toThrow("timed out");
     expect(inFlight()).toBe(0);
   });
+
+  it("aborts with the caller's signal and frees the slot", async () => {
+    const ac = new AbortController();
+    const read = probe((signal) => new Promise<void>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason));
+    }), ac.signal);
+    await Promise.resolve();
+    expect(inFlight()).toBe(1);
+    ac.abort(new Error("closed"));
+    await expect(read).rejects.toThrow("closed");
+    expect(inFlight()).toBe(0);
+  });
 });

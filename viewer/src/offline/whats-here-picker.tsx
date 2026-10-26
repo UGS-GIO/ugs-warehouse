@@ -6,6 +6,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useRef, useState } from "react";
+import { copyText } from "@/catalog/stac-url-chip";
 import { Drawer } from "@base-ui/react/drawer";
 import { DETENTS } from "@/map/map-model";
 import { SHEET_POPUP } from "@/ui/sheet-chrome";
@@ -44,6 +45,17 @@ const Knob = ({ on }: { on: boolean }) => (
     <span className={`absolute top-0.5 size-5 rounded-full bg-background shadow transition-all ${on ? "left-4.5" : "left-0.5"}`} />
   </span>
 );
+/** A row that is the switch for its layer: one tap puts it on the map or takes it off. */
+function LayerSwitch({ id, className, children }: { id: string; className: string; children: ReactNode }) {
+  const ctx = useViewCtx();
+  const on = ctx.isActive(id);
+  return (
+    <button type="button" role="switch" aria-checked={on} onClick={() => ctx.toggleLayers([id], !on)} className={className}>
+      {children}
+      <Knob on={on} />
+    </button>
+  );
+}
 const HALF = DETENTS[1], FULL = DETENTS[2];
 
 // Which groups a viewer has opened or closed, kept on this device. Until they choose, every group is
@@ -142,41 +154,32 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   // Showing at a point: ask every layer what it has exactly there (probeOf), so the list is what is
   // under the click, not every layer whose extent covers it (statewide ones always do).
   const querying = !saving && target.kind === "point";
-  const at = target.kind === "point" ? `${target.lon.toFixed(6)},${target.lat.toFixed(6)}` : "";
+  const point = target.kind === "point" ? target : null;
+  const zoom = point?.zoom ?? 12;
+  const at = point ? `${point.lon.toFixed(6)},${point.lat.toFixed(6)}` : "";
+  // One read per row at the point, four at a time, each given up after PROBE_MS or on close.
+  const probeQueries = <R extends Here, T>(rows: R[], key: (h: R) => unknown[],
+    read: (h: R, p: NonNullable<typeof point>, signal: AbortSignal) => Promise<T>, none: T) => ({
+    queries: rows.map((h) => ({
+      queryKey: key(h),
+      queryFn: ({ signal }: { signal: AbortSignal }): Promise<T> =>
+        probe((s) => (point ? read(h, point, s) : Promise.resolve(none)), signal),
+      enabled: querying,
+      staleTime: 5 * 60_000,
+      retry: false,
+    })),
+  });
+  const zoomKey = `${at},${Math.round(zoom)}`;
   const vectors = saveable.filter((h) => probeOf(h) === "identify");
-  const identified = useQueries({
-    queries: vectors.map((h) => ({
-      queryKey: ["identify", h.save.url, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
-      queryFn: (): Promise<Hit[]> => probe((signal) => target.kind === "point"
-        ? identifyAt(h.save.url, target.lon, target.lat, target.zoom ?? 12, undefined, signal) : Promise.resolve([])),
-      enabled: querying,
-      staleTime: 5 * 60_000,
-      retry: false,
-    })),
-  });
+  const identified = useQueries(probeQueries(vectors, (h) => ["identify", h.save.url, zoomKey],
+    (h, p, s) => identifyAt(h.save.url, p.lon, p.lat, zoom, undefined, s), []));
   const mosaics = saveable.filter((h) => probeOf(h) === "tile");
-  const tiled = useQueries({
-    queries: mosaics.map((h) => ({
-      queryKey: ["tile-at", h.save.url, at],
-      queryFn: (): Promise<boolean> => probe((signal) => target.kind === "point"
-        ? tileAt(h.save.url, target.lon, target.lat, undefined, signal) : Promise.resolve(true)),
-      enabled: querying,
-      staleTime: 5 * 60_000,
-      retry: false,
-    })),
-  });
+  const tiled = useQueries(probeQueries(mosaics, (h) => ["tile-at", h.save.url, at],
+    (h, p, s) => tileAt(h.save.url, p.lon, p.lat, undefined, s), true));
   // A plate or mosaic with a `units` archive names the unit under the point too.
   const unitMaps = here.filter((h) => h.unitsHref);
-  const unitHits = useQueries({
-    queries: unitMaps.map((h) => ({
-      queryKey: ["identify", h.unitsHref, `${at},${Math.round(target.kind === "point" ? target.zoom ?? 12 : 0)}`],
-      queryFn: (): Promise<Hit[]> => probe((signal) => target.kind === "point" && h.unitsHref
-        ? identifyAt(h.unitsHref, target.lon, target.lat, target.zoom ?? 12, undefined, signal) : Promise.resolve([])),
-      enabled: querying,
-      staleTime: 5 * 60_000,
-      retry: false,
-    })),
-  });
+  const unitHits = useQueries(probeQueries(unitMaps, (h) => ["identify", h.unitsHref, zoomKey],
+    (h, p, s) => identifyAt(h.unitsHref ?? "", p.lon, p.lat, zoom, undefined, s), []));
   const hitsOf = (h: Here) => identified[vectors.findIndex((v) => v.id === h.id)]?.data ?? [];
   const isThere = (h: Here) => (probeOf(h) === "identify" ? hitsOf(h).length > 0
     : probeOf(h) === "tile" ? !!tiled[mosaics.findIndex((m) => m.id === h.id)]?.data : probeOf(h) === "bbox");
@@ -207,9 +210,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const near = useQuery({
     queryKey: ["near-contact", unit?.url, at, tol],
     queryFn: async ({ signal }) => {
-      if (!unit || target.kind !== "point") return null;
-      const ring = await identifyPoints(unit.url, ringAround(target.lon, target.lat, tol), target.zoom ?? 12,
-        undefined, signal);
+      if (!unit || !point) return null;
+      const ring = await identifyPoints(unit.url, ringAround(point.lon, point.lat, tol), zoom, undefined, signal);
       return otherUnit(unit, ring.map(unit.read)) ?? null;
     },
     enabled: querying && !!unit && tol > 0,
@@ -256,9 +258,9 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     onClose();
   };
 
-  const title = querying && target.kind === "point"
-    ? `What's here · ${target.lat.toFixed(4)}, ${target.lon.toFixed(4)}`
-    : target.kind === "point"
+  const title = querying && point
+    ? `What's here · ${formatCoords(point.lat, point.lon)}`
+    : point
     ? "Save offline · this quadrangle"
     : `Save offline · ${quads.length} quadrangle${quads.length === 1 ? "" : "s"}`;
   // When saving, only what can actually be saved is listed: a row you can't tick is noise. That
@@ -283,22 +285,19 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   // is under the point leads, the layer it comes from under it; the chevron opens its attributes,
   // what "query what's under my click" is for.
   const showRow = (h: Here) => {
-    const on = ctx.isActive(h.id);
     const found = hitsOf(h);
     const labels = [...new Set(found.map((x) => hitLabel(x.properties)).filter(Boolean))];
     return (
       <div key={h.id}>
         <div className="flex items-center hover:bg-hover">
-          <button type="button" role="switch" aria-checked={on} onClick={() => ctx.toggleLayers([h.id], !on)}
-            className="flex min-w-0 flex-1 items-center gap-3 py-1.5 pl-4 text-left pointer-coarse:min-h-12">
+          <LayerSwitch id={h.id} className="flex min-w-0 flex-1 items-center gap-3 py-1.5 pl-4 text-left pointer-coarse:min-h-12">
             <span className="min-w-0 flex-1">
               {labels.length > 0 && (
                 <span className="block break-words font-semibold" title={labels.join(" · ")}>{labels.slice(0, 3).join(" · ")}</span>
               )}
               <span className={`block break-words ${labels.length ? "text-xs text-muted-foreground" : ""}`} title={h.title}>{h.title}</span>
             </span>
-            <Knob on={on} />
-          </button>
+          </LayerSwitch>
           {found.length > 0 ? (
             <button type="button" aria-expanded={opened === h.id} aria-label={`Attributes of ${h.title}`}
               onClick={() => setOpened(opened === h.id ? null : h.id)}
@@ -352,24 +351,21 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const betterFirst = !!better && (better.scale ?? Infinity) <= 24000;
   const caveat = caveatOf(unit?.scale);
   const mapRow = better && (
-    <button type="button" role="switch" aria-checked={ctx.isActive(better.h.id)}
-      onClick={() => ctx.toggleLayers([better.h.id], !ctx.isActive(better.h.id))}
+    <LayerSwitch id={better.h.id}
       className={`flex w-full items-center gap-3 rounded-lg text-left ${betterFirst
         ? "mt-1 bg-primary/10 p-2" : "mt-2 border-t border-border pt-2"}`}>
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-semibold text-primary">Better source · more detailed map · {ratio(better.scale)}</span>
         <span className="block break-words text-sm" title={better.h.title}>{better.h.title}</span>
       </span>
-      <Knob on={ctx.isActive(better.h.id)} />
-    </button>
+    </LayerSwitch>
   );
   const card = querying && (unit || better) && (
     <section className="mx-3 mb-1 mt-1 rounded-xl border border-border bg-card p-3">
       <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Mapped as</div>
       {betterFirst && mapRow}
       {unit && (
-        <button type="button" role="switch" aria-checked={ctx.isActive(unit.from.id)}
-          onClick={() => ctx.toggleLayers([unit.from.id], !ctx.isActive(unit.from.id))}
+        <LayerSwitch id={unit.from.id}
           className={`flex w-full items-start gap-3 text-left ${betterFirst ? "mt-2 border-t border-border pt-2" : "mt-1"}`}>
           <span className="min-w-0 flex-1">
             <span className="block text-lg font-semibold leading-snug">
@@ -385,8 +381,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
               {unit.from.title}{unit.scale ? ` · ${ratio(unit.scale)}` : ""}{caveat ? `. ${caveat}` : ""}
             </span>
           </span>
-          <Knob on={ctx.isActive(unit.from.id)} />
-        </button>
+        </LayerSwitch>
       )}
       {!betterFirst && mapRow}
     </section>
@@ -398,16 +393,15 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   // The point itself, to note or send: the coordinates, or a link that opens the map here with a pin.
   // Without a share sheet the link is copied instead.
   const [said, setSaid] = useState<string | null>(null);
-  const copy = (text: string, done: string) => navigator.clipboard?.writeText(text)
-    .then(() => setSaid(done), () => setSaid("Couldn't copy"));
-  const pointBar = querying && target.kind === "point" && (
+  const copy = async (text: string, done: string) => setSaid((await copyText(text)) ? done : "Couldn't copy");
+  const pointBar = querying && point && (
     <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
       <button type="button" className={smallBtn}
-        onClick={() => copy(formatCoords(target.lat, target.lon), "Coordinates copied")}>Copy coordinates</button>
+        onClick={() => void copy(formatCoords(point.lat, point.lon), "Coordinates copied")}>Copy coordinates</button>
       <button type="button" className={smallBtn} onClick={() => {
-        const url = pointLink(location.href, target.lon, target.lat, target.zoom ?? 14);
-        if (navigator.share) navigator.share({ title: "A point on the UGS map", text: formatCoords(target.lat, target.lon), url }).catch(() => {});
-        else copy(url, "Link copied");
+        const url = pointLink(location.href, point.lon, point.lat, point.zoom ?? 14);
+        if (navigator.share) navigator.share({ title: "A point on the UGS map", text: formatCoords(point.lat, point.lon), url }).catch(() => {});
+        else void copy(url, "Link copied");
       }}>Share</button>
       {said && <span role="status" className="text-xs text-muted-foreground">{said}</span>}
     </div>
@@ -478,7 +472,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       </> : <>
         {opfs.isSupported() && (
           <button type="button" className={btn} onClick={startSave}>
-            Save {target.kind === "point" ? "this quadrangle" : "this area"} offline…
+            Save {point ? "this quadrangle" : "this area"} offline…
           </button>
         )}
         {close}

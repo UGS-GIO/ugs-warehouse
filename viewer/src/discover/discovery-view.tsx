@@ -6,7 +6,7 @@
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { Dialog } from "@base-ui/react/dialog";
+import { Drawer } from "@base-ui/react/drawer";
 import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
@@ -16,7 +16,7 @@ import {
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
-import type { Footprint } from "@/map/map-model";
+import { DETENTS, type Footprint } from "@/map/map-model";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
@@ -32,6 +32,8 @@ import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
 import { useIsWide } from "@/ui/use-breakpoint";
+import { SHEET_POPUP } from "@/ui/sheet-chrome";
+import { SheetGrabber } from "@/ui/sheet";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
 import { Chevron } from "@/ui/chevron";
@@ -48,6 +50,8 @@ const PAGE = 48; // cards per "Show more" step (reference parity)
 // Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
 // depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
 const DRAWER_KEY = "ugsw.discoverDrawerW";
+const HALF = DETENTS[1], FULL = DETENTS[2];
+const SNAPS = [HALF, FULL];
 const DRAWER = { initial: 560, min: 360, max: 1100 };
 
 // Escape a value for a [data-href="…"] selector (scroll a map-hovered card into view).
@@ -110,6 +114,7 @@ export function DiscoveryView({
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null); // live viewport
   const [visible, setVisible] = useState(PAGE);
   const [filtersOpen, setFiltersOpen] = useState(false); // the phone filter sheet
+  const [filterSnap, setFilterSnap] = useState<number | string>(HALF);
   const isWide = useIsWide(); // only MOUNT the map pane at ≥lg — keeps maplibre off phones/tablets
 
   // Heavy bits memoized on the stable items key (App's mapLoadKey), not the array identity — the
@@ -292,7 +297,7 @@ export function DiscoveryView({
         )}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {/* The rail is md+ only; on a phone the same groups open in a bottom sheet. */}
-          <button type="button" onClick={() => setFiltersOpen(true)}
+          <button type="button" onClick={() => { setFilterSnap(HALF); setFiltersOpen(true); }}
             className="shrink-0 rounded-md border border-input bg-card px-2.5 py-1 text-xs text-foreground hover:bg-hover pointer-coarse:min-h-11 md:hidden">
             Filters{activeFilters > 0 && ` · ${activeFilters}`}
           </button>
@@ -342,26 +347,38 @@ export function DiscoveryView({
         </div>
       )}
 
-      <Dialog.Root open={filtersOpen} onOpenChange={setFiltersOpen}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 z-3100 bg-black/40 md:hidden" />
-          <Dialog.Popup className="fixed inset-x-0 bottom-0 z-3101 flex max-h-modal flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:hidden">
-            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-              <Dialog.Title className="flex-1 text-base font-semibold">Filters</Dialog.Title>
-              {activeFilters > 0 && (
-                <button type="button" onClick={resetAll} className="text-sm text-primary hover:underline pointer-coarse:min-h-11 pointer-coarse:px-2">Clear all</button>
-              )}
-              <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11" aria-label="Close">✕</Dialog.Close>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto pb-3">{facetGroups}</div>
-            <div className="border-t border-border px-4 py-3">
-              <Dialog.Close className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 pointer-coarse:min-h-11">
-                Show {results.length} result{results.length === 1 ? "" : "s"}
-              </Dialog.Close>
-            </div>
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {/* Phones: the app's bottom sheet, non-modal so the results stay in view above it at half height. */}
+      <Drawer.Root open={filtersOpen} onOpenChange={setFiltersOpen} modal={false}
+        snapPoints={SNAPS} snapPoint={filterSnap}
+        onSnapPointChange={(p) => (p === null ? setFiltersOpen(false) : setFilterSnap(p))}>
+        <Drawer.Portal>
+          {/* Above the Utah header, which sits at z-index 3000. */}
+          <Drawer.Viewport className="pointer-events-none fixed inset-0 z-3101 flex items-end md:hidden">
+            <Drawer.Popup initialFocus={false} style={{ height: `${FULL * 100}%` }} className={SHEET_POPUP}>
+              <SheetGrabber label={filterSnap === HALF ? "Expand filters to full height" : "Collapse filters"}
+                onStep={() => setFilterSnap(filterSnap === HALF ? FULL : HALF)}
+                onArrow={(s) => setFilterSnap(s > 0 ? FULL : HALF)} />
+              <div className="flex items-center gap-2 border-b border-border px-4 pb-2">
+                <Drawer.Title className="flex-1 text-base font-semibold">Filters</Drawer.Title>
+                {activeFilters > 0 && (
+                  <button type="button" onClick={resetAll}
+                    className="px-2 text-sm text-primary hover:underline pointer-coarse:min-h-11">Clear all</button>
+                )}
+                <Drawer.Close aria-label="Close"
+                  className="px-2 text-muted-foreground hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-11">✕</Drawer.Close>
+              </div>
+              <Drawer.Content className="min-h-0 flex-1 touch-auto overflow-y-auto overscroll-contain pb-3">
+                {facetGroups}
+              </Drawer.Content>
+              <div className="border-t border-border px-4 py-3">
+                <Drawer.Close className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 pointer-coarse:min-h-11">
+                  Show {results.length} result{results.length === 1 ? "" : "s"}
+                </Drawer.Close>
+              </div>
+            </Drawer.Popup>
+          </Drawer.Viewport>
+        </Drawer.Portal>
+      </Drawer.Root>
 
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">

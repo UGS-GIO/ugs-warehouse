@@ -481,7 +481,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
-        {footprints.length > 0 && (
+        {/* Desktop only: on a phone a rectangle per item is clutter, not a way in. */}
+        {isDesktop && footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"
             className="cursor-pointer select-none rounded-md border border-input bg-card/95 px-2 py-1 text-foreground shadow hover:bg-hover data-[pressed]:bg-primary data-[pressed]:text-primary-foreground">

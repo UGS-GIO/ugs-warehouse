@@ -197,7 +197,7 @@ export async function readColumns(url: string, columns: string[]): Promise<Recor
 }
 
 /**
- * The rows whose `keys` columns pass `where`, with `columns` added. The keys are read whole; the
+ * The rows whose `keys` columns pass `where`, with `columns` added (a name the file lacks is skipped). The keys are read whole; the
  * other columns only for the matching rows, a few at a time by the offset index or as one span.
  */
 export async function readWhere(url: string, keys: string[], where: (row: Record<string, unknown>) => boolean,
@@ -205,11 +205,12 @@ export async function readWhere(url: string, keys: string[], where: (row: Record
   const o = await open(url);
   const all = await parquetReadObjects({ file: o.file, metadata: o.metadata, compressors, columns: keys });
   const hits = all.flatMap((r, i) => (where(r) ? [i] : []));
+  const have = columns.filter((c) => o.columns.some((s) => s.name === c));
   if (!hits.length) return [];
   const spans = hits.length <= 8 ? hits.map((i) => [i, i + 1]) : [[hits[0], hits[hits.length - 1] + 1]];
   const out: Record<string, unknown>[] = [];
   for (const [rowStart, rowEnd] of spans) {
-    const rows = await parquetReadObjects({ file: o.file, metadata: o.metadata, compressors, columns,
+    const rows = await parquetReadObjects({ file: o.file, metadata: o.metadata, compressors, columns: have,
       rowStart, rowEnd, useOffsetIndex: true });
     for (const i of hits) if (i >= rowStart && i < rowEnd) out.push({ ...all[i], ...rows[i - rowStart] });
   }

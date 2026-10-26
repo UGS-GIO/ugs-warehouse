@@ -301,11 +301,12 @@ export function DiscoveryView({
             className="shrink-0 rounded-md border border-input bg-card px-2.5 py-1 text-xs text-foreground hover:bg-hover pointer-coarse:min-h-11 md:hidden">
             Filters{activeFilters > 0 && ` · ${activeFilters}`}
           </button>
+          {/* Phones drop the Sort word and the density toggle so the row fits on one line. */}
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
-            Sort
+            <span className="max-sm:sr-only">Sort</span>
             <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
           </label>
-          <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs" />
+          <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs max-sm:hidden" />
           <UiSegmented value={layout} onValueChange={(v) => patch({ layout: v }, true)} items={LAYOUTS} className="text-xs" />
           {isWide && (
             <button type="button" onClick={() => setShowMap((v) => !v)} aria-pressed={showMap}

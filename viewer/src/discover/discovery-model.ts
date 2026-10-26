@@ -5,7 +5,7 @@
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
 import { CATEGORIES, categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
-  scale, title, typeOf } from "@/catalog/item-view";
+  scale, scaleDenominator, title, typeOf } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
 import { hasFootprint, pubOfEntry } from "@/stac";
@@ -52,40 +52,24 @@ export const SCALE_BUCKETS = [
 export const scaleLabel = (key: string): string =>
   SCALE_BUCKETS.find((b) => b.key === key)?.label ?? key;
 
-// "24,000", "24 000", "62.500" (dot-grouped) or "24000" → a number; anything else → NaN.
-const scaleNum = (s: string): number =>
-  (/^\d{1,3}([,. ]\d{3})+$/.test(s) ? Number(s.replace(/[,. ]/g, ""))
-    : /^\d+(\.\d+)?$/.test(s) ? Number(s) : NaN);
-
-const INCHES = { feet: 12, foot: 12, ft: 12, "'": 12, mile: 63360, miles: 63360 } as const;
-
-// The scale denominator of a free-text ugs:scale. Several ratios ("1:24,000 & 1:48,000") give the
-// largest scale. "1 inch = 24,000 feet" would be 1:288,000, but the maps that say so are 7.5'
-// quadrangles: 10,000 feet or more to the inch is read as a mistyped ratio.
-function scaleDenominator(raw: string): number {
-  const ratios = [...raw.matchAll(/\b1\s*:\s*(\d[\d,. ]*\d|\d)/g)].map((m) => scaleNum(m[1]));
-  if (ratios.length) return Math.min(...ratios);
-  const k = /^(\d+)\s*k$/i.exec(raw);
-  if (k) return Number(k[1]) * 1000;
-  const m = /^([\d.]+)\s*(?:inch(?:es)?|")\s*=\s*([\d,. ]+?)\s*(feet|foot|ft|'|miles?)$/i.exec(raw);
-  if (!m) return NaN;
-  const [inches, n, unit] = [scaleNum(m[1]), scaleNum(m[2]), m[3].toLowerCase() as keyof typeof INCHES];
-  if (INCHES[unit] === 12 && inches === 1 && n >= 10000) return n;
-  return (n * INCHES[unit]) / inches;
-}
-
-// The SCALE_BUCKETS key for a ugs:scale value; undefined when the item has none.
-export function scaleBucket(raw: string | undefined): string | undefined {
-  const s = raw?.trim();
-  if (!s) return undefined;
-  const d = scaleDenominator(s);
-  if (!(d > 0)) return "other";
+const bucketOf = (d: number | undefined): string => {
+  if (!d) return "other";
   if (d < 24000) return "lt24k";
   if (d === 24000) return "24k";
   if (d === 62500) return "62k";
   if (d === 100000) return "100k";
   if (d < 100000) return "mid";
   return d < 250000 ? "100k-250k" : "250k";
+};
+
+// The SCALE_BUCKETS key for a ugs:scale value; undefined when the item has none. Cached, as
+// thousands of items share a handful of strings.
+const buckets = new Map<string, string>();
+export function scaleBucket(raw: string | undefined): string | undefined {
+  const s = raw?.trim();
+  if (!s) return undefined;
+  if (!buckets.has(s)) buckets.set(s, bucketOf(scaleDenominator(s)));
+  return buckets.get(s);
 }
 
 // Counts for each facet group over the full loaded set (stable — counts don't shift as filters

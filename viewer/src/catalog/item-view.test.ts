@@ -3,6 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatBadgeAssets, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
+  scaleDenominator,
   assetEntries, groupParts, groupPartsByFile, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
@@ -418,5 +419,13 @@ describe("groupPartsByFile (source file, then dataset, then kind)", () => {
     const parts = [plate, part("a", "layer"), part("b", "table")];
     expect(groupPartsByFile(parts)).toEqual([{ count: 3, collapsed: false, sections: groupParts(parts) }]);
     expect(groupPartsByFile([])).toEqual([]);
+  });
+});
+
+describe("scaleDenominator", () => {
+  it("reads a scale in the forms the catalog uses", () => {
+    expect([scaleDenominator("1:24,000"), scaleDenominator("100k"), scaleDenominator("500000"),
+      scaleDenominator("1 inch = 200 feet"), scaleDenominator("unk"), scaleDenominator("0.25")])
+      .toEqual([24000, 100000, 500000, 2400, undefined, undefined]);
   });
 });

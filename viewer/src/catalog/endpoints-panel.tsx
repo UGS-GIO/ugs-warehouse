@@ -67,7 +67,7 @@ export function AssetsPanel({ item }: { item: StacDoc }) {
   );
 }
 
-export function EndpointsPanel({ item }: { item: StacDoc }) {
+export function EndpointsPanel({ item, collectionId }: { item: StacDoc; collectionId?: string }) {
   const id = String(item.id ?? "");
   const pq = parquetAsset(item);
   const renders = Object.keys(rendersOf(item)).sort();
@@ -98,7 +98,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       esri: true,
     });
   }
-  const is = isImageServed(item) ? imageServerUrl(id) : undefined;
+  const is = isImageServed(item, collectionId) ? imageServerUrl(id) : undefined;
   if (is) {
     rows.push({
       label: "ArcGIS image layer",

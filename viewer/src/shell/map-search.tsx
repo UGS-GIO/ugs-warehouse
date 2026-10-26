@@ -11,6 +11,7 @@ import { buildUnitSearch, unitExtent, type UnitHit, unitLayers } from "@/map/uni
 import { idOf, parquetAsset } from "@/stac";
 import { buildCatalogSearch, type ItemHit } from "./header-search-model";
 import { addRecent, clearRecent, type RecentPick, useRecent } from "./recent-searches";
+import { SEARCH_EXAMPLES } from "./search-examples";
 
 type Row =
   | { type: "place"; key: string; label: string; sub: string; place: Suggestion }
@@ -23,7 +24,6 @@ type Row =
 type Group = { value: string; items: Row[] };
 
 const INPUT_ID = "map-search";
-const TRY = ["Moab", "faults", "landslides", "OFR-598"];
 
 // "/" focuses the search from anywhere, unless the key is being typed into a field. The input's ref
 // adds the listener when it mounts and removes it when it unmounts.
@@ -149,7 +149,8 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         { value: "Recent", items: recent.map((p): Row => ({
             type: "recent", key: p.kind === "place" ? `place:${p.label}` : p.href, label: p.label,
             sub: p.kind === "place" ? "Place" : p.kind === "layer" ? "Layer" : "Publication", pick: p })) },
-        { value: "Try", items: TRY.map((t): Row => ({ type: "try", key: `try:${t}`, label: t, sub: "" })) },
+        { value: "Try", items: SEARCH_EXAMPLES.map((t): Row => ({ type: "try", key: `try:${t.text}`, label: t.text,
+            sub: t.kind })) },
       ].filter((g) => g.items.length);
   // Only while searching; the index also builds on page load.
   const busy = (text.length >= 2 && (places.isFetching || catalog.isFetching || plss.isFetching || units.isFetching))
@@ -189,8 +190,9 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
           <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
         </svg>
-        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications" title="Press / to search"
-          aria-label="Search places, layers and publications"
+        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Places, quadrangles, PLSS, coordinates, units"
+          title="Press / to search"
+          aria-label="Search places, quadrangles, PLSS, coordinates, geologic units, layers and publications"
           onKeyDown={(e) => { if (e.key === "Enter" && !highlighted.current && text) onSearchAll(text); }}
           className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />
         {busy && <span role="status" aria-label="Searching"
@@ -208,7 +210,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         <Combobox.Positioner anchor={bar} sideOffset={6} align="start" className="z-50">
           <Combobox.Popup className="max-h-popup w-(--anchor-width) overflow-y-auto rounded-md border border-border bg-card py-1 text-sm text-foreground shadow-lg">
             <Combobox.Empty className="px-3 py-2 text-muted-foreground empty:hidden">
-              {text.length >= 2 && !busy ? `No places, layers or publications match “${text}”` : null}
+              {text.length >= 2 && !busy ? `Nothing matches “${text}”` : null}
             </Combobox.Empty>
             <Combobox.List>
               {(group: Group) => (
@@ -223,7 +225,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
                   <Combobox.Collection>
                     {(row: Row) => (
                       <Combobox.Item key={row.key} value={row}
-                        className="flex cursor-pointer select-none flex-col px-3 py-1.5 outline-none data-[highlighted]:bg-muted">
+                        className="flex cursor-pointer select-none flex-col justify-center px-3 py-1.5 outline-none data-[highlighted]:bg-muted pointer-coarse:min-h-11">
                         <span className="truncate font-medium">{row.label}</span>
                         {row.sub && <span className="truncate text-xs text-muted-foreground">{row.sub}</span>}
                       </Combobox.Item>

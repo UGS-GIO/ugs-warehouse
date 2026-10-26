@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import contextlib
+import re
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from scripts import smoke_geoservices as smoke
 
@@ -31,3 +35,18 @@ def test_the_catalog_is_read_unchanged(monkeypatch):
     seen = _urls(monkeypatch)
     smoke.fetch(smoke.ITEMS_URL)
     assert seen == [smoke.ITEMS_URL]
+
+
+def test_search_sources_need_plss_and_a_geologic_unit_item():
+    items = [{"id": i} for i in (*smoke.PLSS_ITEMS, "geolmap_geolunits_500k")]
+    smoke.check_search_sources(items)
+    for drop in (smoke.PLSS_ITEMS[0], "geolmap_geolunits_500k"):
+        with pytest.raises(AssertionError):
+            smoke.check_search_sources([i for i in items if i["id"] != drop])
+
+
+def test_search_sources_match_the_viewer():
+    viewer = Path(__file__).parents[1] / "viewer/src/map"
+    plss = re.findall(r'export const PLSS_\w+ = "(\w+)"', (viewer / "plss.ts").read_text())
+    assert sorted(plss) == sorted(smoke.PLSS_ITEMS)
+    assert f"/{smoke.GEOLUNITS}/" in (viewer / "unit-search.ts").read_text()

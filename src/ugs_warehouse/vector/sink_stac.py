@@ -96,15 +96,24 @@ def _publication_datetime(con: duckdb.DuckDBPyConnection, view: str) -> str | No
     return stamp.astimezone(datetime.UTC).isoformat()
 
 
+def _fill_title(item: dict, stem: str) -> None:
+    """Title an item that has no human one with its default render's title, else its id."""
+    props = stac.doc_fields(item)
+    if not props.get("title"):
+        render = (props.get("ugs:renders") or {}).get("default") or {}
+        props["title"] = render.get("title") or stac.prettify(stem)
+
+
 def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, md: dict,
                 title: str | None, description: str | None, rc: int,
                 content_hash: str | None) -> dict:
     """The item's properties: identity, row count, registry metadata and overrides."""
     # Precedence for title/description: hand-authored override (ops console) > registry metadata >
-    # prior published value. So an operator's edit wins + survives reingest.
+    # prior published value. So an operator's edit wins + survives reingest. With no human title,
+    # `_fill_title` falls back to the style's title once the renders are attached.
     ov = stac.manual_override(topic.stem)
     props = {
-        "title": ov.get("title") or md.get("display_name") or title or stac.prettify(topic.stem),
+        "title": ov.get("title") or stac.human_title(md.get("display_name")) or stac.human_title(title),
         "ugs:dbt_schema": topic.schema,
         "ugs:layer": topic.layer,
         "ugs:row_count": rc,
@@ -263,6 +272,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
+    _fill_title(item, topic.stem)
     stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
     stac.stamp_file_meta(item)  # the style and thumbnail, which other jobs write
     before = _published(topic)

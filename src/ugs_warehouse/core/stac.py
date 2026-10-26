@@ -120,6 +120,11 @@ def prettify(stem: str) -> str:
     return re.sub(r"[_\-]+", " ", stem).strip().title()
 
 
+def human_title(title: str | None) -> str | None:
+    """`title`, or None when it is a raw layer name such as `geolunits_500k`."""
+    return None if not title or re.fullmatch(r"[a-z0-9_]+", title) else title
+
+
 def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     """A web-map-links `pmtiles` link so STAC Browser draws the vector layer.
 

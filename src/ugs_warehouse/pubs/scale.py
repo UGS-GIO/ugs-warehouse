@@ -7,7 +7,7 @@ import re
 SCALE_LABEL = {"24k": "1:24,000", "250k": "1:250,000", "500k": "1:500,000"}
 DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> finest tier (+ logged)
 
-_GROUPED = re.compile(r"\d{1,3}(?:[,. ]\d{3})+")   # 24,000 / 24 000 / 62.500
+_GROUPED = re.compile(r"[1-9]\d{0,2}(?:[,. ]\d{3})+")   # 24,000 / 24 000 / 62.500
 _INCHES_PER = {"feet": 12, "foot": 12, "ft": 12, "'": 12, "mile": 63_360, "miles": 63_360}
 _RATIO = re.compile(r"\b1\s*:\s*(\d[\d,. ]*\d|\d)")
 _VERBAL = re.compile(r"(?<![\d./])([\d./]+)\s*(?:inch(?:es)?|in\.?|\")\s*=\s*([\d,. ]+?)\s*"

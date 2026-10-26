@@ -45,7 +45,7 @@ def test_denominator_takes_the_largest_of_several_scales():
     assert scale.denominator("1: 48,000 and 1:24,000") == 24000
 
 
-@pytest.mark.parametrize("raw", ["", "unk", "0.180555556", "0.25", "2 inch = 250,00 feet",
+@pytest.mark.parametrize("raw", ["", "unk", "0.180555556", "0.180", "0.25", "2 inch = 250,00 feet",
                                  "1 inch = . feet", "1 inch = 2.000.0 miles"])
 def test_denominator_leaves_an_unreadable_scale_none(raw):
     assert scale.denominator(raw) is None

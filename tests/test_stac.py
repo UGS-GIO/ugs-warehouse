@@ -1539,3 +1539,16 @@ def test_feature_service_serves_the_data_asset_not_the_overview():
     assets = {"overview_1": asset(config.overview_path("x", 1)), "data": asset(config.archive_path("x"))}
     served = feature_service.collection({"id": "x", "assets": assets})
     assert served["source"] == f"gs://{config.BUCKET}/{config.archive_path('x')}"
+
+
+def test_pub_carries_its_scale_as_a_number(capsys):
+    coll, _ = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"})
+    assert coll["ugs:scale_denominator"] == 24000
+    entry = stac._collection_index_entry(coll, prefix="GQ-968/")
+    assert entry["properties"]["ugs:scale_denominator"] == 24000
+    # A scale that is there but unreadable keeps its text, gets no number, and says so.
+    odd, _ = _build({"series_id": "M-1", "series": "M", "pub_scale": "0.180555556"})
+    assert odd["ugs:scale"] == "0.180555556"
+    assert "ugs:scale_denominator" not in odd
+    assert "M-1: scale '0.180555556' is not a readable 1:N scale" in capsys.readouterr().err
+    assert "ugs:scale_denominator" not in _build({"series_id": "M-2", "series": "M"})[0]

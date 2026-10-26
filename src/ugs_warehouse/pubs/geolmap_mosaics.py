@@ -97,14 +97,21 @@ def mosaic_object(tier: str, *, suffix: str = "", ext: str = "pmtiles") -> str:
     return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}{suffix}.{ext}"
 
 
+_COG_REAL_NAMES: dict[str, str] = {}
+
+
 def _cog_sids() -> set[str]:
     """Series ids that have a harvested COG (geolmap/cogs/<sid>.cog.tif)."""
+    global _COG_REAL_NAMES
     pfx = identity.COG_PREFIX.rstrip("/") + "/"
     out: set[str] = set()
+    _COG_REAL_NAMES.clear()
     for path in gcs.list_paths(identity.COG_PREFIX, bucket=config.SOURCE_BUCKET):
         name = path[len(pfx):] if path.startswith(pfx) else path
         if name.endswith(".cog.tif"):
-            out.add(name[: -len(".cog.tif")].upper())
+            stem = name[: -len(".cog.tif")]
+            out.add(stem.upper())
+            _COG_REAL_NAMES[stem.upper()] = stem
     return out
 
 
@@ -180,7 +187,8 @@ def _group_by_tier(edition_mode: str = "current",
 
 def _vsigs(sid: str) -> str:
     """GDAL /vsigs path to a COG — read in place from the (private) bucket, no download."""
-    return f"/vsigs/{config.SOURCE_BUCKET}/{identity.COG_PREFIX}/{sid}.cog.tif"
+    real = _COG_REAL_NAMES.get(sid.upper(), sid)
+    return f"/vsigs/{config.SOURCE_BUCKET}/{identity.COG_PREFIX}/{real}.cog.tif"
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:

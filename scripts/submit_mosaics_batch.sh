@@ -93,9 +93,13 @@ job="$(jq -n \
   | (.taskGroups[0].taskSpec.runnables[] | select(.displayName == "mosaics") | .container)
       |= (.imageUri = $image | .commands = $cmd)
   | (.taskGroups[0].taskSpec.runnables[] | select(.displayName == "mosaics") | .environment.variables)
-      += $renv
+      |= (. + $renv + (if $scale == "24k" then {MOSAIC_COG_MAXZOOM: "17"} else {} end))
   | .taskGroups[0].taskSpec.maxRunDuration = $timeout
-  | .labels.run = $run | .labels.target = $target | .labels.scale = $scale')"
+  | .labels.run = $run | .labels.target = $target | .labels.scale = $scale
+  | (if $scale == "24k" then
+       .allocationPolicy.instances[0].policy.machineType = "n2d-standard-32"
+       | (.allocationPolicy.instances[0].policy.disks[] | select(.deviceName == "mosaic-work") | .newDisk.sizeGb) = 600
+     else . end)')"
 [ "$(jq --arg image "$digest" '[.taskGroups[0].taskSpec.runnables[] | select(.container.imageUri == $image)] | length' <<<"$job")" = 1 ] \
   || { echo "template has no single 'mosaics' runnable to fill" >&2; exit 1; }
 

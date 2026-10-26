@@ -44,8 +44,10 @@ def _clear_renders(item: dict) -> bool:
         item["stac_extensions"] = exts
     else:
         item.pop("stac_extensions", None)
-    # attach_renders adds the default render's GL fragment as a `style`-keyed asset.
-    (item.get("assets") or {}).pop("style", None)
+    # attach_renders and attach_style_assets add the style, style_<render> and esri_<render> assets.
+    assets = item.get("assets") or {}
+    for key in [k for k in assets if k == "style" or k.startswith(("style_", "esri_"))]:
+        del assets[key]
     return had
 
 
@@ -179,6 +181,9 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
             return False
         had = _clear_renders(item)
         stac.attach_renders(item)  # re-match against the fresh manifest
+        if iid and not dry_run:
+            item["_collection_path"] = coll_path  # the style files go in the item's folder
+            stac.attach_style_assets(item)
         now = "ugs:renders" in stac.doc_fields(item)
         if not had and not now:
             return False  # never styled (e.g. a pub COG plate) — leave it untouched

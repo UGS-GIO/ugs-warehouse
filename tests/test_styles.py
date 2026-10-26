@@ -1,7 +1,9 @@
 """ugs-styles -> `ugs:renders` block + `style` asset (core.styles + stac.attach_renders)."""
+import json
+
 import pytest
 
-from ugs_warehouse.core import stac, styles
+from ugs_warehouse.core import config, gcs, stac, styles
 
 MANIFEST = (
     {"itemId": "hazards_qfaults", "render": "default", "kind": "vector",
@@ -79,7 +81,7 @@ def test_attach_renders_noop_without_match():
 # (exact value); continuous fields get half-open `>=`/`<` bins. Both must yield legend labels.
 
 def _classes(layers, monkeypatch):
-    monkeypatch.setattr(styles, "_fetch_layers", lambda _url: tuple(layers))
+    monkeypatch.setattr(styles, "fetch_layers", lambda _url: tuple(layers))
     return styles.classification_classes("https://example.invalid/s.json")
 
 
@@ -132,3 +134,55 @@ def test_render_carries_absolute_esri_url():
     assert renders["default"]["esri_url"].startswith("http")
     assert renders["default"]["esri_url"].endswith("/esri/enmin_ut_counties/default.json")
     assert "esri_url" not in styles.renders_for("hazards_qfaults", {"pmtiles"})[0]["default"]
+
+
+# ---------------------------------------------------------------- complete style assets
+
+FRAGMENT = ({"id": "c-fill", "type": "fill", "paint": {"fill-color": "#ccc"}},)
+
+
+def test_compose_style_binds_every_layer_to_the_pmtiles_source():
+    style = styles.compose_style(list(FRAGMENT), "https://cdn/x.pmtiles", "x", name="Counties",
+                                 glyphs="https://cdn/fonts/{fontstack}/{range}.pbf")
+    assert style["version"] == 8 and style["name"] == "Counties" and "sprite" not in style
+    assert style["sources"] == {"v": {"type": "vector", "url": "pmtiles://https://cdn/x.pmtiles"}}
+    assert style["layers"] == [{**FRAGMENT[0], "source": "v", "source-layer": "x"}]
+
+
+def _styled_item(item_id="enmin_ut_counties"):
+    return {"id": item_id, "collection": "emp", "_collection_path": "ugs-serving-topics/emp",
+            "properties": {}, "assets": {"pmtiles": {"href": "https://cdn/x.pmtiles"}},
+            "links": [{"rel": "pmtiles", "href": "https://cdn/x.pmtiles", "pmtiles:layers": ["lyr"]}]}
+
+
+def test_style_assets_publish_a_complete_style_and_the_esri_drawing_info(monkeypatch):
+    monkeypatch.setattr(styles, "fetch_layers", lambda _url: FRAGMENT)
+    item = _styled_item()
+    stac.attach_renders(item)
+    stac.attach_style_assets(item)
+    style, esri = item["assets"]["style"], item["assets"]["esri_default"]
+    assert style["type"] == "application/vnd.mapbox.style+json"
+    assert style["roles"] == ["style", "default"]
+    folder = stac.item_object_path("ugs-serving-topics/emp", "enmin_ut_counties").rsplit("/", 1)[0]
+    assert style["href"] == config.public_url(f"{folder}/styles/default.json")
+    doc = json.loads(gcs.get_bytes(f"{folder}/styles/default.json"))
+    assert doc["layers"][0]["source-layer"] == "lyr" and doc["glyphs"].endswith("{range}.pbf")
+    assert esri["href"].endswith("/esri/enmin_ut_counties/default.json")
+    assert esri["roles"] == ["metadata"]
+
+
+def test_style_assets_leave_the_fragment_when_it_will_not_fetch(monkeypatch):
+    monkeypatch.setattr(styles, "fetch_layers", lambda _url: ())
+    item = _styled_item("hazards_qfaults")
+    stac.attach_renders(item)
+    stac.attach_style_assets(item)
+    assert item["assets"]["style"]["type"] == "application/json"
+
+
+def test_style_assets_skip_an_item_without_pmtiles(monkeypatch):
+    monkeypatch.setattr(styles, "fetch_layers", lambda _url: FRAGMENT)
+    item = {**_styled_item(), "assets": {}}
+    stac.attach_renders(item)
+    before = dict(item["assets"])
+    stac.attach_style_assets(item)
+    assert item["assets"] == before

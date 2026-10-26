@@ -383,7 +383,8 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
         ? "mt-1 bg-primary/10 p-2" : "mt-2 border-t border-border pt-2"}`}>
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-semibold text-primary">
-          Better source · {tierOf(better.scale) < tierOf(source.scale) ? "more detailed" : "newer"} map
+          Better source · {tierOf(better.scale) === tierOf(source.scale) && (better.year ?? 0) > (source.year ?? 0)
+            ? "newer" : "more detailed"} map
           · {[ratio(better.scale), better.year].filter(Boolean).join(" · ")}
         </span>
         <span className="block break-words text-sm" title={better.h.title}>{better.h.title}</span>

@@ -508,7 +508,7 @@ export const classificationEntries = (
   });
 };
 
-// classification:classes as a value→hex map (keyed by the class `value`/`name` token, e.g. a MapUnit)
+// classification:classes as a value→hex map (keyed by the class's MapUnit, else its `value`/`name`)
 // — for feature fills, where the standard legend (label→color) isn't enough. The built-in mechanism
 // for per-unit authored colors; the warehouse stamps it (core/styles.classification_classes).
 export const classificationColors = (d: StacDoc | undefined): Record<string, string> => {
@@ -516,8 +516,8 @@ export const classificationColors = (d: StacDoc | undefined): Record<string, str
   const out: Record<string, string> = {};
   if (Array.isArray(cls)) {
     for (const c of cls) {
-      const o = c as { name?: unknown; value?: unknown; color_hint?: unknown };
-      const key = o.value ?? o.name;
+      const o = c as { name?: unknown; value?: unknown; color_hint?: unknown; "ugs:map_unit"?: unknown };
+      const key = o["ugs:map_unit"] ?? o.value ?? o.name;
       if (key != null && typeof o.color_hint === "string") out[String(key)] = `#${o.color_hint}`;
     }
   }

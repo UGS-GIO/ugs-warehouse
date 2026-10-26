@@ -633,7 +633,7 @@ def attach_classification(item: dict) -> None:
 def write_item(item: dict) -> str:
     """Serialize + upload an item. Overwritten per ingest → short-lived edge cache + SWR."""
     path = item_object_path(_layout_path(item), item["id"])
-    item = {k: v for k, v in item.items() if k != "_collection_path"}  # drop private key
+    item = _absolute_self({k: v for k, v in item.items() if k != "_collection_path"}, path)
     # Items are ~6 KB and are read back individually (refresh_catalog, prior_property, overrides).
     # NOT gzipped: GCS serves a Content-Encoding:gzip object with decompressive transcoding, which
     # strips Content-Length — the header obstore.get() requires — so a gzipped item silently fails
@@ -1066,10 +1066,18 @@ def _write_markdown(path: str, *, title: str, description: str, kind: str, child
                       content_type=catalog_docs.MARKDOWN_MIME, cache_control=gcs.CACHE_CATALOG)
 
 
+def _absolute_self(doc: dict, object_path: str) -> dict:
+    """`doc` with its self link at its public URL, which STAC requires to be absolute. The other
+    links stay relative, so the catalog still reads from a copy anywhere."""
+    links = [{**lk, "href": config.public_url(object_path)} if lk.get("rel") == "self" else lk
+             for lk in doc.get("links") or []]
+    return {**doc, "links": links} if links else doc
+
+
 def _write_json(doc: dict, object_path: str, *, compress: bool = True) -> None:
     # catalog.json / collection.json / items.json — short edge cache + SWR (see gcs.CACHE_CATALOG),
     # stored gzipped: the biggest of these (a 4,212-item index) is 6.3 MB plain, 250 KB compressed.
-    gcs.put_bytes(json.dumps(doc, indent=2).encode(), object_path,
+    gcs.put_bytes(json.dumps(_absolute_self(doc, object_path), indent=2).encode(), object_path,
                   content_type="application/json", cache_control=gcs.CACHE_CATALOG,
                   compress=compress)
 

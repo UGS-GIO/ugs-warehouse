@@ -101,7 +101,7 @@ def _fill_title(item: dict, stem: str) -> None:
     props = stac.doc_fields(item)
     if not props.get("title"):
         render = (props.get("ugs:renders") or {}).get("default") or {}
-        props["title"] = render.get("title") or stac.prettify(stem)
+        props["title"] = stac.human_title(render.get("title")) or stac.prettify(stem)
 
 
 def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, md: dict,

@@ -122,6 +122,7 @@ def prettify(stem: str) -> str:
 
 def human_title(title: str | None) -> str | None:
     """`title`, or None when it is a raw layer name such as `geolunits_500k`."""
+    title = (title or "").strip()
     return None if not title or re.fullmatch(r"[a-z0-9_]+", title) else title
 
 

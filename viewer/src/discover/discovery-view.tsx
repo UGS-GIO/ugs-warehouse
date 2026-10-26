@@ -6,6 +6,7 @@
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Dialog } from "@base-ui/react/dialog";
 import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
@@ -107,6 +108,7 @@ export function DiscoveryView({
   const [hoverHref, setHoverHref] = useState<string | null>(null);
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null); // live viewport
   const [visible, setVisible] = useState(PAGE);
+  const [filtersOpen, setFiltersOpen] = useState(false); // the phone filter sheet
   const isWide = useIsWide(); // only MOUNT the map pane at ≥lg — keeps maplibre off phones/tablets
 
   // Heavy bits memoized on the stable items key (App's mapLoadKey), not the array identity — the
@@ -241,6 +243,22 @@ export function DiscoveryView({
   // Nothing searched or filtered yet: the category list shows above the newest results.
   const noSearch = !q.trim() && activeFilters === 0 && !itemSelected;
   const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // One set of facet groups: the md+ rail, or the phone sheet.
+  const facetGroups = (
+    <>
+      <FacetSection label="Category" facets={facets.categories} selected={new Set(cats)}
+        onToggle={(k) => toggleList("categories", k)} />
+      <FacetSection label="Collection" facets={facets.collections} selected={new Set(colls)}
+        onToggle={(k) => toggleList("collections", k)} />
+      <FacetSection label="Type" facets={facets.types} selected={new Set(types)}
+        onToggle={(k) => toggleList("types", k)} />
+      <FacetSection label="Format" facets={facets.formats} selected={new Set(formats)}
+        onToggle={(k) => toggleList("formats", k)} />
+      <FacetSection label="Scale" facets={facets.scales} selected={new Set(scales)}
+        onToggle={(k) => toggleList("scales", k)} />
+      <GeometrySection facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
+    </>
+  );
   const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], scales: [], geometry: "all",
     area: null });
 
@@ -272,6 +290,11 @@ export function DiscoveryView({
           </button>
         )}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {/* The rail is md+ only; on a phone the same groups open in a bottom sheet. */}
+          <button type="button" onClick={() => setFiltersOpen(true)}
+            className="shrink-0 rounded-md border border-input bg-card px-2.5 py-1 text-xs text-foreground hover:bg-hover pointer-coarse:min-h-11 md:hidden">
+            Filters{activeFilters > 0 && ` · ${activeFilters}`}
+          </button>
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
             Sort
             <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
@@ -318,6 +341,27 @@ export function DiscoveryView({
         </div>
       )}
 
+      <Dialog.Root open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <Dialog.Portal>
+          <Dialog.Backdrop className="fixed inset-0 z-3100 bg-black/40 md:hidden" />
+          <Dialog.Popup className="fixed inset-x-0 bottom-0 z-3101 flex max-h-modal flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:hidden">
+            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+              <Dialog.Title className="flex-1 text-base font-semibold">Filters</Dialog.Title>
+              {activeFilters > 0 && (
+                <button type="button" onClick={resetAll} className="text-sm text-primary hover:underline pointer-coarse:min-h-11 pointer-coarse:px-2">Clear all</button>
+              )}
+              <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11" aria-label="Close">✕</Dialog.Close>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto pb-3">{facetGroups}</div>
+            <div className="border-t border-border px-4 py-3">
+              <Dialog.Close className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 pointer-coarse:min-h-11">
+                Show {results.length} result{results.length === 1 ? "" : "s"}
+              </Dialog.Close>
+            </div>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">
         {/* LEFT — facet rail (grouped, sectioned, collapsible, with counts). */}
@@ -328,17 +372,7 @@ export function DiscoveryView({
               <button type="button" onClick={resetAll} className="text-xs text-primary hover:underline">Clear all</button>
             )}
           </div>
-          <FacetSection label="Category" facets={facets.categories} selected={new Set(cats)}
-            onToggle={(k) => toggleList("categories", k)} />
-          <FacetSection label="Collection" facets={facets.collections} selected={new Set(colls)}
-            onToggle={(k) => toggleList("collections", k)} />
-          <FacetSection label="Type" facets={facets.types} selected={new Set(types)}
-            onToggle={(k) => toggleList("types", k)} />
-          <FacetSection label="Format" facets={facets.formats} selected={new Set(formats)}
-            onToggle={(k) => toggleList("formats", k)} />
-          <FacetSection label="Scale" facets={facets.scales} selected={new Set(scales)}
-            onToggle={(k) => toggleList("scales", k)} />
-          <GeometrySection facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
+          {facetGroups}
           <div className="px-3 py-4 text-2xs leading-snug text-muted-foreground">
             Filters narrow the cards and the map together. Hover a card to find it on the map.
           </div>
@@ -554,7 +588,7 @@ function FacetSection({ label, facets, selected, onToggle }: {
   return (
     <section className="border-t border-border px-2 py-2">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center justify-between px-1 py-0.5 text-left">
+        className="flex w-full items-center justify-between px-1 py-0.5 text-left pointer-coarse:min-h-11">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
         <span aria-hidden className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
       </button>
@@ -565,7 +599,7 @@ function FacetSection({ label, facets, selected, onToggle }: {
             return (
               <li key={f.key}>
                 <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                   <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
@@ -577,7 +611,7 @@ function FacetSection({ label, facets, selected, onToggle }: {
           })}
           {facets.length > FACET_HEAD && (
             <li>
-              <button type="button" onClick={() => setAll((v) => !v)} className="px-2 py-0.5 text-xs text-primary hover:underline">
+              <button type="button" onClick={() => setAll((v) => !v)} className="px-2 py-0.5 text-xs text-primary hover:underline pointer-coarse:min-h-11">
                 {all ? "Show fewer" : `Show all ${facets.length}`}
               </button>
             </li>
@@ -598,7 +632,7 @@ function GeometrySection({ facets, value, onChange }: {
   return (
     <section className="border-t border-border px-2 py-2">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center justify-between px-1 py-0.5 text-left">
+        className="flex w-full items-center justify-between px-1 py-0.5 text-left pointer-coarse:min-h-11">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Geometry</span>
         <span aria-hidden className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
       </button>
@@ -610,7 +644,7 @@ function GeometrySection({ facets, value, onChange }: {
               <li key={f.key}>
                 <button type="button" role="radio" aria-checked={on}
                   onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                   <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>

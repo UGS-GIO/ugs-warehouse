@@ -60,7 +60,7 @@ export function useViewState() {
   const saver = useDataSaver();
   const { catalogDocs, cardsWithCovers } = useCovers(showsCards && !saver ? leafColls : [], cards, seriesChildren);
 
-  const { mapItems, mapLoadKey, mapItemsLoading, layerIds, layerRows } =
+  const { mapItems, mapLoadKey, layerIds, layerRows } =
     useMapItems(view, leafColls, layerCollIds, urlLayerIds);
   // Discover lists one entry per publication, not its layers and tables.
   const discoverItems = discoverable(mapItems);
@@ -246,7 +246,7 @@ export function useViewState() {
     layerRows.some((r) => r.id === id) || (!!itemUrl && idOf(itemUrl) === id && drawsAsLayer(item.data));
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
-    catalogDocs, mapItems, discoverItems, mapLoadKey, mapItemsLoading,
+    catalogDocs, mapItems, discoverItems, mapLoadKey,
     searchIsLayer, pickPlace, pickSearchItem,
     openItem, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, itemNotFound, partOf, collectionId, collectionUrl, layerIds, seriesSel,

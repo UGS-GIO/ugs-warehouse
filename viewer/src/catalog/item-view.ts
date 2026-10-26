@@ -45,8 +45,37 @@ export const typeOf = (it: ItemRef): string => {
   return String(p["ugs:pub_type"] ?? p["ugs:topic"] ?? p["ugs:series"] ?? "");
 };
 export const scale = (it: ItemRef): string => String(propsOf(it)["ugs:scale"] ?? "");
+
+/** A scale's denominator from its text: "1:24,000", "24000", "100k" or "1 inch = 200 feet". What's
+ *  here reads unit layers' own scale fields with it. For catalog items it is the fallback until the
+ *  catalog is reingested; pubs/scale.py reads the other forms. */
+export function parseScale(v: unknown): number | undefined {
+  const s = String(v ?? "").trim().toLowerCase().replace(/(\d)[, ](?=\d{3}\b)/g, "$1");
+  const m = /^(?:1\s*:\s*)?(\d+)\s*(k?)$/.exec(s) ?? /^1\s*inch\s*=\s*(\d+)\s*(feet)$/.exec(s);
+  const n = m ? Number(m[1]) * (m[2] === "k" ? 1000 : m[2] === "feet" ? 12 : 1) : 0;
+  return n >= 1 ? n : undefined;
+}
+
+// The scale pubs/scale.py wrote as `ugs:scale_denominator`, else the raw text read here.
+export const scaleDenominator = (it: ItemRef): number | undefined => {
+  const d = propsOf(it)["ugs:scale_denominator"];
+  return typeof d === "number" && d > 0 ? d : parseScale(scale(it));
+};
+
 export const author = (it: ItemRef): string => String(propsOf(it)["ugs:author"] ?? "");
 export const county = (it: ItemRef): string => String(propsOf(it)["ugs:county"] ?? "");
+
+// "Trimble et al." from "Larry M. Trimble; Hellmut H. Doelling". Handles "Sanchez, J.D." and
+// "Thomas C. Chidsey, Jr".
+export const firstAuthor = (it: ItemRef): string => {
+  const people = author(it).split(";").map((s) => s.trim()).filter(Boolean);
+  if (!people.length) return "";
+  const suffix = /^(jr|sr|ii|iii)\.?$/i;
+  const [head, tail = ""] = people[0].split(",").map((s) => s.trim());
+  const words = head.split(/\s+/).filter((w) => !suffix.test(w));
+  const name = tail && !suffix.test(tail) ? head : words.at(-1) ?? head;
+  return name.replace(/[.,]+$/, "") + (people.length > 1 ? " et al." : "");
+};
 
 // ISO date (YYYY-MM-DD), or "" when absent/non-string. Lexicographic on ISO == chronological.
 export const dateOf = (it: ItemRef): string =>
@@ -92,7 +121,7 @@ export const recordCountLabel = (it: ItemRef): string | undefined => {
 // ---- coarse content kind (a badge/label) — mirrors ugs-data-catalog datasetKind over StacDoc ----
 export type ItemKind = "vector" | "raster" | "publication" | "other";
 const PUBLICATION_ROOTS = new Set(["ugs-publications", "ugs-external"]);
-const isPublication = (it: ItemRef): boolean =>
+export const isPublication = (it: ItemRef): boolean =>
   PUBLICATION_ROOTS.has(collectionRoot(it.collId))
   || propsOf(it)["ugs:pub_type"] != null
   || propsOf(it)["ugs:series"] != null;

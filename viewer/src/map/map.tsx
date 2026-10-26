@@ -27,7 +27,7 @@ import { type ActiveLayer, type Footprint, mapDefaultLayers, orderedSublayerIds,
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
-import { to2d } from "@/lib/bbox";
+import { to2d, union } from "@/lib/bbox";
 import { RelatedLinks } from "./related-links";
 import { type IdentifyResult, identifyAt, identifyClick } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
@@ -107,13 +107,6 @@ export type OpenRelated = { itemHref: string; relatedKey: string; title: string;
 // `identify` is a click on a geologic-map raster: the unit under it, or the scan-only notice.
 export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo;
   identify?: IdentifyResult };
-
-// Union of bboxes → [w,s,e,n], or null.
-function unionBbox(bs: number[][]): [number, number, number, number] | null {
-  if (!bs.length) return null;
-  return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])),
-          Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
-}
 
 // A [w,s,e,n] bbox → a closed rectangle ring (GeoJSON Polygon coordinates).
 const bboxRing = (b: number[]): GeoJSON.Position[][] =>
@@ -239,6 +232,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const highlight = validBbox(highlightBbox);
   // Report the viewport bbox on load + after every move: for Discover's "Search this area", and
   // for the map view's "Save basemap" panel, which downloads the quads in view.
+  const boundsSent = useRef(false);
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
     if (!m || !onBoundsChange) return;
@@ -294,7 +288,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
+  const fitBox = union(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
@@ -417,7 +411,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       if (e.target instanceof Element && e.target.closest(".maplibregl-ctrl-geolocate")) void askHeading();
     }}>
     <MapGL
-      ref={mapRef}
+      // Registered for outside camera moves as soon as the map exists: load waits for every tile.
+      ref={(m) => { mapRef.current = m; if (m) setMapTarget(mapRef); }}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
       mapStyle={basemapStyle.data ?? BLANK_STYLE}
@@ -429,12 +424,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseMove={onHover}
       onLoad={() => {
         setMapLoaded(true); reportBounds();
-        setMapTarget(mapRef);
         const shared = showPin ? pinOf(location.search) : null;
         if (shared) setPin({ ...shared, label: formatCoords(shared.lat, shared.lng) });
         const focus = takeFocus();
         if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
+      // Bounds from the first frame, so "Search this area" works before every tile has loaded.
+      onRender={() => { if (!boundsSent.current && mapRef.current) { boundsSent.current = true; reportBounds(); } }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onRotate={trackNorth}
       onPitch={trackNorth}

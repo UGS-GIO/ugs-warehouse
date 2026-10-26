@@ -4,6 +4,7 @@ import type { ActiveLayer } from "@/map/map-model";
 import { quadAt, quadsInBbox } from "./basemap";
 import type { Bbox } from "./area";
 import { contains, overlaps, to2d } from "@/lib/bbox";
+import { parseScale } from "@/catalog/item-view";
 
 /** A long press lands on a point; "Save this area" covers the view. */
 export type Target = { kind: "area"; bbox: Bbox } | { kind: "point"; lon: number; lat: number; zoom?: number };
@@ -77,12 +78,6 @@ export function probeOf(h: Here): "identify" | "tile" | "bbox" | null {
   return h.group === "layer" ? "identify" : "tile";
 }
 
-/** A map scale as its denominator: "1:24,000" → 24000, "100k" → 100000. */
-export function scaleOf(v: unknown): number | undefined {
-  const m = String(v ?? "").replace(/,/g, "").match(/^(?:1:)?\s*(\d+(?:\.\d+)?)\s*(k)?$/i);
-  return m ? Number(m[1]) * (m[2] ? 1000 : 1) : undefined;
-}
-
 /** Reference layers: boundaries and grids that cover every point, so they are listed apart and
  *  collapsed. Chosen by item id; their STAC items carry nothing that marks them. */
 export const REFERENCE_IDS = new Set([
@@ -112,7 +107,7 @@ export function unitOf(layerId: string, props: Record<string, unknown>): Unit | 
   const symbol = f && text(props[f.symbol]);
   if (!f || !symbol) return null;
   return { symbol, name: f.name && text(props[f.name]), age: f.age && text(props[f.age]),
-           scale: typeof f.scale === "number" ? f.scale : scaleOf(props[f.scale]) };
+           scale: typeof f.scale === "number" ? f.scale : parseScale(props[f.scale]) };
 }
 
 /** How far a mapped line can sit from the ground, by the usual ±0.5 mm at map scale, in meters. */

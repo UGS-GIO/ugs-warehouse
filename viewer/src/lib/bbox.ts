@@ -17,3 +17,12 @@ export const overlaps = (a: Bbox, b: Bbox): boolean =>
 /** Whether a point lies in a box (on the edge counts). */
 export const contains = (b: Bbox, lon: number, lat: number): boolean =>
   b[0] <= lon && lon <= b[2] && b[1] <= lat && lat <= b[3];
+
+/** The box around every box given, or undefined for none. */
+export function union(boxes: readonly (readonly number[])[]): [number, number, number, number] | undefined {
+  const u: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const b of boxes) {
+    u[0] = Math.min(u[0], b[0]); u[1] = Math.min(u[1], b[1]); u[2] = Math.max(u[2], b[2]); u[3] = Math.max(u[3], b[3]);
+  }
+  return Number.isFinite(u[0]) ? u : undefined;
+}

@@ -4,9 +4,10 @@
 // The view component wires these to MiniSearch (the shared search-index) and the live map; neither
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
-import { CATEGORIES, categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
-  title, typeOf } from "@/catalog/item-view";
+import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
+  scale, scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
+import { overlaps } from "@/lib/bbox";
 import { validBbox } from "@/map/map-model";
 import { hasFootprint, pubOfEntry } from "@/stac";
 
@@ -22,7 +23,7 @@ export const discoverable = (items: ItemRef[]): ItemRef[] => items.filter((it) =
 export type FacetCount = { key: string; label: string; n: number };
 export type Facets = {
   collections: FacetCount[]; categories: FacetCount[]; types: FacetCount[];
-  formats: FacetCount[]; geometry: FacetCount[];
+  formats: FacetCount[]; scales: FacetCount[]; geometry: FacetCount[];
 };
 
 // Geometry facet keys (also the `geometry` field of a FacetSelection).
@@ -38,28 +39,42 @@ const bump = (m: Map<string, FacetCount>, key: string, label: string) => {
   else m.set(key, { key, label, n: 1 });
 };
 
+// Scale facet buckets, large scale to small. The key is the URL value.
+export const SCALE_BUCKETS = [
+  { key: "lt24k", label: "Larger than 1:24,000" },
+  { key: "24k", label: "1:24,000 · 7.5' quadrangle" },
+  { key: "mid", label: "1:25,000 to 1:99,999" },
+  { key: "62k", label: "1:62,500 · 15' quadrangle" },
+  { key: "100k", label: "1:100,000 · 30'×60'" },
+  { key: "100k-250k", label: "1:100,001 to 1:249,999" },
+  { key: "250k", label: "1:250,000 and smaller" },
+  { key: "other", label: "Other" },
+] as const;
+export const scaleLabel = (key: string): string =>
+  SCALE_BUCKETS.find((b) => b.key === key)?.label ?? key;
+
+const bucketOf = (d: number | undefined): string => {
+  if (!d) return "other";
+  if (d < 24000) return "lt24k";
+  if (d === 24000) return "24k";
+  if (d === 62500) return "62k";
+  if (d === 100000) return "100k";
+  if (d < 100000) return "mid";
+  return d < 250000 ? "100k-250k" : "250k";
+};
+
+// The SCALE_BUCKETS key for an item's scale; undefined when it has none.
+export const scaleBucket = (it: ItemRef): string | undefined =>
+  (scale(it).trim() || propsOf(it)["ugs:scale_denominator"] ? bucketOf(scaleDenominator(it)) : undefined);
+
 // Counts for each facet group over the full loaded set (stable — counts don't shift as filters
 // toggle, so the rail reads like a table of contents rather than jumping around).
-export type Tile = { key: string; label: string; count: number };
-
-// The category list Discover shows before a search: each item's one home category, in taxonomy order, with counts,
-// keeping only the categories that have items.
-export function categoryTiles(items: ItemRef[]): Tile[] {
-  const counts = new Map<string, number>();
-  for (const it of items) {
-    const { key } = categorize(it);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return CATEGORIES
-    .map((c) => ({ key: c.key, label: c.label, count: counts.get(c.key) ?? 0 }))
-    .filter((t) => t.count > 0);
-}
-
 export function extractFacets(items: ItemRef[]): Facets {
   const colls = new Map<string, FacetCount>();
   const cats = new Map<string, FacetCount>();
   const types = new Map<string, FacetCount>();
   const formats = new Map<string, FacetCount>();
+  const scales = new Map<string, number>();
   let has = 0;
   let none = 0;
   for (const it of items) {
@@ -70,6 +85,8 @@ export function extractFacets(items: ItemRef[]): Facets {
     const t = typeOf(it);
     if (t) bump(types, t, t);
     for (const f of formatsOf(it)) bump(formats, f, f);
+    const sb = scaleBucket(it);
+    if (sb) scales.set(sb, (scales.get(sb) ?? 0) + 1);
     if (hasFootprint(it.data)) has++;
     else none++;
   }
@@ -79,7 +96,17 @@ export function extractFacets(items: ItemRef[]): Facets {
   return {
     collections: ranked(colls), categories: ranked(cats), types: ranked(types),
     formats: ranked(formats), geometry,
+    scales: SCALE_BUCKETS.filter((b) => scales.has(b.key))
+      .map((b) => ({ key: b.key, label: b.label, n: scales.get(b.key) ?? 0 })),
   };
+}
+
+/** A facet's rows plus any selected value the current search left with no matches, at 0, so a
+ *  filter that's on can always be seen and turned off where it was turned on. */
+export function withSelected(facets: FacetCount[], selected: string[], label: (key: string) => string): FacetCount[] {
+  const have = new Set(facets.map((f) => f.key));
+  const missing = selected.filter((k) => !have.has(k)).map((k) => ({ key: k, label: label(k), n: 0 }));
+  return missing.length ? [...missing, ...facets] : facets;
 }
 
 export type FacetSelection = {
@@ -87,22 +114,26 @@ export type FacetSelection = {
   types: string[];
   categories?: string[]; // one home category per item (categorize)
   formats?: string[];    // an item matches if it carries ANY selected format
+  scales?: string[];     // SCALE_BUCKETS keys
   geometry: "all" | typeof GEOM_HAS | typeof GEOM_NONE;
 };
 
 // Keep items matching every active facet group — AND across the groups, OR within a multi-select
-// group (collections / categories / types / formats). An item without loaded data is never a result.
+// group (collections / categories / types / formats / scales). An item without loaded data is
+// never a result.
 export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
   const colls = new Set(sel.collections);
   const cats = new Set(sel.categories ?? []);
   const types = new Set(sel.types);
   const formats = new Set(sel.formats ?? []);
+  const scales = new Set(sel.scales ?? []);
   return items.filter((it) => {
     if (!it.data) return false;
     if (colls.size && !colls.has(it.collId)) return false;
     if (cats.size && !cats.has(categorize(it).key)) return false;
     if (types.size && !types.has(typeOf(it))) return false;
     if (formats.size && !formatsOf(it).some((f) => formats.has(f))) return false;
+    if (scales.size && !scales.has(scaleBucket(it) ?? "")) return false;
     if (sel.geometry === GEOM_HAS && !hasFootprint(it.data)) return false;
     if (sel.geometry === GEOM_NONE && hasFootprint(it.data)) return false;
     return true;
@@ -114,9 +145,46 @@ export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
 export function bboxIntersects(a: number[] | undefined, b: number[] | undefined): boolean {
   const va = validBbox(a);
   const vb = validBbox(b);
-  if (!va || !vb) return false;
-  return va[0] <= vb[2] && va[2] >= vb[0] && va[1] <= vb[3] && va[3] >= vb[1];
+  return Boolean(va && vb && overlaps(va, vb));
 }
+
+// A place's search area: its own extent, grown to at least about a 30' x 60' sheet so a town (or an
+// address, which is a point) still covers the maps around it.
+const MIN_AREA_DEG: [number, number] = [1, 0.5];
+export function placeArea([w, s, e, n]: Area): Area {
+  const cx = (w + e) / 2, cy = (s + n) / 2;
+  const hw = Math.max(e - w, MIN_AREA_DEG[0]) / 2, hh = Math.max(n - s, MIN_AREA_DEG[1]) / 2;
+  return [cx - hw, cy - hh, cx + hw, cy + hh];
+}
+
+/** How well a footprint matches a search area, 0 to 1 (Lucene's bbox overlap ratio): how much of the
+ *  area it covers, weighted AREA_SHARE, plus how much of it lies in the area. Weighting the second
+ *  keeps a regional layer that blankets the area below the local maps inside it. */
+const AREA_SHARE = 0.25;
+export function overlapScore(bbox: number[] | undefined, area: Area): number {
+  const b = validBbox(bbox);
+  if (!b) return 0;
+  const ow = Math.min(b[2], area[2]) - Math.max(b[0], area[0]);
+  const oh = Math.min(b[3], area[3]) - Math.max(b[1], area[1]);
+  if (ow < 0 || oh < 0) return 0;
+  const inter = ow * oh, own = (b[2] - b[0]) * (b[3] - b[1]);
+  const ofArea = inter / ((area[2] - area[0]) * (area[3] - area[1]));
+  const inside = own === 0 ? 1 : inter / own;   // a point or line in the area is all in it
+  return AREA_SHARE * ofArea + (1 - AREA_SHARE) * inside;
+}
+// Footprints far bigger than what's being looked at (statewide maps over a town) only paint the
+// whole map; they stay in the results but aren't drawn. Without an area, the yardstick is two
+// 1:250,000 sheets.
+const MAX_DRAWN_DEG2 = 4;
+const boxArea = (b: number[]) => (b[2] - b[0]) * (b[3] - b[1]);
+export function drawable<T extends { bbox: number[] }>(fps: T[], area: Area | null): T[] {
+  const limit = area ? 4 * boxArea(area) : MAX_DRAWN_DEG2;
+  return fps.filter((f) => boxArea(f.bbox) <= limit);
+}
+/** Best area match first, for "Best match" when a search area is set and nothing is typed. */
+export const byOverlap = (items: ItemRef[], area: Area): ItemRef[] =>
+  items.map((it) => ({ it, s: overlapScore(it.data?.bbox, area) }))
+    .sort((a, b) => b.s - a.s).map(({ it }) => it);
 
 // "Search this area": keep items whose footprint meets the current map viewport. Aspatial items (no
 // valid bbox) can't be in an area, so they drop out while the filter is active. A missing/invalid
@@ -172,17 +240,20 @@ export const ranksByWords = (query: Query): boolean => Boolean(baseTerms(query))
 // Without words, "Best match" is just catalog load order, which leads with the oldest external
 // publishers, so that view lists newest first instead. A sort the user picked is kept.
 export const effectiveSort = (s: DiscoveryState): SortKey =>
-  (s.sort === "relevance" && !ranksByWords(parseQuery(s.q)) ? "newest" : s.sort);
+  (s.sort === "relevance" && !ranksByWords(parseQuery(s.q)) && !s.area ? "newest" : s.sort);
 
 // ---- URL <-> Discover state (the boundary) ------------------------------------------------------
 // The Discover view's whole filter/sort/layout state lives in the URL so a category tile or a shared
 // link reproduces the view. These two pure functions are the validated boundary: parse the raw search
 // (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
 // drops defaults (so a pristine view stays a clean `/`). Namespaced keys — q / collections
-// / types / category / formats / geometry / sort / layout / density / area — never touch App's c/i/l/s.
+// / types / category / formats / scale / geometry / sort / layout / density / area — never touch App's c/i/l/s.
 export type Layout = "gallery" | "list";
 export type Density = "comfortable" | "compact";
 export type Area = [number, number, number, number];
+
+// An inclusive [min, max]; a null end is open ("Any").
+export type Range = [number | null, number | null];
 
 export type DiscoveryState = {
   q: string;
@@ -190,16 +261,20 @@ export type DiscoveryState = {
   categories: string[];
   types: string[];
   formats: string[];
+  scales: string[];
   geometry: FacetSelection["geometry"];
   sort: SortKey;
   layout: Layout;
   density: Density;
   area: Area | null;
+  place: string;          // the place an area came from ("Moab"), for its chip; "" for a drawn area
+  years: Range | null;    // publication year
 };
 
 export const DEFAULT_DISCOVERY: DiscoveryState = {
-  q: "", collections: [], categories: [], types: [], formats: [],
+  q: "", collections: [], categories: [], types: [], formats: [], scales: [],
   geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
+  place: "", years: null,
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -217,8 +292,20 @@ const SORT_KEYS = SORTS.map((s) => s.key);
 const parseArea = (v: unknown): Area | null => {
   const parts = str(v).split(",").map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
-  return validBbox(parts) ? (parts as Area) : null;
+  return validBbox(parts) && parts[0] < parts[2] && parts[1] < parts[3] ? (parts as Area) : null;
 };
+
+// "1990,2010" / "1990," / ",2010"; only positive whole numbers.
+const parseRange = (v: unknown): Range | null => {
+  const parts = str(v).split(",");
+  if (parts.length !== 2) return null;
+  const [lo, hi] = parts.map((p) => (p.trim() === "" ? null : Number(p)));
+  if ([lo, hi].some((n) => n !== null && !(Number.isInteger(n) && n > 0))) return null;
+  if (lo === null && hi === null) return null;
+  return lo !== null && hi !== null && lo > hi ? [hi, lo] : [lo, hi];
+};
+const rangeParam = (r: Range | null): string | undefined =>
+  (r ? `${r[0] ?? ""},${r[1] ?? ""}` : undefined);
 
 /** Raw search params → a validated DiscoveryState (bad/absent values fall back to the default). */
 export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
@@ -228,11 +315,15 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     categories: toStringArray(sp.category),
     types: toStringArray(sp.types),
     formats: toStringArray(sp.formats),
+    scales: toStringArray(sp.scale),
     geometry: oneOf(sp.geometry, GEOMETRIES, "all"),
     sort: oneOf(sp.sort, SORT_KEYS, "relevance"),
     layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
     density: oneOf(sp.density, DENSITIES_K, "comfortable"),
-    area: parseArea(sp.area),
+    // A place's area is at least placeArea's size, whatever the link carries.
+    area: parseArea(sp.area) && str(sp.place) ? placeArea(parseArea(sp.area)!) : parseArea(sp.area),
+    place: parseArea(sp.area) ? str(sp.place) : "",
+    years: parseRange(sp.years),
   };
 }
 
@@ -250,13 +341,19 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     category: csv(s.categories),
     types: csv(s.types),
     formats: csv(s.formats),
+    scale: csv(s.scales),
     geometry: s.geometry === "all" ? undefined : s.geometry,
     sort: s.sort === "relevance" ? undefined : s.sort,
     layout: s.layout === "gallery" ? undefined : s.layout,
     density: s.density === "comfortable" ? undefined : s.density,
     area: s.area ? s.area.join(",") : undefined,
+    place: s.area && s.place ? s.place : undefined,
+    years: rangeParam(s.years),
   };
 }
+
+// Every URL key Discover owns, for the views that carry or drop them.
+export const DISCOVER_KEYS = Object.keys(discoveryPatch(DEFAULT_DISCOVERY));
 
 /** The active-filter chips (removable) for the row above the cards — pure so it's testable. Each
  *  carries the patch that REMOVES just that filter. Text search + sort/layout/density aren't "filters". */
@@ -273,8 +370,91 @@ export function activeChips(s: DiscoveryState, labelFor: {
     chips.push({ id: `type:${key}`, label: key, patch: { types: s.types.filter((k) => k !== key) } });
   for (const key of s.formats)
     chips.push({ id: `fmt:${key}`, label: key, patch: { formats: s.formats.filter((k) => k !== key) } });
+  for (const key of s.scales)
+    chips.push({ id: `scale:${key}`, label: scaleLabel(key), patch: { scales: s.scales.filter((k) => k !== key) } });
   if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
   if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
-  if (s.area) chips.push({ id: "area", label: "Map area", patch: { area: null } });
+  if (s.area) chips.push({ id: "area", label: s.place ? `Near ${s.place}` : "Map area", patch: { area: null, place: "" } });
+  if (s.years) chips.push({ id: "years", label: yearsLabel(s.years), patch: { years: null } });
   return chips;
 }
+
+export const yearsLabel = ([lo, hi]: Range): string => {
+  if (lo !== null && hi !== null) return lo === hi ? `${lo}` : `${lo} to ${hi}`;
+  if (lo !== null) return `${lo} or later`;
+  return hi !== null ? `${hi} or earlier` : "Any";
+};
+
+// A publication's year; a layer's datetime is when it was loaded, so it has none (datetimeIsPublished).
+export const publishedYear = (it: ItemRef): number | null =>
+  (datetimeIsPublished(propsOf(it)) ? year(it) : null);
+
+const within = (v: number | null, [lo, hi]: Range): boolean =>
+  v !== null && (lo === null || v >= lo) && (hi === null || v <= hi);
+
+export type Bin = { lo: number; hi: number; n: number };
+export function yearBins(items: ItemRef[], [min, max]: [number, number], size = 5): Bin[] {
+  const bins: Bin[] = [];
+  for (let lo = min; lo <= max; lo += size) bins.push({ lo, hi: Math.min(lo + size - 1, max), n: 0 });
+  for (const it of items) {
+    const y = publishedYear(it);
+    if (y !== null && y >= min && y <= max) bins[Math.floor((y - min) / size)].n++;
+  }
+  return bins;
+}
+export function yearSpan(items: ItemRef[]): [number, number] | null {
+  let min = Infinity, max = -Infinity;
+  for (const it of items) {
+    const y = publishedYear(it);
+    if (y !== null) { min = Math.min(min, y); max = Math.max(max, y); }
+  }
+  return min <= max ? [min, max] : null;
+}
+
+export type FilterGroup =
+  "collections" | "categories" | "types" | "formats" | "geometry" | "area" | "years" | "scales";
+
+const CLEAR: Record<FilterGroup, Partial<DiscoveryState>> = {
+  collections: { collections: [] }, categories: { categories: [] }, types: { types: [] },
+  formats: { formats: [] }, geometry: { geometry: "all" }, area: { area: null, place: "" },
+  years: { years: null }, scales: { scales: [] },
+};
+const ANY: Record<FilterGroup, string> = {
+  collections: "Any collection", categories: "Any category", types: "Any type", formats: "Any format",
+  geometry: "With or without a footprint", area: "Anywhere", years: "Any year", scales: "Any scale",
+};
+
+export const activeGroups = (s: DiscoveryState): FilterGroup[] => {
+  const on: Record<FilterGroup, boolean> = {
+    collections: s.collections.length > 0, categories: s.categories.length > 0, types: s.types.length > 0,
+    formats: s.formats.length > 0, geometry: s.geometry !== "all", area: s.area !== null,
+    years: s.years !== null, scales: s.scales.length > 0,
+  };
+  return (Object.keys(on) as FilterGroup[]).filter((g) => on[g]);
+};
+
+export function filterResults(items: ItemRef[], s: DiscoveryState, skip?: FilterGroup): ItemRef[] {
+  let out = applyFacets(items, {
+    collections: skip === "collections" ? [] : s.collections,
+    categories: skip === "categories" ? [] : s.categories,
+    types: skip === "types" ? [] : s.types,
+    formats: skip === "formats" ? [] : s.formats,
+    scales: skip === "scales" ? [] : s.scales,
+    geometry: skip === "geometry" ? "all" : s.geometry,
+  });
+  if (s.area && skip !== "area") out = filterByViewport(out, s.area);
+  const { years } = s;
+  if (years && skip !== "years") out = out.filter((it) => within(publishedYear(it), years));
+  return out;
+}
+
+/** For each active filter, how many more of `matched` would show without it, and the patch that
+ *  drops it. Only the ones that would bring something back, most first. */
+export type Relief = { group: FilterGroup; label: string; gain: number; patch: Partial<DiscoveryState> };
+export function reliefs(matched: ItemRef[], s: DiscoveryState, shown: number): Relief[] {
+  return activeGroups(s)
+    .map((g) => ({ group: g, label: ANY[g], gain: filterResults(matched, s, g).length - shown, patch: CLEAR[g] }))
+    .filter((r) => r.gain > 0)
+    .sort((a, b) => b.gain - a.gain);
+}
+export const CLEAR_ALL: Partial<DiscoveryState> = Object.assign({}, ...Object.values(CLEAR));

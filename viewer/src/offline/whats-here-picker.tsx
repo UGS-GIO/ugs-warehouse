@@ -18,6 +18,7 @@ import { useViewCtx } from "@/app";
 import { Chevron } from "@/ui/chevron";
 import { toLayer } from "@/map/to-layer";
 import type { ItemRef } from "@/catalog/browse";
+import { scaleDenominator } from "@/catalog/item-view";
 import type { ActiveLayer } from "@/map/map-model";
 import { planArea } from "./area";
 import { planCogArea } from "./cog-area";
@@ -33,7 +34,7 @@ import { useOffline } from "./store";
 import { formatCoords, pointLink } from "@/map/share-point";
 import {
   caveatOf, type Here, isSaveable, isUnitLayer, mostDetailed, otherUnit, probeOf, quadsFor, REFERENCE_IDS, ringAround,
-  saveBbox, scaleOf, type Target, toleranceM,
+  saveBbox, type Target, toleranceM,
   type Unit, unitOf, whatsHere,
 } from "./whats-here";
 
@@ -96,7 +97,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     const refs = [...seen.values()];
     return {
       candidates: refs.map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null),
-      scales: new Map(refs.map((r) => [idOf(r.href), scaleOf(r.data?.properties?.["ugs:scale"])])),
+      scales: new Map(refs.map((r) => [idOf(r.href), scaleDenominator(r)])),
     };
   }, [ctx.mapItems, ctx.allItems]);
   const here = useMemo(() => whatsHere(candidates, target), [candidates, target]);

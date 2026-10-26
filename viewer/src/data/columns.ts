@@ -2,6 +2,8 @@
 // DuckDB path (download.ts) and the light hyparquet path (parquet-lite.ts), and kept apart from
 // both so the light path does not load the export code.
 
+import { union } from "@/lib/bbox";
+
 export const GEOM_NAMES = ["geom", "geometry", "wkb_geometry"];
 
 // The plain numeric bbox covering columns the warehouse writes (sink_archive). Read for row→map
@@ -9,15 +11,8 @@ export const GEOM_NAMES = ["geom", "geometry", "wkb_geometry"];
 export const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 
 /** The extent of rows carrying the bbox columns, or undefined when none has one. */
-export function unionBbox(rows: Record<string, unknown>[]): [number, number, number, number] | undefined {
-  const b = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const r of rows) {
-    const [w, s, e, n] = BBOX_COLS.map((c) => Number(r[c]));
-    if (![w, s, e, n].every(Number.isFinite)) continue;
-    b[0] = Math.min(b[0], w); b[1] = Math.min(b[1], s); b[2] = Math.max(b[2], e); b[3] = Math.max(b[3], n);
-  }
-  return Number.isFinite(b[0]) ? [b[0], b[1], b[2], b[3]] : undefined;
-}
+export const unionBbox = (rows: Record<string, unknown>[]): [number, number, number, number] | undefined =>
+  union(rows.map((r) => BBOX_COLS.map((c) => Number(r[c]))).filter((b) => b.every(Number.isFinite)));
 
 // The same extent as GeoParquet 1.1's covering struct, for spec-aware readers. Hidden and not
 // exported: it repeats the geometry's bounds.

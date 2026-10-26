@@ -291,7 +291,7 @@ export function DiscoveryView({
     if (!u) return;
     fittedQ.current = t;
     flyTo(u);
-  }, [q, drawn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, drawn, isWide, showMap, area]);
 
   // Clearing a place undoes picking it: back to the search it came from (the map refits to that),
   // or, with none, the whole catalog and all of Utah. A search typed since then is kept.

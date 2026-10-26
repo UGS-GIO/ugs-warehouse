@@ -102,6 +102,8 @@ def _fill_title(item: dict, stem: str) -> None:
     if not props.get("title"):
         render = (props.get("ugs:renders") or {}).get("default") or {}
         props["title"] = stac.human_title(render.get("title")) or stac.prettify(stem)
+        print(f"[{stem}] WARNING no human title; using {props['title']!r}. "
+              "Set one in the admin console's metadata overrides.", file=sys.stderr)
 
 
 def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, md: dict,

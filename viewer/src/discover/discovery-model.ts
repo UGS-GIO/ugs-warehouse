@@ -5,7 +5,7 @@
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
 import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
-  scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
+  scale, scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
 import { hasFootprint, pubOfEntry } from "@/stac";
@@ -22,7 +22,7 @@ export const discoverable = (items: ItemRef[]): ItemRef[] => items.filter((it) =
 export type FacetCount = { key: string; label: string; n: number };
 export type Facets = {
   collections: FacetCount[]; categories: FacetCount[]; types: FacetCount[];
-  formats: FacetCount[]; geometry: FacetCount[];
+  formats: FacetCount[]; scales: FacetCount[]; geometry: FacetCount[];
 };
 
 // Geometry facet keys (also the `geometry` field of a FacetSelection).
@@ -38,6 +38,34 @@ const bump = (m: Map<string, FacetCount>, key: string, label: string) => {
   else m.set(key, { key, label, n: 1 });
 };
 
+// Scale facet buckets, large scale to small. The key is the URL value.
+export const SCALE_BUCKETS = [
+  { key: "lt24k", label: "Larger than 1:24,000" },
+  { key: "24k", label: "1:24,000 · 7.5' quadrangle" },
+  { key: "mid", label: "1:25,000 to 1:99,999" },
+  { key: "62k", label: "1:62,500 · 15' quadrangle" },
+  { key: "100k", label: "1:100,000 · 30'×60'" },
+  { key: "100k-250k", label: "1:100,001 to 1:249,999" },
+  { key: "250k", label: "1:250,000 and smaller" },
+  { key: "other", label: "Other" },
+] as const;
+export const scaleLabel = (key: string): string =>
+  SCALE_BUCKETS.find((b) => b.key === key)?.label ?? key;
+
+const bucketOf = (d: number | undefined): string => {
+  if (!d) return "other";
+  if (d < 24000) return "lt24k";
+  if (d === 24000) return "24k";
+  if (d === 62500) return "62k";
+  if (d === 100000) return "100k";
+  if (d < 100000) return "mid";
+  return d < 250000 ? "100k-250k" : "250k";
+};
+
+// The SCALE_BUCKETS key for an item's scale; undefined when it has none.
+export const scaleBucket = (it: ItemRef): string | undefined =>
+  (scale(it).trim() || propsOf(it)["ugs:scale_denominator"] ? bucketOf(scaleDenominator(it)) : undefined);
+
 // Counts for each facet group over the full loaded set (stable — counts don't shift as filters
 // toggle, so the rail reads like a table of contents rather than jumping around).
 export function extractFacets(items: ItemRef[]): Facets {
@@ -45,6 +73,7 @@ export function extractFacets(items: ItemRef[]): Facets {
   const cats = new Map<string, FacetCount>();
   const types = new Map<string, FacetCount>();
   const formats = new Map<string, FacetCount>();
+  const scales = new Map<string, number>();
   let has = 0;
   let none = 0;
   for (const it of items) {
@@ -55,6 +84,8 @@ export function extractFacets(items: ItemRef[]): Facets {
     const t = typeOf(it);
     if (t) bump(types, t, t);
     for (const f of formatsOf(it)) bump(formats, f, f);
+    const sb = scaleBucket(it);
+    if (sb) scales.set(sb, (scales.get(sb) ?? 0) + 1);
     if (hasFootprint(it.data)) has++;
     else none++;
   }
@@ -64,6 +95,8 @@ export function extractFacets(items: ItemRef[]): Facets {
   return {
     collections: ranked(colls), categories: ranked(cats), types: ranked(types),
     formats: ranked(formats), geometry,
+    scales: SCALE_BUCKETS.filter((b) => scales.has(b.key))
+      .map((b) => ({ key: b.key, label: b.label, n: scales.get(b.key) ?? 0 })),
   };
 }
 
@@ -80,22 +113,26 @@ export type FacetSelection = {
   types: string[];
   categories?: string[]; // one home category per item (categorize)
   formats?: string[];    // an item matches if it carries ANY selected format
+  scales?: string[];     // SCALE_BUCKETS keys
   geometry: "all" | typeof GEOM_HAS | typeof GEOM_NONE;
 };
 
 // Keep items matching every active facet group — AND across the groups, OR within a multi-select
-// group (collections / categories / types / formats). An item without loaded data is never a result.
+// group (collections / categories / types / formats / scales). An item without loaded data is
+// never a result.
 export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
   const colls = new Set(sel.collections);
   const cats = new Set(sel.categories ?? []);
   const types = new Set(sel.types);
   const formats = new Set(sel.formats ?? []);
+  const scales = new Set(sel.scales ?? []);
   return items.filter((it) => {
     if (!it.data) return false;
     if (colls.size && !colls.has(it.collId)) return false;
     if (cats.size && !cats.has(categorize(it).key)) return false;
     if (types.size && !types.has(typeOf(it))) return false;
     if (formats.size && !formatsOf(it).some((f) => formats.has(f))) return false;
+    if (scales.size && !scales.has(scaleBucket(it) ?? "")) return false;
     if (sel.geometry === GEOM_HAS && !hasFootprint(it.data)) return false;
     if (sel.geometry === GEOM_NONE && hasFootprint(it.data)) return false;
     return true;
@@ -219,7 +256,7 @@ export const effectiveSort = (s: DiscoveryState): SortKey =>
 // link reproduces the view. These two pure functions are the validated boundary: parse the raw search
 // (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
 // drops defaults (so a pristine view stays a clean `/`). Namespaced keys — q / collections
-// / types / category / formats / geometry / sort / layout / density / area — never touch App's c/i/l/s.
+// / types / category / formats / scale / geometry / sort / layout / density / area — never touch App's c/i/l/s.
 export type Layout = "gallery" | "list";
 export type Density = "comfortable" | "compact";
 export type Area = [number, number, number, number];
@@ -233,6 +270,7 @@ export type DiscoveryState = {
   categories: string[];
   types: string[];
   formats: string[];
+  scales: string[];
   geometry: FacetSelection["geometry"];
   sort: SortKey;
   layout: Layout;
@@ -240,13 +278,12 @@ export type DiscoveryState = {
   area: Area | null;
   place: string;          // the place an area came from ("Moab"), for its chip; "" for a drawn area
   years: Range | null;    // publication year
-  scales: Range | null;   // scale denominators: [24000, 100000] is 1:24,000 to 1:100,000
 };
 
 export const DEFAULT_DISCOVERY: DiscoveryState = {
-  q: "", collections: [], categories: [], types: [], formats: [],
+  q: "", collections: [], categories: [], types: [], formats: [], scales: [],
   geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
-  place: "", years: null, scales: null,
+  place: "", years: null,
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -287,6 +324,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     categories: toStringArray(sp.category),
     types: toStringArray(sp.types),
     formats: toStringArray(sp.formats),
+    scales: toStringArray(sp.scale),
     geometry: oneOf(sp.geometry, GEOMETRIES, "all"),
     sort: oneOf(sp.sort, SORT_KEYS, "relevance"),
     layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
@@ -295,7 +333,6 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     area: parseArea(sp.area) && str(sp.place) ? placeArea(parseArea(sp.area)!) : parseArea(sp.area),
     place: parseArea(sp.area) ? str(sp.place) : "",
     years: parseRange(sp.years),
-    scales: parseRange(sp.scale),
   };
 }
 
@@ -313,6 +350,7 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     category: csv(s.categories),
     types: csv(s.types),
     formats: csv(s.formats),
+    scale: csv(s.scales),
     geometry: s.geometry === "all" ? undefined : s.geometry,
     sort: s.sort === "relevance" ? undefined : s.sort,
     layout: s.layout === "gallery" ? undefined : s.layout,
@@ -320,7 +358,6 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     area: s.area ? s.area.join(",") : undefined,
     place: s.area && s.place ? s.place : undefined,
     years: rangeParam(s.years),
-    scale: rangeParam(s.scales),
   };
 }
 
@@ -339,24 +376,19 @@ export function activeChips(s: DiscoveryState, labelFor: {
     chips.push({ id: `type:${key}`, label: key, patch: { types: s.types.filter((k) => k !== key) } });
   for (const key of s.formats)
     chips.push({ id: `fmt:${key}`, label: key, patch: { formats: s.formats.filter((k) => k !== key) } });
+  for (const key of s.scales)
+    chips.push({ id: `scale:${key}`, label: scaleLabel(key), patch: { scales: s.scales.filter((k) => k !== key) } });
   if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
   if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
   if (s.area) chips.push({ id: "area", label: s.place ? `Near ${s.place}` : "Map area", patch: { area: null, place: "" } });
   if (s.years) chips.push({ id: "years", label: yearsLabel(s.years), patch: { years: null } });
-  if (s.scales) chips.push({ id: "scales", label: scalesLabel(s.scales), patch: { scales: null } });
   return chips;
 }
 
-const fmtScale = (d: number) => `1:${d.toLocaleString("en-US")}`;
 export const yearsLabel = ([lo, hi]: Range): string => {
   if (lo !== null && hi !== null) return lo === hi ? `${lo}` : `${lo} to ${hi}`;
   if (lo !== null) return `${lo} or later`;
   return hi !== null ? `${hi} or earlier` : "Any";
-};
-export const scalesLabel = ([lo, hi]: Range): string => {
-  if (lo !== null && hi !== null) return lo === hi ? fmtScale(lo) : `${fmtScale(lo)} to ${fmtScale(hi)}`;
-  if (lo !== null) return `${fmtScale(lo)} or less detailed`;
-  return hi !== null ? `${fmtScale(hi)} or more detailed` : "Any";
 };
 
 // A publication's year; a layer's datetime is when it was loaded, so it has none (datetimeIsPublished).
@@ -366,18 +398,6 @@ export const publishedYear = (it: ItemRef): number | null =>
 const within = (v: number | null, [lo, hi]: Range): boolean =>
   v !== null && (lo === null || v >= lo) && (hi === null || v <= hi);
 
-export const SCALE_STEPS = [
-  1000, 2400, 6000, 12000, 24000, 31680, 50000, 62500, 100000, 125000, 250000, 500000, 1000000, 2500000,
-];
-/** The step nearest a denominator, on a log scale (1:30,000 is nearer 1:24,000 than 1:50,000). */
-export const nearestStep = (d: number): number => {
-  let best = 0;
-  SCALE_STEPS.forEach((s, i) => {
-    if (Math.abs(Math.log(d / s)) < Math.abs(Math.log(d / SCALE_STEPS[best]))) best = i;
-  });
-  return best;
-};
-
 export type Bin = { lo: number; hi: number; n: number };
 export function yearBins(items: ItemRef[], [min, max]: [number, number], size = 5): Bin[] {
   const bins: Bin[] = [];
@@ -385,21 +405,6 @@ export function yearBins(items: ItemRef[], [min, max]: [number, number], size = 
   for (const it of items) {
     const y = publishedYear(it);
     if (y !== null && y >= min && y <= max) bins[Math.floor((y - min) / size)].n++;
-  }
-  return bins;
-}
-/** Whether a denominator falls in a scale range, compared step by step: the slider and histogram put
- *  a 1:20,000 map at the 1:24,000 step, so a 1:24,000 to 1:24,000 range has to include it too. */
-export const inScaleRange = (d: number | null, [lo, hi]: Range): boolean => {
-  if (d === null) return false;
-  const i = nearestStep(d);
-  return (lo === null || i >= nearestStep(lo)) && (hi === null || i <= nearestStep(hi));
-};
-export function scaleBins(items: ItemRef[]): Bin[] {
-  const bins = SCALE_STEPS.map((s) => ({ lo: s, hi: s, n: 0 }));
-  for (const it of items) {
-    const d = scaleDenominator(it);
-    if (d !== null) bins[nearestStep(d)].n++;
   }
   return bins;
 }
@@ -418,7 +423,7 @@ export type FilterGroup =
 const CLEAR: Record<FilterGroup, Partial<DiscoveryState>> = {
   collections: { collections: [] }, categories: { categories: [] }, types: { types: [] },
   formats: { formats: [] }, geometry: { geometry: "all" }, area: { area: null, place: "" },
-  years: { years: null }, scales: { scales: null },
+  years: { years: null }, scales: { scales: [] },
 };
 const ANY: Record<FilterGroup, string> = {
   collections: "Any collection", categories: "Any category", types: "Any type", formats: "Any format",
@@ -429,7 +434,7 @@ export const activeGroups = (s: DiscoveryState): FilterGroup[] => {
   const on: Record<FilterGroup, boolean> = {
     collections: s.collections.length > 0, categories: s.categories.length > 0, types: s.types.length > 0,
     formats: s.formats.length > 0, geometry: s.geometry !== "all", area: s.area !== null,
-    years: s.years !== null, scales: s.scales !== null,
+    years: s.years !== null, scales: s.scales.length > 0,
   };
   return (Object.keys(on) as FilterGroup[]).filter((g) => on[g]);
 };
@@ -440,12 +445,12 @@ export function filterResults(items: ItemRef[], s: DiscoveryState, skip?: Filter
     categories: skip === "categories" ? [] : s.categories,
     types: skip === "types" ? [] : s.types,
     formats: skip === "formats" ? [] : s.formats,
+    scales: skip === "scales" ? [] : s.scales,
     geometry: skip === "geometry" ? "all" : s.geometry,
   });
   if (s.area && skip !== "area") out = filterByViewport(out, s.area);
-  const { years, scales } = s;
+  const { years } = s;
   if (years && skip !== "years") out = out.filter((it) => within(publishedYear(it), years));
-  if (scales && skip !== "scales") out = out.filter((it) => inScaleRange(scaleDenominator(it), scales));
   return out;
 }
 

@@ -341,14 +341,14 @@ describe("parseScale / scaleDenominator", () => {
     expect(parseScale("1:24 000")).toBe(24000);
     expect(parseScale("1 inch = 200 feet")).toBe(2400);
     expect(parseScale("1 inch = 1 mile")).toBe(63360);
-    expect(parseScale("0.180555556")).toBeNull();
-    expect(parseScale("")).toBeNull();
+    expect([parseScale("100k"), parseScale("500000"), parseScale("unk"), parseScale("0.25"),
+      parseScale("0.180555556"), parseScale("")]).toEqual([100000, 500000, undefined, undefined, undefined, undefined]);
   });
   it("prefers the producer's number over the raw text", () => {
     expect(scaleDenominator(item("ugs-publications/M", "M-1", { "ugs:scale": "1:24,000", "ugs:scale_denominator": 100000 })))
       .toBe(100000);
     expect(scaleDenominator(item("ugs-publications/M", "M-2", { "ugs:scale": "1:62,500" }))).toBe(62500);
-    expect(scaleDenominator(item("ugs-publications/M", "M-3"))).toBeNull();
+    expect(scaleDenominator(item("ugs-publications/M", "M-3"))).toBeUndefined();
   });
 });
 

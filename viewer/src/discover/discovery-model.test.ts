@@ -3,7 +3,8 @@ import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
   discoverable, discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE,
-  byOverlap, drawable, nearestStep, overlapScore, placeArea, unionOf, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
+  byOverlap, drawable, overlapScore, placeArea, unionOf, parseDiscovery, reliefs, withSelected, scaleBucket, sortItems,
+  typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 import { hasFootprint } from "@/stac";
 import { rootIndexItems } from "@/stac/items-index";
@@ -236,8 +237,8 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     });
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
-      formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
-      density: "compact", area: [-114, 37, -109, 42], place: "", years: null, scales: null,
+      formats: ["PDF", "COG"], scales: [], geometry: "has", sort: "newest", layout: "list",
+      density: "compact", area: [-114, 37, -109, 42], place: "", years: null,
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
   });
@@ -245,8 +246,8 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
   it("serializes a state back, dropping defaults (a pristine view is a clean URL)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
-      formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
-      density: undefined, area: undefined, place: undefined, years: undefined, scale: undefined,
+      formats: undefined, scale: undefined, geometry: undefined, sort: undefined, layout: undefined,
+      density: undefined, area: undefined, place: undefined, years: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
     expect(patched.q).toBe("x");
@@ -268,6 +269,60 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(parseDiscovery({ q: "salt lake" }).q).toBe("salt lake");
     // A whitespace-only query is still dropped (it's not a real search).
     expect(discoveryPatch({ ...DEFAULT_DISCOVERY, q: "   " }).q).toBeUndefined();
+  });
+});
+
+describe("scaleBucket", () => {
+  const bucket = (raw?: string) => scaleBucket(item("p", "x", raw === undefined ? {} : { "ugs:scale": raw }));
+  const cases: [string, string][] = [
+    ["1:24,000", "24k"], ["1:24000", "24k"], ["1 : 24,000", "24k"], ["1:24 000", "24k"],
+    ["1 inch = 2,000 feet", "24k"],
+    ["1:62,500", "62k"], ["1:62500", "62k"], ["1:62.500", "62k"],
+    ["1:100,000", "100k"], ["100k", "100k"],
+    ["1 inch = 200 feet", "lt24k"], ["1\" = 20'", "lt24k"], ["1:2,400", "lt24k"], ["1:720", "lt24k"],
+    ["1:42,240", "mid"], ["1:50,000", "mid"], ["1:24,001", "mid"], ["1 inch = 1 mile", "mid"],
+    ["2 inches = 1 mile", "mid"], ["1:63,360", "mid"], ["1 inch = 8,000 feet", "mid"],
+    ["1:125,000", "100k-250k"], ["1 inch = 2 miles", "100k-250k"],
+    ["1:250,000", "250k"], ["1:500,000", "250k"], ["500k", "250k"], ["1:2,950,000", "250k"],
+    ["1 inch = 20 miles", "250k"],
+  ];
+  it.each(cases)("buckets %s as %s", (raw, key) => expect(bucket(raw)).toBe(key));
+
+  it("reads 10,000+ feet to the inch as a mistyped ratio (these maps are 7.5' and 15' quadrangles)", () => {
+    expect(bucket("1 inch = 24,000 feet")).toBe("24k");
+    expect(bucket("1 inch = 62,500 feet")).toBe("62k");
+    expect(bucket("1 inch = 500,000 feet")).toBe("250k");
+  });
+
+  it("takes the largest scale when a map lists two", () => {
+    expect(bucket("1:24,000 & 1:48,000")).toBe("24k");
+    expect(bucket("1: 48,000 and 1:24,000")).toBe("24k");
+  });
+
+  it("puts unreadable values in Other and leaves a missing scale out", () => {
+    for (const raw of ["0.180555556", "0.25", "2 inch = 250,00 feet", "1/4 inch = 1 foot"])
+      expect(bucket(raw)).toBe("other");
+    expect(bucket(undefined)).toBeUndefined();
+    expect(bucket("  ")).toBeUndefined();
+  });
+
+  it("lists the facet large scale to small and filters on it", () => {
+    const pubs = [
+      item("p", "a", { "ugs:scale": "1:100,000" }), item("p", "b", { "ugs:scale": "1:24,000" }),
+      item("p", "c", { "ugs:scale": "1:24000" }), item("p", "d", { "ugs:scale": "1 inch = 200 feet" }),
+      item("p", "e"),
+    ];
+    expect(extractFacets(pubs).scales.map((f) => [f.key, f.n])).toEqual([["lt24k", 1], ["24k", 2], ["100k", 1]]);
+    const sel = { collections: [], types: [], scales: ["24k"], geometry: "all" as const };
+    expect(applyFacets(pubs, sel).map((it) => it.data?.id)).toEqual(["b", "c"]);
+  });
+
+  it("round-trips the scale selection through the URL", () => {
+    const s = parseDiscovery({ scale: "24k,62k" });
+    expect(s.scales).toEqual(["24k", "62k"]);
+    expect(discoveryPatch(s).scale).toBe("24k,62k");
+    expect(activeChips(s, { collection: String, category: String }).map((c) => c.label))
+      .toEqual(["1:24,000 · 7.5' quadrangle", "1:62,500 · 15' quadrangle"]);
   });
 });
 
@@ -313,57 +368,43 @@ const pubs: ItemRef[] = [
   item("ugs-serving-topics/hazards", "hazards_qfaults", { "ugs:topic": "hazards", datetime: "2026-01-01T00:00:00Z" }),
 ];
 
-describe("year + scale ranges", () => {
-  it("round-trip through the URL, open ends included", () => {
-    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, null], scales: [24000, 100000] };
+describe("year range", () => {
+  it("round-trips through the URL, open ends included", () => {
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, null] };
     const patched = discoveryPatch(s);
     expect(patched.years).toBe("1990,");
-    expect(patched.scale).toBe("24000,100000");
     expect(parseDiscovery(patched as Record<string, unknown>)).toEqual(s);
     expect(parseDiscovery({ years: "2010,1990" }).years).toEqual([1990, 2010]);
     expect(parseDiscovery({ years: "," }).years).toBeNull();
     expect(parseDiscovery({ years: "abc,1990" }).years).toBeNull();
-    expect(parseDiscovery({ scale: "0," }).scales).toBeNull();
-    expect(parseDiscovery({ scale: "-5,10" }).scales).toBeNull();
     expect(parseDiscovery({ years: "1990.5," }).years).toBeNull();
   });
 
-  it("keep only items with a value in range; a layer has no publication year", () => {
+  it("keeps only items with a year in range; a layer has no publication year", () => {
     const ids = (s: Partial<DiscoveryState>) => filterResults(pubs, { ...DEFAULT_DISCOVERY, ...s }).map((it) => it.data?.id);
     expect(ids({ years: [1990, 2010] })).toEqual(["M-2", "M-3"]);
     expect(ids({ years: [null, 1960] })).toEqual(["M-1"]);
-    expect(ids({ scales: [24000, 24000] })).toEqual(["M-1", "M-3"]);
-    expect(ids({ scales: [50000, null] })).toEqual(["M-2", "M-4"]);
-    // The filter steps like the slider: 1:20,000 sits at the 1:24,000 step, 1:63,360 at 1:62,500.
-    const off = [pub("M-5", { "ugs:scale": "1:20,000" }), pub("M-6", { "ugs:scale": "1 inch = 1 mile" })];
-    const pick = (r: [number, number]) => filterResults(off, { ...DEFAULT_DISCOVERY, scales: r }).map((it) => it.data?.id);
-    expect(pick([24000, 24000])).toEqual(["M-5"]);
-    expect(pick([62500, 62500])).toEqual(["M-6"]);
+    expect(ids({ scales: ["24k"] })).toEqual(["M-1", "M-3"]);
   });
 
-  it("bin years and scales for the histograms", () => {
+  it("bins years for the histogram", () => {
     expect(yearSpan(pubs)).toEqual([1955, 2002]);
     const bins = yearBins(pubs, [1950, 2004], 5);
     expect(bins[0]).toEqual({ lo: 1950, hi: 1954, n: 0 });
     expect(bins[1]).toEqual({ lo: 1955, hi: 1959, n: 1 });
     expect(bins.at(-1)).toEqual({ lo: 2000, hi: 2004, n: 1 });
-    const sb = scaleBins(pubs);
-    expect(sb[SCALE_STEPS.indexOf(24000)].n).toBe(2);
-    expect(sb[SCALE_STEPS.indexOf(250000)].n).toBe(1);
-    expect(nearestStep(30000)).toBe(SCALE_STEPS.indexOf(31680));
-    expect(nearestStep(42240)).toBe(SCALE_STEPS.indexOf(50000));
   });
 
   it("chip labels name open ends plainly", () => {
-    const labels = activeChips({ ...DEFAULT_DISCOVERY, years: [1990, null], scales: [null, 100000] },
+    const labels = activeChips({ ...DEFAULT_DISCOVERY, years: [1990, null] },
       { collection: (k) => k, category: (k) => k }).map((c) => c.label);
-    expect(labels).toEqual(["1990 or later", "1:100,000 or more detailed"]);
+    expect(labels).toEqual(["1990 or later"]);
   });
 });
 
 describe("reliefs (what each filter hides)", () => {
   it("counts what dropping each active filter brings back, most first", () => {
-    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, 2010], scales: [24000, 24000] };
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, 2010], scales: ["24k"] };
     const shown = filterResults(pubs, s).length;              // M-3
     expect(shown).toBe(1);
     expect(activeGroups(s)).toEqual(["years", "scales"]);

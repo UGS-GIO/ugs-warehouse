@@ -6,23 +6,23 @@
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Drawer } from "@base-ui/react/drawer";
 import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, unionOf, withSelected, type FacetSelection, filterResults, nearestStep, parseDiscovery,
-  publishedYear, ranksByWords, reliefs, SCALE_STEPS, scaleBins, scalesLabel, sortItems, type SortKey, SORTS, yearBins,
+  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, unionOf, withSelected, type FacetSelection, filterResults, parseDiscovery,
+  publishedYear, ranksByWords, reliefs, scaleLabel, sortItems, type SortKey, SORTS, yearBins,
   yearsLabel, yearSpan,
 } from "./discovery-model";
 import { RangeFacet } from "./range-facet";
-import { categoryLabel, collectionLabel, itemIdOf, scaleDenominator } from "@/catalog/item-view";
-import type { Footprint } from "@/map/map-model";
+import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
+import { DETENTS, type Footprint } from "@/map/map-model";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Dialog } from "@base-ui/react/dialog";
 
 import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
@@ -37,6 +37,8 @@ import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
 import { useIsDesktop, useIsWide } from "@/ui/use-breakpoint";
+import { SHEET_POPUP } from "@/ui/sheet-chrome";
+import { SheetGrabber } from "@/ui/sheet";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
 import { Chevron } from "@/ui/chevron";
@@ -53,12 +55,11 @@ const PAGE = 48; // cards per "Show more" step (reference parity)
 const TYPE_DEBOUNCE_MS = 300;
 const UTAH: [number, number, number, number] = [-114.05, 37.0, -109.04, 42.0];
 const MIN_Q = 3;   // shorter prefixes ("pr", "pro") match hundreds of items and flash the whole state
-const SCALE_MAX = SCALE_STEPS.length - 1;
-const FILTERS_DIALOG = Dialog.createHandle();   // ties the phone Filters button to its panel
-const fmtDenom = (d: number) => d.toLocaleString("en-US");
 // Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
 // depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
 const DRAWER_KEY = "ugsw.discoverDrawerW";
+const HALF = DETENTS[1], FULL = DETENTS[2];
+const SNAPS = [HALF, FULL];
 const DRAWER = { initial: 560, min: 360, max: 1100 };
 
 // Escape a value for a [data-href="…"] selector (scroll a map-hovered card into view).
@@ -93,10 +94,11 @@ export function DiscoveryView({
   const st = parseDiscovery(sp);
   const { q, geometry, layout, density, area } = st;
   const sort = effectiveSort(st);
-  const { collections: colls, categories: cats, types, formats } = st;
+  const { collections: colls, categories: cats, types, formats, scales } = st;
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
+  const scalesK = scales.join("|");
   const areaK = area ? area.join(",") : "";
-  const yearsK = st.years ? st.years.join(",") : "", scalesK = st.scales ? st.scales.join(",") : "";
+  const yearsK = st.years ? st.years.join(",") : "";
   const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, yearsK, scalesK].join("~");
 
   // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
@@ -111,7 +113,7 @@ export function DiscoveryView({
     navigate({ to: ".", replace: replace || inPanel.current,
       search: (prev) => ({ ...prev, ...discoveryPatch({ ...parseDiscovery(prev), ...p }) }) });
   };
-  const toggleList = (key: "collections" | "categories" | "types" | "formats", value: string) => {
+  const toggleList = (key: "collections" | "categories" | "types" | "formats" | "scales", value: string) => {
     const cur = st[key];
     patch({ [key]: cur.includes(value) ? cur.filter((k) => k !== value) : [...cur, value] });
   };
@@ -149,6 +151,8 @@ export function DiscoveryView({
   const [hoverHref, setHoverHref] = useState<string | null>(null);
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null); // live viewport
   const [visible, setVisible] = useState(PAGE);
+  const [filtersOpen, setFiltersOpen] = useState(false); // the phone filter sheet
+  const [filterSnap, setFilterSnap] = useState<number | string>(HALF);
   const isWide = useIsWide(); // only MOUNT the map pane at ≥lg — keeps maplibre off phones/tablets
 
   // Heavy bits memoized on the stable items key (App's mapLoadKey), not the array identity — the
@@ -237,18 +241,13 @@ export function DiscoveryView({
 
   const namedId = useMemo(() => (q.trim() ? idMatch(index, q.trim())?.id : undefined), [index, q]);
 
-  // Histograms count what the other filters leave, so they describe what you'd get.
+  // The histogram counts what the other filters leave, so it describes what you'd get.
   const span = useMemo(() => yearSpan(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const yearPool = useMemo(() => filterResults(queried, st, "years"), [queried, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
-  const scalePool = useMemo(() => filterResults(queried, st, "scales"), [queried, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
   const yearHist = useMemo(() => (span ? yearBins(yearPool, span, 5).map((b) => ({
     from: b.lo, to: b.hi, n: b.n, tip: `${b.lo} to ${b.hi}: ${b.n.toLocaleString()}` })) : []), [yearPool, span]);
-  const scaleHist = useMemo(() => scaleBins(scalePool).map((b, i) => ({
-    from: i, to: i, n: b.n, tip: `1:${fmtDenom(b.lo)}: ${b.n.toLocaleString()}` })), [scalePool]);
   const undated = useMemo(() => (st.years ? yearPool.filter((it) => publishedYear(it) === null).length : 0),
     [yearPool, yearsK]); // eslint-disable-line react-hooks/exhaustive-deps
-  const unscaled = useMemo(() => (st.scales ? scalePool.filter((it) => scaleDenominator(it) === null).length : 0),
-    [scalePool, scalesK]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const typed = text.trim();
   const placeQ = useQuery({
@@ -369,7 +368,7 @@ export function DiscoveryView({
   const activeFilters = chips.length;
   const resetAll = () => patch(CLEAR_ALL);
 
-  // Shared by the rail and the phone panel; on a phone most groups start closed.
+  // Shared by the rail and the phone sheet; on a phone most groups start closed.
   const filterSections = (phone: boolean) => (
     <>
       <FacetSection label="Category" facets={withSelected(facets.categories, cats, categoryLabel)} defaultOpen selected={new Set(cats)}
@@ -380,6 +379,8 @@ export function DiscoveryView({
         onToggle={(k) => toggleList("types", k)} />
       <FacetSection label="Format" defaultOpen={!phone} facets={withSelected(facets.formats, formats, String)} selected={new Set(formats)}
         onToggle={(k) => toggleList("formats", k)} />
+      <FacetSection label="Scale" defaultOpen={!phone} facets={withSelected(facets.scales, scales, scaleLabel)} selected={new Set(scales)}
+        onToggle={(k) => toggleList("scales", k)} />
       {span && span[0] < span[1] && (
         <RangeFacet label="Year published" defaultOpen summary={st.years ? yearsLabel(st.years) : "Any"}
           min={span[0]} max={span[1]} value={[st.years?.[0] ?? span[0], st.years?.[1] ?? span[1]]}
@@ -390,24 +391,18 @@ export function DiscoveryView({
           labels={["Earliest year", "Latest year"]}
           note={undated ? `${undated.toLocaleString()} without a publication year hidden` : undefined} />
       )}
-      <RangeFacet label="Map scale" defaultOpen={!phone} summary={st.scales ? scalesLabel(st.scales) : "Any"}
-        min={0} max={SCALE_MAX}
-        value={[st.scales?.[0] != null ? nearestStep(st.scales[0]) : 0, st.scales?.[1] != null ? nearestStep(st.scales[1]) : SCALE_MAX]}
-        bins={scaleHist}
-        onCommit={(lo, hi, replace) => patch({ scales: lo === 0 && hi === SCALE_MAX ? null
-          : [lo === 0 ? null : SCALE_STEPS[lo], hi === SCALE_MAX ? null : SCALE_STEPS[hi]] }, replace)}
-        toText={(i) => fmtDenom(SCALE_STEPS[i])}
-        fromText={(s) => { const n = Number(s.replace(/^\s*1\s*:/, "").replace(/[,\s]/g, "")); return n >= 1 ? nearestStep(n) : null; }}
-        prefix="1:" ends={["More detailed", "Less detailed"]} labels={["Most detailed scale", "Least detailed scale"]}
-        note={unscaled ? `${unscaled.toLocaleString()} without a scale hidden` : undefined} />
       <GeometrySection defaultOpen={!phone}
         facets={withSelected(facets.geometry, geometry === "all" ? [] : [geometry], (k) => (k === GEOM_HAS ? "On the map" : "No footprint"))} value={geometry} onChange={(v) => patch({ geometry: v })} />
     </>
   );
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const isDesktop = useIsDesktop();               // md and up: the rail shows, so the panel never does
-  const panelOpen = filtersOpen && !isDesktop;
-  inPanel.current = panelOpen;
+  inPanel.current = filtersOpen && !isDesktop;
+  // Commit a half-typed From/To box before the sheet unmounts it (a tapped button doesn't take
+  // focus on iOS, so its blur would never fire).
+  const setFilters = (open: boolean) => {
+    if (!open) (document.activeElement as HTMLElement | null)?.blur();
+    setFiltersOpen(open);
+  };
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -428,26 +423,22 @@ export function DiscoveryView({
           placeholder="Search titles, series IDs, authors and places"
           onChange={(v) => { setText(v); sendQ(v); }} onEnter={submit}
           onClear={() => { setText(""); sendQ("", true); }} />
-        <Dialog.Trigger handle={FILTERS_DIALOG}
-          className="flex shrink-0 items-center gap-1.5 rounded-full border border-input bg-card px-3 py-1 text-sm text-foreground hover:border-primary md:hidden">
-          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
-          Filters
-          {activeFilters > 0 && (
-            <span className="rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
-              <span className="sr-only">, </span>{activeFilters}<span className="sr-only"> active</span>
-            </span>
-          )}
-        </Dialog.Trigger>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
           {footprints.length > drawn.length && ` · ${(footprints.length - drawn.length).toLocaleString()} too large to draw`}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {/* The rail is md+ only; on a phone the same groups open in a bottom sheet. */}
+          <button type="button" onClick={() => { setFilterSnap(HALF); setFiltersOpen(true); }}
+            className="shrink-0 rounded-md border border-input bg-card px-2.5 py-1 text-xs text-foreground hover:bg-hover pointer-coarse:min-h-11 md:hidden">
+            Filters{activeFilters > 0 && ` · ${activeFilters}`}
+          </button>
+          {/* Phones drop the Sort word and the density toggle so the row fits on one line. */}
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
-            Sort
+            <span className="max-sm:sr-only">Sort</span>
             <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) || area ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
           </label>
-          <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs" />
+          <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs max-sm:hidden" />
           <UiSegmented value={layout} onValueChange={(v) => patch({ layout: v }, true)} items={LAYOUTS} className="text-xs" />
           {isWide && (
             <button type="button" onClick={() => setShowMap((v) => !v)} aria-pressed={showMap}
@@ -534,6 +525,39 @@ export function DiscoveryView({
           )}
         </div>
       )}
+
+      {/* Phones: the app's bottom sheet, non-modal so the results stay in view above it at half height. */}
+      <Drawer.Root open={filtersOpen} onOpenChange={setFilters} modal={false}
+        snapPoints={SNAPS} snapPoint={filterSnap}
+        onSnapPointChange={(p) => (p === null ? setFilters(false) : setFilterSnap(p))}>
+        <Drawer.Portal>
+          {/* Above the Utah header, which sits at z-index 3000. */}
+          <Drawer.Viewport className="pointer-events-none fixed inset-0 z-3101 flex items-end md:hidden">
+            <Drawer.Popup initialFocus={false} style={{ height: `${FULL * 100}%` }} className={SHEET_POPUP}>
+              <SheetGrabber label={filterSnap === HALF ? "Expand filters to full height" : "Collapse filters"}
+                onStep={() => setFilterSnap(filterSnap === HALF ? FULL : HALF)}
+                onArrow={(s) => setFilterSnap(s > 0 ? FULL : HALF)} />
+              <div className="flex items-center gap-2 border-b border-border px-4 pb-2">
+                <Drawer.Title className="flex-1 text-base font-semibold">Filters</Drawer.Title>
+                {activeFilters > 0 && (
+                  <button type="button" onClick={resetAll}
+                    className="px-2 text-sm text-primary hover:underline pointer-coarse:min-h-11">Clear all</button>
+                )}
+                <Drawer.Close aria-label="Close"
+                  className="px-2 text-muted-foreground hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-11">✕</Drawer.Close>
+              </div>
+              <Drawer.Content className="min-h-0 flex-1 touch-auto overflow-y-auto overscroll-contain pb-3">
+                {filterSections(true)}
+              </Drawer.Content>
+              <div className="border-t border-border px-4 py-3">
+                <Drawer.Close className="w-full rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 pointer-coarse:min-h-11">
+                  Show {results.length} result{results.length === 1 ? "" : "s"}
+                </Drawer.Close>
+              </div>
+            </Drawer.Popup>
+          </Drawer.Viewport>
+        </Drawer.Portal>
+      </Drawer.Root>
 
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">
@@ -695,33 +719,6 @@ export function DiscoveryView({
         )}
       </div>
 
-      <Dialog.Root handle={FILTERS_DIALOG} open={panelOpen} onOpenChange={(open) => {
-        // Commit a half-typed From/To box before the panel unmounts it (a tapped button doesn't take
-        // focus on iOS, so its blur would never fire).
-        if (!open) (document.activeElement as HTMLElement | null)?.blur();
-        setFiltersOpen(open);
-      }}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 z-3100 bg-black/40" />
-          <Dialog.Popup aria-modal="true" className="fixed inset-0 z-3101 flex flex-col bg-background">
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-              <Dialog.Title className="flex-1 text-base font-semibold">Filters</Dialog.Title>
-              {activeFilters > 0 && (
-                <button type="button" onClick={resetAll} className="px-2 text-sm text-primary hover:underline">Clear all</button>
-              )}
-              <Dialog.Close aria-label="Close filters"
-                className="rounded px-2 text-muted-foreground hover:text-foreground">✕</Dialog.Close>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">{filterSections(true)}</div>
-            <div className="shrink-0 border-t border-border p-3">
-              <Dialog.Close className="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
-                Show {results.length.toLocaleString()} {results.length === 1 ? "result" : "results"}
-              </Dialog.Close>
-            </div>
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
-
       {/* ── Detail drawer: the selected item, in place (reuses the catalog ItemDetail). ─────────── */}
       {itemSelected && (
         <>
@@ -783,7 +780,7 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
   return (
     <section className="border-t border-border px-2 py-2">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center justify-between px-1 py-0.5 text-left">
+        className="flex w-full items-center justify-between px-1 py-0.5 text-left pointer-coarse:min-h-11">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
         <Chevron open={open} className="text-muted-foreground" />
       </button>
@@ -794,7 +791,7 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
             return (
               <li key={f.key}>
                 <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                   <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
@@ -806,7 +803,7 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
           })}
           {facets.length > FACET_HEAD && (
             <li>
-              <button type="button" onClick={() => setAll((v) => !v)} className="px-2 py-0.5 text-xs text-primary hover:underline">
+              <button type="button" onClick={() => setAll((v) => !v)} className="px-2 py-0.5 text-xs text-primary hover:underline pointer-coarse:min-h-11">
                 {all ? "Show fewer" : `Show all ${facets.length}`}
               </button>
             </li>
@@ -828,7 +825,7 @@ function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
   return (
     <section className="border-t border-border px-2 py-2">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center justify-between px-1 py-0.5 text-left">
+        className="flex w-full items-center justify-between px-1 py-0.5 text-left pointer-coarse:min-h-11">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Geometry</span>
         <Chevron open={open} className="text-muted-foreground" />
       </button>
@@ -840,7 +837,7 @@ function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
               <li key={f.key}>
                 <button type="button" role="radio" aria-checked={on}
                   onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                   <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>

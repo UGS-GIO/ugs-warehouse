@@ -45,23 +45,37 @@ export const typeOf = (it: ItemRef): string => {
   return String(p["ugs:pub_type"] ?? p["ugs:topic"] ?? p["ugs:series"] ?? "");
 };
 export const scale = (it: ItemRef): string => String(propsOf(it)["ugs:scale"] ?? "");
+
+// "24,000", "24 000", "62.500" (dot-grouped) or "24000" → a number; anything else → NaN.
+const scaleNum = (s: string): number =>
+  (/^\d{1,3}([,. ]\d{3})+$/.test(s) ? Number(s.replace(/[,. ]/g, ""))
+    : /^\d+(\.\d+)?$/.test(s) ? Number(s) : NaN);
+
+const INCHES = { feet: 12, foot: 12, ft: 12, "'": 12, mile: 63360, miles: 63360 } as const;
+
+/** The denominator of a free-text ugs:scale ("1:24,000", "100k", "1 inch = 200 feet"); undefined when
+ *  unreadable. Several ratios ("1:24,000 & 1:48,000") give the largest scale. "1 inch = 24,000 feet"
+ *  would be 1:288,000, but the maps that say so are 7.5' quadrangles: 10,000 feet or more to the
+ *  inch is read as a mistyped ratio. */
+export function parseScale(v: unknown): number | undefined {
+  const raw = String(v ?? "").trim();
+  const ratios = [...raw.matchAll(/\b1\s*:\s*(\d[\d,. ]*\d|\d)/g)].map((m) => scaleNum(m[1]));
+  if (ratios.length) return Math.min(...ratios) || undefined;
+  if (scaleNum(raw) >= 1) return scaleNum(raw);
+  const k = /^(\d+)\s*k$/i.exec(raw);
+  if (k) return Number(k[1]) * 1000;
+  const m = /^([\d.]+)\s*(?:inch(?:es)?|")\s*=\s*([\d,. ]+?)\s*(feet|foot|ft|'|miles?)$/i.exec(raw);
+  if (!m) return undefined;
+  const [inches, n, unit] = [scaleNum(m[1]), scaleNum(m[2]), m[3].toLowerCase() as keyof typeof INCHES];
+  if (INCHES[unit] === 12 && inches === 1 && n >= 10000) return n;
+  return (n * INCHES[unit]) / inches || undefined;
+}
+
 export const author = (it: ItemRef): string => String(propsOf(it)["ugs:author"] ?? "");
 export const county = (it: ItemRef): string => String(propsOf(it)["ugs:county"] ?? "");
 
-// A free-text scale as its 1:N denominator, or null. Mirrors pubs/scale.py `denominator`, which writes
-// `ugs:scale_denominator`; this reads the raw text when an item has no number.
-export const parseScale = (raw: string): number | null => {
-  const s = raw.trim().toLowerCase().replace(/,/g, "");
-  if (!s) return null;
-  let m = /1\s*:\s*(\d[\d ]*\d|\d)/.exec(s);
-  if (m) return parseInt(m[1].replace(/ /g, ""), 10) || null;
-  m = /1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet/.exec(s);
-  if (m) return Math.trunc(parseFloat(m[1]) * 12) || null;
-  m = /1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile/.exec(s);
-  if (m) return Math.trunc(parseFloat(m[1]) * 63360) || null;
-  return null;
-};
-export const scaleDenominator = (it: ItemRef): number | null => {
+// The scale pubs/scale.py wrote as `ugs:scale_denominator`, else the raw text read here.
+export const scaleDenominator = (it: ItemRef): number | undefined => {
   const d = propsOf(it)["ugs:scale_denominator"];
   return typeof d === "number" && d > 0 ? d : parseScale(scale(it));
 };

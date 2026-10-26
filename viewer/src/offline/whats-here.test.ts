@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
 import type { Bbox } from "./guards";
 import {
-  caveatOf, mostDetailed, otherUnit, probeOf, quadsFor, ringAround, saveBbox, scaleOf, type Target, toleranceM, unitOf,
+  caveatOf, mostDetailed, otherUnit, probeOf, quadsFor, ringAround, saveBbox, type Target, toleranceM, unitOf,
   whatsHere,
 } from "./whats-here";
 
@@ -73,10 +73,6 @@ describe("saveBbox / quadsFor", () => {
 });
 
 describe("geology", () => {
-  it("reads a scale in the forms the catalog uses", () => {
-    expect([scaleOf("1:24,000"), scaleOf("100k"), scaleOf("500000"), scaleOf("unk")]).toEqual([24000, 100000, 500000, undefined]);
-  });
-
   it("names a unit from each unit layer's own fields, and nothing from other layers", () => {
     expect(unitOf("geolmap_geolunits_500k", { unitname: "intrusive rocks-Tertiary", unitsymbol: "Ti", age: "Tertiary" }))
       .toEqual({ name: "intrusive rocks-Tertiary", symbol: "Ti", age: "Tertiary", scale: 500000 });

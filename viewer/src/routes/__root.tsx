@@ -19,6 +19,7 @@ type ViewerSearch = {
   sheet?: string;
   terrain?: true;
   cube?: string;
+  op?: string;
   [key: string]: unknown;
 };
 
@@ -47,6 +48,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     s: str(s.s),
     sheet: str(s.sheet),
     cube: str(s.cube),
+    op: str(s.op),
     terrain: s.terrain === true || s.terrain === "true" ? true : undefined,
   }),
 });

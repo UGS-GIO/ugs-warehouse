@@ -29,12 +29,10 @@ export function LegalFooter({ className = "", catalogUrl }: { className?: string
           STAC catalog
         </a>
       )}
-      {/* Hash inline, not just in the tooltip: on a per-PR preview it's how you tell which bundle
-          you're actually looking at. */}
       <a href={BUILD_URL} target="_blank" rel="noreferrer" title={`viewer build ${__BUILD_HASH__} on GitHub`}
          className="inline-flex items-center gap-1 hover:text-foreground hover:underline">
         <GitHubIcon size={12} />
-        build {__BUILD_DATE__} · {__BUILD_HASH__}
+        v{__APP_VERSION__}
       </a>
       <a href="https://geology.utah.gov" target="_blank" rel="noreferrer" className="ml-auto hover:text-foreground hover:underline">
         Utah Geological Survey

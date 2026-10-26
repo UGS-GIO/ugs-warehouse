@@ -110,7 +110,7 @@ async function planWith(p: PMTiles, url: string, bbox: Bbox): Promise<AreaPlan> 
  * with tiles but no meta is never served, so an interrupted save cannot half-work.
  */
 export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: number) => void,
-  source?: PMTiles): Promise<void> {
+  signal?: AbortSignal, source?: PMTiles): Promise<void> {
   return (async () => {
     const parent = await areaDir(plan.url, true);
     if (!parent) throw new Error("This browser cannot store data offline.");
@@ -124,8 +124,9 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
     const stored = await namesIn(dir);
     for (const t of plan.tiles) {
       const name = tileName(t.z, t.x, t.y);
+      signal?.throwIfAborted();
       if (!stored.has(name)) {
-        const got = await p.source.getBytes(t.offset, t.length);
+        const got = await p.source.getBytes(t.offset, t.length, signal);
         // Offsets come from the directory of the version planned; another version's bytes there
         // are not this tile.
         if (plan.meta.version && got.etag && got.etag !== plan.meta.version) {

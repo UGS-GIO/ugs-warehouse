@@ -90,6 +90,44 @@ describe("download queue", () => {
   });
 });
 
+describe("cancel all", () => {
+  it("stops the running save, drops the waiting ones and their partials, and resumes nothing", async () => {
+    // queue.json on a fake disk, so a fresh load shows what the next visit would resume.
+    let disk: string | null = null;
+    const handle = {
+      getFile: async () => { if (disk === null) throw new DOMException("missing", "NotFoundError"); return new File([disk], "q"); },
+      createWritable: async () => ({ write: async (t: string) => { disk = t; }, close: async () => {} }),
+    };
+    Object.defineProperty(navigator, "storage", {
+      configurable: true, value: { getDirectory: async () => ({ getFileHandle: async () => handle }) },
+    });
+    try {
+      const q = await fresh();
+      let signal!: AbortSignal;
+      save.mockImplementation((_url: string, o: { signal: AbortSignal }) => new Promise((_, reject) => {
+        signal = o.signal;
+        signal.addEventListener("abort", () => reject(signal.reason));
+      }));
+      const done = vi.fn();
+      q.onSettled(done);
+      await q.enqueue([file("a"), file("b"), file("c")]);
+      await vi.waitFor(() => expect(q.snapshot()[0]?.state).toBe("running"));
+      await q.cancelAll();
+      expect(signal.aborted).toBe(true);
+      expect(q.snapshot()).toEqual([]);
+      expect(discardPartial.mock.calls.map((c) => c[0])).toEqual(["a", "b", "c"]);
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(disk ?? "null")).toEqual([]);
+      const next = await fresh();
+      await next.run();
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(next.snapshot()).toEqual([]);
+    } finally {
+      Object.defineProperty(navigator, "storage", { configurable: true, value: undefined });
+    }
+  });
+});
+
 describe("an area whose file is republished mid-save", () => {
   const box: Bbox = [0, 0, 1, 1];
   const meta: AreaMeta = { tilejson: { tiles: [], minzoom: 0, maxzoom: 0, bounds: box }, compression: 1 };

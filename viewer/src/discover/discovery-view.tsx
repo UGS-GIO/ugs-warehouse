@@ -33,6 +33,7 @@ import { UiSelect } from "@/ui/select";
 import { useIsWide } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
+import { Chevron } from "@/ui/chevron";
 
 // maplibre is ~1.5MB — lazy so the rail + cards paint immediately and the map streams in behind them
 // (App already code-splits ./map, so this shares that chunk).
@@ -552,7 +553,7 @@ function FacetSection({ label, facets, selected, onToggle }: {
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
         className="flex w-full items-center justify-between px-1 py-0.5 text-left">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-        <span aria-hidden className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
+        <Chevron open={open} className="text-muted-foreground" />
       </button>
       {open && (
         <ul className="mt-1 space-y-0.5">
@@ -596,7 +597,7 @@ function GeometrySection({ facets, value, onChange }: {
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
         className="flex w-full items-center justify-between px-1 py-0.5 text-left">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Geometry</span>
-        <span aria-hidden className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
+        <Chevron open={open} className="text-muted-foreground" />
       </button>
       {open && (
         <ul className="mt-1 space-y-0.5" role="radiogroup" aria-label="Geometry">

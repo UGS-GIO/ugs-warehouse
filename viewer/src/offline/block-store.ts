@@ -30,7 +30,8 @@ async function cogDir(url: string, create: boolean) {
  * single response stays small), each block written as its own file; blocks already stored from an
  * earlier, overlapping save are skipped. meta.json goes last, so a half-finished save is ignored.
  */
-export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void): Promise<void> {
+export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal): Promise<void> {
   return (async () => {
     const parent = await cogDir(plan.url, true);
     if (!parent) throw new Error("This browser cannot store data offline.");
@@ -49,7 +50,7 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     for (const [first, last] of runs) {
       const start = first * plan.block;
       const end = Math.min(plan.size, (last + 1) * plan.block) - 1;
-      const r = await fetch(live(plan.url), { headers: { range: `bytes=${start}-${end}` } });
+      const r = await fetch(live(plan.url), { signal, headers: { range: `bytes=${start}-${end}` } });
       // Blocks are cut from the response by offset; a 200 (the whole file) would put them wrong.
       if (r.status !== 206) throw new Error(`Download failed: the server did not answer a range request (${r.status}).`);
       // The plan's offsets belong to one version of the file; bytes of another are garbage there.
@@ -59,6 +60,7 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
       }
       const buf = new Uint8Array(await r.arrayBuffer());
       for (let b = first; b <= last; b++) {
+        signal?.throwIfAborted();
         await writeFile(dir, String(b), buf.subarray((b - first) * plan.block, (b - first + 1) * plan.block));
         onProgress?.(++done, plan.blocks.length);
       }

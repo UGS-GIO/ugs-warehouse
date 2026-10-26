@@ -63,33 +63,71 @@ export function hits(type: number, geometry: P[][], p: P, tol: number): boolean 
  * how many tile units the pixel tolerance spans.
  */
 export async function identifyAt(url: string, lon: number, lat: number, mapZoom: number,
-  source?: PMTiles): Promise<Hit[]> {
+  source?: PMTiles, signal?: AbortSignal): Promise<Hit[]> {
+  return (await identifyPoints(url, [[lon, lat]], mapZoom, source, signal))[0];
+}
+
+/** Rejects when `signal` aborts. pmtiles cannot cancel a header read, so the read finishes into its
+ *  cache and only this caller stops waiting. */
+const unlessAborted = <T,>(work: Promise<T>, signal?: AbortSignal): Promise<T> => (!signal ? work
+  : new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  }));
+
+/** identifyAt for several points, reading each tile they fall in once. A tile that fails to load
+ *  answers nothing at its points rather than failing them all; an abort still rejects. */
+export async function identifyPoints(url: string, points: [number, number][], mapZoom: number,
+  source?: PMTiles, signal?: AbortSignal): Promise<Hit[][]> {
   const p = source ?? archiveFor(url);
-  const h = await p.getHeader();
-  if (h.tileType !== TileType.Mvt) return [];            // raster archive: nothing to hit
+  const h = await unlessAborted(p.getHeader(), signal);
+  // A raster archive has nothing to hit.
+  if (h.tileType !== TileType.Mvt) return points.map(() => []);
   const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
-  if (z < h.minZoom) return [];
+  if (z < h.minZoom) return points.map(() => []);
+  const n = 2 ** z;
+  const tiles = new Map<string, Promise<VectorTile | null>>();
+  return Promise.all(points.map(async ([lon, lat]) => {
+    const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
+    const fx = at.x * n, fy = at.y * n;
+    const x = Math.floor(fx), y = Math.floor(fy);
+    const key = `${x}/${y}`;
+    if (!tiles.has(key)) {
+      tiles.set(key, p.getZxy(z, x, y, signal)
+        .then((t) => (t ? new VectorTile(new Pbf(new Uint8Array(t.data))) : null))
+        .catch((e: unknown) => { if (signal?.aborted) throw e; return null; }));
+    }
+    const vt = await tiles.get(key);
+    const out: Hit[] = [];
+    if (!vt) return out;
+    for (const name of Object.keys(vt.layers)) {
+      const layer = vt.layers[name];
+      const point = { x: (fx - x) * layer.extent, y: (fy - y) * layer.extent };
+      // MapLibre draws a vector tile 512 px wide at its own zoom, so at map zoom Z one tile spans
+      // 512 * 2^(Z - z) px; the pixel tolerance, converted to tile units.
+      const tol = (TOLERANCE_PX * layer.extent) / (512 * 2 ** (mapZoom - z));
+      for (let i = 0; i < layer.length; i++) {
+        const f = layer.feature(i);
+        if (hits(f.type, f.loadGeometry(), point, tol)) out.push({ layer: name, properties: f.properties });
+      }
+    }
+    return out;
+  }));
+}
+
+/** Whether an archive (a raster mosaic, say) has a tile at the point: its real coverage, which its
+ *  bbox overstates wherever the mosaic is patchy. */
+export async function tileAt(url: string, lon: number, lat: number, source?: PMTiles,
+  signal?: AbortSignal): Promise<boolean> {
+  const p = source ?? archiveFor(url);
+  const h = await unlessAborted(p.getHeader(), signal);
+  const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
+  if (z < h.minZoom) return false;
   const n = 2 ** z;
   const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
-  const fx = at.x * n, fy = at.y * n;
-  const x = Math.floor(fx), y = Math.floor(fy);
-  const tile = await p.getZxy(z, x, y);
-  if (!tile) return [];
-
-  const vt = new VectorTile(new Pbf(new Uint8Array(tile.data)));
-  const out: Hit[] = [];
-  for (const name of Object.keys(vt.layers)) {
-    const layer = vt.layers[name];
-    const point = { x: (fx - x) * layer.extent, y: (fy - y) * layer.extent };
-    // MapLibre draws a vector tile 512 px wide at its own zoom, so at map zoom Z one tile spans
-    // 512 * 2^(Z - z) px; the pixel tolerance, converted to tile units.
-    const tol = (TOLERANCE_PX * layer.extent) / (512 * 2 ** (mapZoom - z));
-    for (let i = 0; i < layer.length; i++) {
-      const f = layer.feature(i);
-      if (hits(f.type, f.loadGeometry(), point, tol)) out.push({ layer: name, properties: f.properties });
-    }
-  }
-  return out;
+  return !!(await p.getZxy(z, Math.floor(at.x * n), Math.floor(at.y * n), signal));
 }
 
 // Keys and values that identify a row rather than describe it: a label made of them reads as noise
@@ -97,10 +135,17 @@ export async function identifyAt(url: string, lon: number, lat: number, mapZoom:
 const ID_KEY = /(^|_)(fid|id|objectid|globalid|guid|uuid|ogc_fid|shape_\w+|ugs_key)$/i;
 const ID_VALUE = /fid-|^[0-9a-f]{8}-[0-9a-f]{4}-|_[0-9a-f]{10,}/i;
 
-/** A short label for a hit: the first name-like attribute, else the first descriptive text. */
+// Warehouse bookkeeping on every row: says nothing about the feature.
+const META_KEY = /^(_.*|review_status|table_type|quad_name|scale|is_current|import_date|target_epsg)$/i;
+// Text that reads as words, not a code or a number: "Salt Lake", "Jordan"; not "41620" or "VSSegs".
+const WORDS = /\s|^[A-Z]?[a-z]+$/;
+
+/** A short label for a hit: a name, else a title or type, else the first text that reads as words. */
 export function hitLabel(props: Hit["properties"]): string | null {
-  const keys = Object.keys(props).filter((k) => !ID_KEY.test(k) && !ID_VALUE.test(String(props[k])));
-  const named = keys.find((k) => /^(name|title|label|unit.?name|unitname|type|class|category)$/i.test(k));
-  const key = named ?? keys.find((k) => typeof props[k] === "string" && String(props[k]).length < 80);
+  const keys = Object.keys(props).filter((k) => !ID_KEY.test(k) && !META_KEY.test(k)
+    && !ID_VALUE.test(String(props[k])) && typeof props[k] === "string" && String(props[k]).trim());
+  const key = keys.find((k) => /name/i.test(k))
+    ?? keys.find((k) => /^(title|label|type|class|category|grade)$/i.test(k))
+    ?? keys.find((k) => String(props[k]).length < 80 && WORDS.test(String(props[k])));
   return key ? String(props[key]) : null;
 }

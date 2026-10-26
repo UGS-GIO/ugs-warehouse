@@ -27,7 +27,7 @@ import { type ActiveLayer, type Footprint, mapDefaultLayers, orderedSublayerIds,
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
-import { to2d } from "@/lib/bbox";
+import { to2d, union } from "@/lib/bbox";
 import { RelatedLinks } from "./related-links";
 import { type IdentifyResult, identifyAt, identifyClick } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
@@ -107,13 +107,6 @@ export type OpenRelated = { itemHref: string; relatedKey: string; title: string;
 // `identify` is a click on a geologic-map raster: the unit under it, or the scan-only notice.
 export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo;
   identify?: IdentifyResult };
-
-// Union of bboxes → [w,s,e,n], or null.
-function unionBbox(bs: number[][]): [number, number, number, number] | null {
-  if (!bs.length) return null;
-  return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])),
-          Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
-}
 
 // A [w,s,e,n] bbox → a closed rectangle ring (GeoJSON Polygon coordinates).
 const bboxRing = (b: number[]): GeoJSON.Position[][] =>
@@ -295,7 +288,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
+  const fitBox = union(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;

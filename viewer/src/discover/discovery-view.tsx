@@ -12,23 +12,25 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, unionOf, withSelected, type FacetSelection, filterResults, parseDiscovery,
+  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, withSelected, type FacetSelection, filterResults, parseDiscovery,
   publishedYear, ranksByWords, reliefs, scaleLabel, sortItems, type SortKey, SORTS, yearBins,
   yearsLabel, yearSpan,
 } from "./discovery-model";
+import { RailSection } from "./rail-section";
 import { RangeFacet } from "./range-facet";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
 import { DETENTS, type Footprint } from "@/map/map-model";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 
 import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, idMatch, searchCatalog } from "./search-index";
-import { locate, suggest } from "@/map/place-locator";
+import { locate, suggest, type Suggestion } from "@/map/place-locator";
+import { union } from "@/lib/bbox";
 import { flyTo } from "@/map/camera";
 import { LiveSearchBar } from "@/shell/map-search";
 import { hasFootprint, idOf, type StacDoc } from "@/stac";
@@ -41,7 +43,6 @@ import { SHEET_POPUP } from "@/ui/sheet-chrome";
 import { SheetGrabber } from "@/ui/sheet";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
-import { Chevron } from "@/ui/chevron";
 
 // maplibre is ~1.5MB — lazy so the rail + cards paint immediately and the map streams in behind them
 // (App already code-splits ./map, so this shares that chunk).
@@ -95,11 +96,8 @@ export function DiscoveryView({
   const { q, geometry, layout, density, area } = st;
   const sort = effectiveSort(st);
   const { collections: colls, categories: cats, types, formats, scales } = st;
-  const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
-  const scalesK = scales.join("|");
-  const areaK = area ? area.join(",") : "";
-  const yearsK = st.years ? st.years.join(",") : "";
-  const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, yearsK, scalesK].join("~");
+  const { q: _q, sort: _s, layout: _l, density: _d, ...filters } = discoveryPatch(st);
+  const filterK = JSON.stringify(filters);
 
   // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
   // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
@@ -122,12 +120,9 @@ export function DiscoveryView({
   const [text, setText] = useState(q);
   const sentQ = useRef(q);
   const typeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => {
-    if (q === sentQ.current) return;
-    clearTimeout(typeTimer.current);   // or the pending keystrokes would overwrite where Back landed
-    sentQ.current = q;
-    setText(q);
-  }, [q]);
+  // Set the box without sending it, dropping keystrokes still pending (they'd overwrite it).
+  const resetBox = (v: string) => { clearTimeout(typeTimer.current); sentQ.current = v; setText(v); };
+  useEffect(() => { if (q !== sentQ.current) resetBox(q); }, [q]);
   useEffect(() => () => clearTimeout(typeTimer.current), []);
   const sendQ = (v: string, now = false) => {
     clearTimeout(typeTimer.current);
@@ -150,7 +145,6 @@ export function DiscoveryView({
   const [showMap, setShowMap] = useState(true);
   const [hoverHref, setHoverHref] = useState<string | null>(null);
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null); // live viewport
-  const [visible, setVisible] = useState(PAGE);
   const [filtersOpen, setFiltersOpen] = useState(false); // the phone filter sheet
   const [filterSnap, setFilterSnap] = useState<number | string>(HALF);
   const isWide = useIsWide(); // only MOUNT the map pane at ≥lg — keeps maplibre off phones/tablets
@@ -247,7 +241,7 @@ export function DiscoveryView({
   const yearHist = useMemo(() => (span ? yearBins(yearPool, span, 5).map((b) => ({
     from: b.lo, to: b.hi, n: b.n, tip: `${b.lo} to ${b.hi}: ${b.n.toLocaleString()}` })) : []), [yearPool, span]);
   const undated = useMemo(() => (st.years ? yearPool.filter((it) => publishedYear(it) === null).length : 0),
-    [yearPool, yearsK]); // eslint-disable-line react-hooks/exhaustive-deps
+    [yearPool, st.years?.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const typed = text.trim();
   const placeQ = useQuery({
@@ -260,32 +254,25 @@ export function DiscoveryView({
   const placeHit = typed.length >= 3 && !area
     ? placeQ.data?.find((s) => s.text.toLowerCase().startsWith(typed.toLowerCase()))
     : undefined;
-  const [placeError, setPlaceError] = useState<string | null>(null);
-  useEffect(() => setPlaceError(null), [typed]);
-  const [picking, setPicking] = useState(false);
-  const pickPlace = async () => {
-    if (!placeHit || picking) return;
-    setPicking(true);
-    try {
-      const box = placeArea(await locate(placeHit));
+  // `typed` rides along so a failed lookup's error shows only until the box changes.
+  const placeFind = useMutation({
+    mutationFn: ({ hit }: { hit: Suggestion; typed: string }) => locate(hit).then(placeArea),
+    onSuccess: (box, { hit }) => {
       placeFromQ.current = text.trim();
-      setPlaceError(null);
-      clearTimeout(typeTimer.current);
-      sentQ.current = "";
-      setText("");
-      patch({ area: box, place: placeHit.text, q: "" });
+      resetBox("");
+      patch({ area: box, place: hit.text, q: "" });
       // Only a mounted map; a fit queued with none would fire on /map later.
       if (isWide && showMap) flyTo(box);
-    } catch (e) {
-      setPlaceError(`Couldn't find ${placeHit.text}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setPicking(false);
-    }
-  };
+    },
+  });
+  const placeError = placeFind.isError && placeFind.variables.typed === typed
+    ? `Couldn't find ${placeFind.variables.hit.text}: ${placeFind.error.message}` : null;
+  const pickPlace = () => { if (placeHit && !placeFind.isPending) placeFind.mutate({ hit: placeHit, typed }); };
 
-  // Reset paging whenever the working set changes (new query/filter/sort) — reference parity. The
-  // listed keys are all serialized primitives (none referenced in the body), so no disable is needed.
-  useEffect(() => setVisible(PAGE), [q, filterK, sort, itemsKey]);
+  // Paging restarts whenever the working set changes (new query/filter/sort).
+  const pageKey = [q, filterK, sort, itemsKey].join("\n");
+  const [paged, setPaged] = useState({ key: pageKey, n: PAGE });
+  const visible = paged.key === pageKey ? paged.n : PAGE;
   const shown = results.slice(0, visible);
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
@@ -293,14 +280,14 @@ export function DiscoveryView({
     .filter((it) => hasFootprint(it.data))
     .map((it) => ({ href: it.href, id: idOf(it.href), title: discoveryTitle(it), bbox: it.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4), [results]);
-  const drawn = useMemo(() => drawable(footprints, area), [footprints, areaK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const drawn = useMemo(() => drawable(footprints, area), [footprints, area?.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A settled text search moves the map to what it found, once per query.
   const fittedQ = useRef("");
   useEffect(() => {
     const t = q.trim();
     if (!isWide || !showMap || area || t.length < MIN_Q || t === fittedQ.current) return;
-    const u = unionOf(drawn);
+    const u = union(drawn.map((f) => f.bbox));
     if (!u) return;
     fittedQ.current = t;
     flyTo(u);
@@ -313,9 +300,7 @@ export function DiscoveryView({
     const back = text.trim() ? text : placeFromQ.current;
     placeFromQ.current = "";
     fittedQ.current = "";
-    clearTimeout(typeTimer.current);
-    sentQ.current = back;
-    setText(back);
+    resetBox(back);
     patch({ area: null, place: "", q: back });
     if (!back && isWide && showMap) flyTo(UTAH);
   };
@@ -476,13 +461,13 @@ export function DiscoveryView({
       {q.trim().length >= MIN_Q && (
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs">
           {placeHit && (
-            <button type="button" onClick={pickPlace} disabled={picking}
+            <button type="button" onClick={pickPlace} disabled={placeFind.isPending}
               title={`Show what's mapped in and around ${placeHit.text}`}
               className="mr-1 inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2.5 py-0.5 font-medium text-primary hover:bg-primary/20 disabled:opacity-50">
               <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
               </svg>
-              {picking ? `Finding ${placeHit.text}…` : `Near ${placeHit.text}`}
+              {placeFind.isPending ? `Finding ${placeHit.text}…` : `Near ${placeHit.text}`}
             </button>
           )}
           <span className="text-muted-foreground">Showing</span>
@@ -637,7 +622,7 @@ export function DiscoveryView({
           )}
           {results.length > shown.length && scope !== "articles" && scope !== "pubtext" && (
             <div className="mt-3 flex justify-center">
-              <button type="button" onClick={() => setVisible((v) => v + PAGE)}
+              <button type="button" onClick={() => setPaged({ key: pageKey, n: visible + PAGE })}
                 className="rounded-md border border-border bg-card px-4 py-1.5 text-sm text-foreground hover:border-primary">
                 Show {Math.min(PAGE, results.length - shown.length)} more
                 <span className="ml-1 text-xs text-muted-foreground">({results.length - shown.length} of {results.length} remaining)</span>
@@ -773,44 +758,36 @@ const FACET_HEAD = 8;
 function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }: {
   label: string; facets: FacetCount[]; selected: Set<string>; onToggle: (key: string) => void; defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen || selected.size > 0);
   const [all, setAll] = useState(false);
   if (facets.length < 2 && selected.size === 0) return null;   // a lone value isn't a filter, unless it's on
   const rows = all ? facets : facets.slice(0, FACET_HEAD);
   return (
-    <section className="border-t border-border px-2 py-2">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center justify-between px-1 py-0.5 text-left pointer-coarse:min-h-11">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-        <Chevron open={open} className="text-muted-foreground" />
-      </button>
-      {open && (
-        <ul className="mt-1 space-y-0.5">
-          {rows.map((f) => {
-            const on = selected.has(f.key);
-            return (
-              <li key={f.key}>
-                <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
-                    ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
-                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-3xs leading-none ${on
-                    ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
-                  <span className="min-w-0 flex-1 truncate" title={f.label}>{f.label}</span>
-                  <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>
-                </button>
-              </li>
-            );
-          })}
-          {facets.length > FACET_HEAD && (
-            <li>
-              <button type="button" onClick={() => setAll((v) => !v)} className="px-2 py-0.5 text-xs text-primary hover:underline pointer-coarse:min-h-11">
-                {all ? "Show fewer" : `Show all ${facets.length}`}
+    <RailSection label={label} defaultOpen={defaultOpen || selected.size > 0}>
+      <ul className="mt-1 space-y-0.5">
+        {rows.map((f) => {
+          const on = selected.has(f.key);
+          return (
+            <li key={f.key}>
+              <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
+                  ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
+                <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-3xs leading-none ${on
+                  ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
+                <span className="min-w-0 flex-1 truncate" title={f.label}>{f.label}</span>
+                <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>
               </button>
             </li>
-          )}
-        </ul>
-      )}
-    </section>
+          );
+        })}
+        {facets.length > FACET_HEAD && (
+          <li>
+            <button type="button" onClick={() => setAll((v) => !v)} className="px-2 py-0.5 text-xs text-primary hover:underline pointer-coarse:min-h-11">
+              {all ? "Show fewer" : `Show all ${facets.length}`}
+            </button>
+          </li>
+        )}
+      </ul>
+    </RailSection>
   );
 }
 
@@ -820,36 +797,28 @@ function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
   facets: FacetCount[]; value: FacetSelection["geometry"]; onChange: (v: FacetSelection["geometry"]) => void;
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen || value !== "all");
   if (facets.length < 2 && value === "all") return null;
   return (
-    <section className="border-t border-border px-2 py-2">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center justify-between px-1 py-0.5 text-left pointer-coarse:min-h-11">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Geometry</span>
-        <Chevron open={open} className="text-muted-foreground" />
-      </button>
-      {open && (
-        <ul className="mt-1 space-y-0.5" role="radiogroup" aria-label="Geometry">
-          {facets.map((f) => {
-            const on = value === f.key;
-            return (
-              <li key={f.key}>
-                <button type="button" role="radio" aria-checked={on}
-                  onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
-                    ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
-                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on
-                    ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>
-                  <span className="min-w-0 flex-1 truncate">{f.label}</span>
-                  <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
+    <RailSection label="Geometry" defaultOpen={defaultOpen || value !== "all"}>
+      <ul className="mt-1 space-y-0.5" role="radiogroup" aria-label="Geometry">
+        {facets.map((f) => {
+          const on = value === f.key;
+          return (
+            <li key={f.key}>
+              <button type="button" role="radio" aria-checked={on}
+                onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
+                  ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
+                <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on
+                  ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>
+                <span className="min-w-0 flex-1 truncate">{f.label}</span>
+                <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </RailSection>
   );
 }
 

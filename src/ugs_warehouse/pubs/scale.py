@@ -51,7 +51,7 @@ def denominator(raw: str) -> int | None:
 def tier_of(raw: str) -> str | None:
     """Scale-tier key for a publication scale, or None when unparseable (caller applies fallback)."""
     d = denominator(raw)
-    if d is None or d <= 0:
+    if d is None:
         return None
     if d <= 62_500:
         return "24k"

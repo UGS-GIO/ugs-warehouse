@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contains, overlaps, to2d } from "./bbox";
+import { contains, overlaps, to2d, union } from "./bbox";
 
 describe("bbox", () => {
   it("reads the max corner of a 3D bbox after its heights", () => {
@@ -16,5 +16,9 @@ describe("bbox", () => {
     expect(contains([0, 0, 1, 1], 0.5, 0.5)).toBe(true);
     expect(contains([0, 0, 1, 1], 1, 1)).toBe(true);
     expect(contains([0, 0, 1, 1], 1.1, 0.5)).toBe(false);
+  });
+  it("unions boxes, or none", () => {
+    expect(union([[0, 0, 1, 1], [-1, 0.5, 0.5, 2]])).toEqual([-1, 0, 1, 2]);
+    expect(union([])).toBeUndefined();
   });
 });

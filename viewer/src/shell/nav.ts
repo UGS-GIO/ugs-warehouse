@@ -1,6 +1,7 @@
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { layerParam, parseLayerParam } from "@/map/map-model";
 import { setPin } from "@/map/camera";
+import { DISCOVER_KEYS } from "@/discover/discovery-model";
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 export type View = "catalog" | "map" | "discover" | "guide" | "developers" | "preview" | "review" | "offline" | "settings";
@@ -12,6 +13,8 @@ const VIEW_PATH = {
   review: "/review", offline: "/offline", settings: "/settings",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v in VIEW_PATH;
+const withoutDiscover = (search: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(search).filter(([k]) => !DISCOVER_KEYS.includes(k)));
 export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 export function useNav() {
@@ -38,17 +41,12 @@ export function useNav() {
       to: VIEW_PATH[next.view],
       replace: !push,
       search: (prev) => {
-        const { view: _v, c: _c, i: _i, l: _l, s: _s, sheet, terrain,
-          q, collections, category, types, formats, scale, geometry, sort, layout, density, area, place, years,
-          ...rest } = prev;  // keep override params (rest); Discover keys re-added only when staying
+        const { view: _v, c: _c, i: _i, l: _l, s: _s, sheet, terrain, ...rest } = prev;
         // Preview is only ever reached from Discover, so carry the filter state through it → Back
         // restores the filtered result set the user came from.
-        const discover = next.view === "discover" || next.view === "preview"
-          ? { q, collections, category, types, formats, scale, geometry, sort, layout, density, area, place, years }
-          : {};
+        const stay = next.view === "discover" || next.view === "preview";
         return {
-          ...rest,
-          ...discover,
+          ...(stay ? rest : withoutDiscover(rest)),
           sheet: next.view === "map" ? next.sheet ?? sheet : undefined,   // the map's own; it doesn't follow you out
           terrain: next.i && next.i === prev.i ? terrain : undefined,     // a new item opens in 2D
           c: next.c || undefined,
@@ -65,11 +63,8 @@ export function useNav() {
     navigate({
       to: VIEW_PATH.discover,
       search: (prev) => {
-        const { view: _v, c: _c, i: _i, l: _l, s: _s,
-          q: _q, collections: _co, category: _ca, types: _ty, formats: _fo, scale: _sc, geometry: _ge,
-          place: _pl, years: _ye,
-          sort: _so, layout: _la, density: _de, area: _ar, sheet: _sh, ...rest } = prev;
-        return { ...rest, q: opts.q || undefined, category: opts.category || undefined };
+        const { view: _v, c: _c, i: _i, l: _l, s: _s, sheet: _sh, ...rest } = prev;
+        return { ...withoutDiscover(rest), q: opts.q || undefined, category: opts.category || undefined };
       },
     });
   return { sp, view, collectionUrl, itemUrl, urlLayerIds, seriesSel, go, openDiscoverSearch };

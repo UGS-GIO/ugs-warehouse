@@ -3,7 +3,7 @@ import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
   discoverable, discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE,
-  byOverlap, drawable, overlapScore, placeArea, unionOf, parseDiscovery, reliefs, withSelected, scaleBucket, sortItems,
+  byOverlap, drawable, overlapScore, placeArea, parseDiscovery, reliefs, withSelected, scaleBucket, sortItems,
   typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 import { hasFootprint } from "@/stac";
@@ -458,7 +458,5 @@ describe("area edge cases and the map", () => {
     const fps = at.map((it) => ({ id: it.data!.id, bbox: it.data!.bbox! }));
     expect(drawable(fps, area).map((f) => f.id)).toEqual(["Q"]);
     expect(drawable(fps, null).map((f) => f.id)).toEqual(["Q"]);
-    expect(unionOf(fps)).toEqual([-114.05, 37.0, -109.04, 42.0]);
-    expect(unionOf([])).toBeNull();
   });
 });

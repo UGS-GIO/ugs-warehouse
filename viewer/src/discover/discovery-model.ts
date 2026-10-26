@@ -7,6 +7,7 @@ import type { ItemRef } from "@/catalog/browse";
 import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
   scale, scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
+import { overlaps } from "@/lib/bbox";
 import { validBbox } from "@/map/map-model";
 import { hasFootprint, pubOfEntry } from "@/stac";
 
@@ -144,8 +145,7 @@ export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
 export function bboxIntersects(a: number[] | undefined, b: number[] | undefined): boolean {
   const va = validBbox(a);
   const vb = validBbox(b);
-  if (!va || !vb) return false;
-  return va[0] <= vb[2] && va[2] >= vb[0] && va[1] <= vb[3] && va[3] >= vb[1];
+  return Boolean(va && vb && overlaps(va, vb));
 }
 
 // A place's search area: its own extent, grown to at least about a 30' x 60' sheet so a town (or an
@@ -181,15 +181,6 @@ export function drawable<T extends { bbox: number[] }>(fps: T[], area: Area | nu
   const limit = area ? 4 * boxArea(area) : MAX_DRAWN_DEG2;
   return fps.filter((f) => boxArea(f.bbox) <= limit);
 }
-export function unionOf(fps: { bbox: number[] }[]): Area | null {
-  if (!fps.length) return null;
-  const u: Area = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const { bbox: b } of fps) {
-    u[0] = Math.min(u[0], b[0]); u[1] = Math.min(u[1], b[1]); u[2] = Math.max(u[2], b[2]); u[3] = Math.max(u[3], b[3]);
-  }
-  return u;
-}
-
 /** Best area match first, for "Best match" when a search area is set and nothing is typed. */
 export const byOverlap = (items: ItemRef[], area: Area): ItemRef[] =>
   items.map((it) => ({ it, s: overlapScore(it.data?.bbox, area) }))
@@ -360,6 +351,9 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     years: rangeParam(s.years),
   };
 }
+
+// Every URL key Discover owns, for the views that carry or drop them.
+export const DISCOVER_KEYS = Object.keys(discoveryPatch(DEFAULT_DISCOVERY));
 
 /** The active-filter chips (removable) for the row above the cards — pure so it's testable. Each
  *  carries the patch that REMOVES just that filter. Text search + sort/layout/density aren't "filters". */

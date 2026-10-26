@@ -93,6 +93,7 @@ describe("geology", () => {
     expect(bestMap([{ id: "62k", scale: 62500, year: 2020 }, old])?.id).toBe("1975");
     expect(mapOrder(recent, { scale: 24000, year: 1987 })).toBeLessThan(0);
     expect(mapOrder({ scale: 24000, year: 1987 }, { scale: 24000, year: 1987 })).toBe(0);
+    expect(mapOrder({}, {})).toBe(0);
   });
 
   it("warns by scale: nothing at 1:24,000, ±50 m at 1:100,000, generalized at 1:500,000", () => {

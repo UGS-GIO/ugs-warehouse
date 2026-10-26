@@ -144,7 +144,8 @@ export const tierOf = (scale?: number): number => {
 type Ranked = { scale?: number; year?: number | null };
 /** Best map first: the more detailed scale tier, then the newer map, then the finer scale. */
 export const mapOrder = (a: Ranked, b: Ranked): number =>
-  tierOf(a.scale) - tierOf(b.scale) || (b.year ?? 0) - (a.year ?? 0) || (a.scale ?? Infinity) - (b.scale ?? Infinity);
+  tierOf(a.scale) - tierOf(b.scale) || (b.year ?? 0) - (a.year ?? 0) || ((a.scale ?? Infinity) - (b.scale ?? Infinity) || 0);
 
 /** The best of several maps by mapOrder. */
-export const bestMap = <T extends Ranked>(xs: T[]): T | undefined => [...xs].sort(mapOrder)[0];
+export const bestMap = <T extends Ranked>(xs: T[]): T | undefined =>
+  xs.reduce<T | undefined>((best, x) => (!best || mapOrder(x, best) < 0 ? x : best), undefined);

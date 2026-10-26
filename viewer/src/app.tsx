@@ -40,7 +40,7 @@ const tab = (on: boolean) =>
 
 // Thin top progress bar — visible while any TanStack Query fetch is in flight OR a view switch is
 // pending (useTransition). A global "working" signal so a slow load never reads as a frozen app.
-const SEARCH_BOX_QUERIES = new Set(["place-suggest", "header-search-index"]);
+const SEARCH_BOX_QUERIES = new Set(["place-suggest", "header-search-index", "quad-gazetteer", "utm", "plss", "unit-index"]);
 
 function FetchBar({ pending }: { pending?: boolean }) {
   // The search box has its own spinner.

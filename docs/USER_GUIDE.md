@@ -84,6 +84,9 @@ updated. Cite a dated copy when other people must get the same data.
 Open <https://data.geology.utah.gov/>.
 
 - Browse and search the catalog, and filter layers by attribute.
+- Search the map for a place, a quadrangle name, a PLSS township and section (`T3S R2E sec 12`),
+  latitude and longitude or UTM coordinates, or a geologic unit name. Click the empty search box
+  to see an example of each.
 - Open a layer to see it on a map and in a data table. You can sort and filter the table.
 - Select a feature on the map to highlight its row in the table, and the reverse.
 - Export a layer, or the part in your map view, to Shapefile, GeoPackage, File Geodatabase,

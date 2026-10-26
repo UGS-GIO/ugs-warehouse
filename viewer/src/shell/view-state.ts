@@ -171,8 +171,8 @@ export function useViewState() {
   // Header search picks. Both land on the map: a place flies there; an item opens its detail, joins
   // the layers when it draws as one, and the map zooms to it rather than to every layer.
   const searchIsLayer = (r: ItemRef) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data);
-  const pickPlace = (b: Bounds, label: string) => {
-    setPin({ lng: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, label });
+  const pickPlace = (b: Bounds, label: string, outline?: boolean) => {
+    setPin({ lng: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, label, outline: outline ? b : undefined });
     if (view === "map") flyTo(b);
     else { queueFocus(b); go({ view: "map", l: layerIds, s: seriesSel }); }
   };

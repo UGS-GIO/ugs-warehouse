@@ -170,6 +170,8 @@ def export_quad_cog(feat: dict, sid: str, quad: str, work_dir: str) -> str | Non
             "-q",
             "-of",
             "COG",
+            "-colorinterp",
+            "red,green,blue,alpha",
             "-co",
             "COMPRESS=DEFLATE",
             "-co",

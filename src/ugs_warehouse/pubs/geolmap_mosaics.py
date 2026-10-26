@@ -409,8 +409,8 @@ def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
     mismatch, unreadable file), so compare band 1's sources against the input list. Non-8-bit COGs
     are already excluded by `_byte_members`; any other drop is unexpected and stops the tier."""
     band = ET.parse(vrt).getroot().find("VRTRasterBand")   # our own gdalbuildvrt output
-    got = {el.text for el in band.iter("SourceFilename")} if band is not None else set()
-    missing = [p for p in expected if p not in got]
+    got_names = {os.path.basename(el.text.strip()) for el in band.iter("SourceFilename")} if band is not None else set()
+    missing = [p for p in expected if os.path.basename(p) not in got_names]
     if missing:
         raise RuntimeError(f"gdalbuildvrt dropped {len(missing)} of {len(expected)} source(s) from "
                            f"{vrt}: {', '.join(missing[:10])}" + (" ..." if len(missing) > 10 else ""))
@@ -434,7 +434,28 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         return False
     with tempfile.TemporaryDirectory(dir=MOSAIC_WORK_DIR) as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
-        members = [_vsigs(s) for s in sids]
+
+        # Wrap any COGs that have Undefined band color interpretation (e.g. from legacy ArcGIS exports)
+        # into a 1KB VRT with standard Red,Green,Blue,Alpha so gdalbuildvrt never drops them.
+        def wrap_if_needed(sid: str) -> str:
+            path = _vsigs(sid)
+            try:
+                out = subprocess.run(["gdalinfo", "-json", "-nofl", "-nomd", "-noct", path], env=env,
+                                     stdout=subprocess.PIPE, text=True, check=True).stdout
+                bands = json.loads(out).get("bands", [])
+                if any(b.get("colorInterpretation") == "Undefined" for b in bands):
+                    wvrt = os.path.join(tmp, f"{sid}_wrap.vrt")
+                    subprocess.run(["gdal_translate", "-q", "-of", "VRT",
+                                    "-colorinterp", "red,green,blue,alpha",
+                                    path, wvrt], env=env, check=True)
+                    return wvrt
+            except Exception:
+                pass
+            return path
+
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            members = list(ex.map(wrap_if_needed, sids))
+
         with open(listfile, "w") as fh:
             fh.write("\n".join(members) + "\n")
         tiledir = os.path.join(tmp, f"{tier}-tiles")

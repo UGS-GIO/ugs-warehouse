@@ -293,9 +293,9 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
             className="flex min-w-0 flex-1 items-center gap-3 py-1.5 pl-4 text-left pointer-coarse:min-h-12">
             <span className="min-w-0 flex-1">
               {labels.length > 0 && (
-                <span className="block truncate font-semibold" title={labels.join(" · ")}>{labels.slice(0, 3).join(" · ")}</span>
+                <span className="block break-words font-semibold" title={labels.join(" · ")}>{labels.slice(0, 3).join(" · ")}</span>
               )}
-              <span className={`block truncate ${labels.length ? "text-xs text-muted-foreground" : ""}`} title={h.title}>{h.title}</span>
+              <span className={`block break-words ${labels.length ? "text-xs text-muted-foreground" : ""}`} title={h.title}>{h.title}</span>
             </span>
             <Knob on={on} />
           </button>
@@ -335,7 +335,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
       <label key={h.id} className={`flex items-center gap-2 px-3 py-1.5 pointer-coarse:min-h-12 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
         <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" disabled={disabled}
           checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
-        <span className="min-w-0 flex-1 truncate" title={h.title}>{h.title}</span>
+        <span className="min-w-0 flex-1 break-words" title={h.title}>{h.title}</span>
         {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes)
@@ -358,7 +358,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
         ? "mt-1 bg-primary/10 p-2" : "mt-2 border-t border-border pt-2"}`}>
       <span className="min-w-0 flex-1">
         <span className="block text-xs font-semibold text-primary">Better source · more detailed map · {ratio(better.scale)}</span>
-        <span className="block truncate text-sm" title={better.h.title}>{better.h.title}</span>
+        <span className="block break-words text-sm" title={better.h.title}>{better.h.title}</span>
       </span>
       <Knob on={ctx.isActive(better.h.id)} />
     </button>

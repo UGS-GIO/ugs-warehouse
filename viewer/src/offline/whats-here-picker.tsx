@@ -12,7 +12,7 @@ import { DETENTS } from "@/map/map-model";
 import { SHEET_POPUP } from "@/ui/sheet-chrome";
 import { SheetGrabber } from "@/ui/sheet";
 import { useIsDesktop } from "@/ui/use-breakpoint";
-import { idOf } from "@/stac";
+import { idOf, pubOfEntry } from "@/stac";
 import { topUnit } from "@/map/identify";
 import { useViewCtx } from "@/app";
 import { Chevron } from "@/ui/chevron";
@@ -94,9 +94,16 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
     const seen = new Map<string, ItemRef>();
     for (const r of [...ctx.mapItems, ...ctx.allItems]) if (!seen.has(r.href)) seen.set(r.href, r);
     const refs = [...seen.values()];
+    const byId = new Map(refs.map((r) => [idOf(r.href), r]));
+    // A plate or units item carries no scale of its own; its publication does.
+    const scaleOf = (r: ItemRef) => {
+      const pub = pubOfEntry(r.data);
+      const parent = pub && byId.get(pub.id);
+      return scaleDenominator(r) ?? (parent ? scaleDenominator(parent) : undefined);
+    };
     return {
       candidates: refs.map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null),
-      scales: new Map(refs.map((r) => [idOf(r.href), scaleDenominator(r)])),
+      scales: new Map(refs.map((r) => [idOf(r.href), scaleOf(r)])),
       years: new Map(refs.map((r) => [idOf(r.href), year(r)])),
     };
   }, [ctx.mapItems, ctx.allItems]);

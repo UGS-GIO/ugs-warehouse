@@ -22,7 +22,7 @@ from ..core.bbox import to_2d_bbox
 from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
 from . import counties, dois, identify, identity, topic
 from .relations import layer_kind, source_of_label
-from .scale import MOSAIC_TIER_LABEL
+from .scale import MOSAIC_TIER_LABEL, denominator
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 from .vectors import GEOPACKAGE_MIME, VECTORS_PREFIX, geopackage_object, pmtiles_object
 
@@ -252,6 +252,14 @@ def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
     return (int(has_cog) + int(has_units) + int(has_3d) + len(layers) + len(tables)) == 1
 
 
+def _scale_number(sid: str, raw: str) -> int | None:
+    """`raw` as a 1:N denominator; a scale that is there but unreadable is logged."""
+    d = denominator(raw)
+    if raw and d is None:
+        print(f"[pubs] {sid}: scale {raw!r} is not a readable 1:N scale", file=sys.stderr)
+    return d
+
+
 def _source_asset(h: str, mirrored: set[str] | None, **rest) -> dict:
     """A source file served from our CDN when mirrored, with the publisher's URL as an alternate."""
     obj = identity.pub_file_object(h)
@@ -422,6 +430,8 @@ def build_publication(p: dict, attachments: list[dict], *,
         "ugs:pub_type": pub_type_of(p),
         **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
         **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
+        # The scale as a number, so a client can filter by range without parsing the text.
+        **({"ugs:scale_denominator": d} if (d := _scale_number(sid, sc)) else {}),
         **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
         **({"version": v} if (v := ed.get("version")) else {}),
         **({"deprecated": True} if ed.get("deprecated") else {}),

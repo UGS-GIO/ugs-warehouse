@@ -491,7 +491,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
               <CubeStepsPanel />
               <DownloadsPanel key={String(item.id)} item={item} />
             </div>
-            <EndpointsPanel item={item} />
+            <EndpointsPanel item={item} collectionId={collectionId} />
             <StacJson item={raw ?? item} title={`${item.id} — STAC JSON`} />
           </aside>
         </div>

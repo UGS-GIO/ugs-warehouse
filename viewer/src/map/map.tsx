@@ -430,7 +430,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
       // Bounds from the first frame, so "Search this area" works before every tile has loaded.
-      onRender={() => { if (!boundsSent.current) { boundsSent.current = true; reportBounds(); } }}
+      onRender={() => { if (!boundsSent.current && mapRef.current) { boundsSent.current = true; reportBounds(); } }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onRotate={trackNorth}
       onPitch={trackNorth}

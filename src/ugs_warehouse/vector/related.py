@@ -93,7 +93,7 @@ def _related_link(target_stem: str, schema: str, title: str | None = None) -> di
     `schema` is the target's mart schema: items are nested per schema, so a link can't be built
     from the stem alone (see `_target_meta`)."""
     return stac.related_link(sink_stac.collection_path(schema), target_stem,
-                             title or stac.prettify(target_stem))
+                             stac.human_title(title) or stac.prettify(target_stem))
 
 
 def _target_meta(con, stems: list[str]) -> dict[str, dict]:
@@ -164,7 +164,7 @@ def _materialize_child(con, child_topic: str, schema: str, display: str | None,
         "href": config.public_url(path),
         "type": PARQUET_MIME,
         "roles": ["data", "related"],
-        "title": display or stac.prettify(child_topic),
+        "title": stac.human_title(display) or stac.prettify(child_topic),
         **stac.file_fields(meta),
     }
     fk = _foreign_key(rel)

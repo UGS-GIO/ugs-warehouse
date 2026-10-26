@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCatalogJson, isShell } from "./sw-routes";
+import { isCatalogJson, isLayerStyle, isShell } from "./sw-routes";
 
 const match = (href: string, headers?: Record<string, string>) =>
   isCatalogJson({ url: new URL(href), request: new Request(href, { headers }) });
@@ -38,10 +38,26 @@ describe("isCatalogJson", () => {
 });
 
 describe("isShell", () => {
+  it("installs the quad gazetteer, so quad search works offline", () => {
+    expect(isShell("utah-quads.json")).toBe(true);
+  });
+
   it("installs the page, its entry chunk and styles, and the files beside it", () => {
     expect(["index.html", "favicon.svg", "assets/index-Ab12.js", "assets/index-Ab12.css"].every(isShell)).toBe(true);
   });
   it("leaves route chunks to load when used", () => {
     expect(["assets/map-Cd34.js", "assets/katex-Ef56.js", "assets/KaTeX_Main.woff2"].some(isShell)).toBe(false);
+  });
+});
+
+describe("isLayerStyle", () => {
+  const at = (href: string) => isLayerStyle({ url: new URL(href) });
+  it("keeps a layer's style, so a saved layer keeps its colors offline", () => {
+    expect(at("https://maps-assets.geology.utah.gov/styles/styles/wetlands_riparian/default.json")).toBe(true);
+  });
+  it("leaves out basemap fonts, catalog JSON and other hosts", () => {
+    expect(at("https://maps-assets.geology.utah.gov/styles/fonts/Noto/0-255.pbf")).toBe(false);
+    expect(at("https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json")).toBe(false);
+    expect(at("https://example.com/styles/styles/x/default.json")).toBe(false);
   });
 });

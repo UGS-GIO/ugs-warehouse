@@ -5,12 +5,13 @@
 // service worker answers from (sw.ts).
 import { ENGINE_WASM } from "@/data/duckdb";
 
-export const ENGINE_CACHE = "ugs-engine";
+const ENGINE_CACHE = "ugs-engine";
 /** The .wasm's size, for pricing a save before it is fetched (duckdb-wasm 1.x `eh` build). */
 export const ENGINE_BYTES = 36_000_000;
 
-export async function saveEngine(onProgress?: (done: number, total?: number) => void): Promise<void> {
-  const res = await fetch(ENGINE_WASM);
+export async function saveEngine(onProgress?: (done: number, total?: number) => void,
+  signal?: AbortSignal): Promise<void> {
+  const res = await fetch(ENGINE_WASM, { signal });
   if (!res.ok || !res.body) throw new Error(`Download failed: ${res.status}`);
   const total = Number(res.headers.get("content-length")) || undefined;
   let done = 0;

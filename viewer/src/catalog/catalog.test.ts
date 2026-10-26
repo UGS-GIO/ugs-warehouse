@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { layerCollectionIds, rootGroupOf, serviceUrlOf } from "./catalog";
+import { catalogTrail, crumbNav, featureEndpoints, itemBackTarget, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
+import type { StacDoc } from "@/stac";
 
 describe("layerCollectionIds", () => {
   it("selects root leaf collections, not sub-catalogs", () => {
@@ -78,5 +79,169 @@ describe("rootGroupOf", () => {
     const live = ["ugs-external", "ugs-geologic-maps", "ugs-mining-district-files",
       "ugs-publications", "ugs-rasters", "ugs-serving-topics"];
     for (const id of live) expect(rootGroupOf(id), id).not.toBe("other");
+  });
+});
+
+describe("catalogTrail", () => {
+  const pubs = { id: "ugs-publications", title: "Publications" };
+  const ofr = { id: "ugs-publications/OFR", title: "Open File Report", parentId: "ugs-publications" };
+
+  it("walks an Item inside a publication through its series and publication", () => {
+    const trail = catalogTrail({
+      collectionId: "ugs-publications/OFR/OFR-9", itemUrl: "OFR-9__geounits", subCats: [pubs], leaf: ofr,
+      pub: { sid: "OFR-9", title: "Geologic map of X" },
+    });
+    expect(trail).toEqual([
+      { label: "Catalog", to: {} },
+      { label: "Publications", to: { c: "ugs-publications" } },
+      { label: "Open File Report", to: { c: "ugs-publications/OFR", keepSeries: true } },
+      { label: "Geologic map of X", to: { c: "ugs-publications/OFR", i: "OFR-9" } },
+      { label: "OFR-9__geounits" },
+    ]);
+  });
+
+  it("names the publication by its SID until its title loads", () => {
+    const trail = catalogTrail({ collectionId: "ugs-publications/OFR/OFR-9", itemUrl: "x", subCats: [pubs],
+      leaf: ofr, pub: { sid: "OFR-9" } });
+    expect(trail[3]).toEqual({ label: "OFR-9", to: { c: "ugs-publications/OFR", i: "OFR-9" } });
+  });
+
+  it("keeps the old trail for a collection and a sub-catalog", () => {
+    expect(catalogTrail({ collectionId: "ugs-publications/OFR", subCats: [pubs], leaf: ofr })).toEqual([
+      { label: "Catalog", to: {} },
+      { label: "Publications", to: { c: "ugs-publications" } },
+      { label: "Open File Report", to: undefined },
+    ]);
+    expect(catalogTrail({ collectionId: "ugs-publications", subCats: [pubs], subCat: pubs })).toEqual([
+      { label: "Catalog", to: {} }, { label: "Publications" },
+    ]);
+    expect(catalogTrail({ subCats: [] })).toEqual([{ label: "Catalog", to: undefined }]);
+  });
+});
+
+describe("catalogTrail titles in a publication", () => {
+  const pubs = { id: "ugs-publications", title: "Publications" };
+  const m = { id: "ugs-publications/M", title: "Map", parentId: "ugs-publications" };
+  it("labels a publication page by series and publication title", () => {
+    expect(catalogTrail({ collectionId: m.id, itemUrl: "M-246DM", subCats: [pubs], leaf: m,
+      itemTitle: "Landslide maps of Utah" }).map((c) => c.label))
+      .toEqual(["Catalog", "Publications", "Map", "Landslide maps of Utah"]);
+  });
+  it("labels a layer page by publication and layer title", () => {
+    expect(catalogTrail({ collectionId: `${m.id}/M-246DM`, itemUrl: "M-246DM__UtahLandslideMaps__DebrisFlowPaths",
+      subCats: [pubs], leaf: m, pub: { sid: "M-246DM", title: "Landslide maps of Utah" },
+      itemTitle: "Debris Flow Paths" }).map((c) => c.label))
+      .toEqual(["Catalog", "Publications", "Map", "Landslide maps of Utah", "Debris Flow Paths"]);
+  });
+  it("falls back to the item id until the title loads", () => {
+    expect(catalogTrail({ collectionId: m.id, itemUrl: "M-246DM", subCats: [pubs], leaf: m, itemTitle: "" })
+      .at(-1)?.label).toBe("M-246DM");
+  });
+});
+
+describe("featureEndpoints", () => {
+  const service = "https://features.example/collections/hazards_qfaults";
+  it("offers the features service only for an item with its own rel=service link", () => {
+    expect(featureEndpoints({ links: [{ rel: "service", href: service }] }).map((r) => r.url))
+      .toEqual([service, `${service}/items?limit=50`]);
+  });
+  it("builds no URL for a publication layer, which has a GeoParquet but no service link", () => {
+    expect(featureEndpoints({ links: [{ rel: "collection", href: "../collection.json" }] })).toEqual([]);
+    expect(featureEndpoints(undefined)).toEqual([]);
+  });
+  it("points the link at an overriding base host", () => {
+    expect(featureEndpoints({ links: [{ rel: "service", href: service }] }, "http://localhost:9000")[0].url)
+      .toBe("http://localhost:9000/collections/hazards_qfaults");
+  });
+});
+
+describe("itemBackTarget", () => {
+  it("returns from an Item inside a publication to the publication", () => {
+    expect(itemBackTarget({
+      partOf: { c: "ugs-publications/OFR", i: "OFR-9" }, collectionUrl: "ugs-publications/OFR/OFR-9", seriesSel: ["x"],
+    })).toEqual({ c: "ugs-publications/OFR", i: "OFR-9" });
+  });
+  it("returns from any other item to its collection's list, keeping the series filter", () => {
+    expect(itemBackTarget({ collectionUrl: "ugs-publications/B", seriesSel: ["B"] }))
+      .toEqual({ c: "ugs-publications/B", s: ["B"] });
+  });
+});
+
+describe("layerRowsOf", () => {
+  const draws = (d?: StacDoc) => Boolean(d?.assets?.cog);
+  const cog = { cog: { href: "https://x/a.tif" } };
+  const items = [
+    { collId: "ugs-serving-topics/hazards", href: "https://x/ugs-serving-topics/hazards/qf/qf.json",
+      data: { id: "qf", properties: { title: "Faults" }, assets: cog } },
+    // A publication's layer, tagged in the root index; its collection is the publication.
+    { collId: "ugs-publications/OFR/OFR-9", href: "https://x/ugs-publications/OFR/OFR-9/OFR-9__flows/OFR-9__flows.json",
+      data: { id: "OFR-9__flows", properties: { title: "Debris Flow Paths", "ugs:in_publication": "OFR-9",
+                                                "ugs:publication_title": "Geologic map of X" }, assets: cog } },
+    { collId: "ugs-publications/OFR", href: "https://x/ugs-publications/OFR/OFR-2/collection.json",
+      data: { id: "OFR-2", properties: { title: "Report" } } },
+  ];
+  const titles: Record<string, string> = { "ugs-serving-topics/hazards": "Hazards", "ugs-publications/OFR": "Open File Report" };
+
+  it("keeps a publication's layer, filed under its series and named with its publication", () => {
+    const rows = layerRowsOf(items, {
+      draws, collTitle: (id) => titles[id] ?? id, isLayer: (r) => r.collId.startsWith("ugs-serving-topics/"),
+    });
+    expect(rows).toEqual([
+      { id: "qf", href: items[0].href, title: "Faults", group: "Hazards", layer: true },
+      { id: "OFR-9__flows", href: items[1].href, title: "Debris Flow Paths · Geologic map of X",
+        group: "Open File Report", layer: false },
+    ]);
+  });
+});
+
+describe("crumbNav", () => {
+  it("opens a publication crumb in the current view, so a Discover drawer stays a drawer", () => {
+    const to = { c: "ugs-publications/OFR", i: "OFR-9" };
+    expect(crumbNav(to, "discover")).toEqual({ view: "discover", c: to.c, i: "OFR-9", s: undefined });
+    expect(crumbNav(to, "catalog").view).toBe("catalog");
+  });
+  it("sends a series, group or root crumb to the Catalog view", () => {
+    expect(crumbNav({ c: "ugs-publications/OFR", keepSeries: true }, "discover", ["a"]))
+      .toEqual({ view: "catalog", c: "ugs-publications/OFR", i: undefined, s: ["a"] });
+    expect(crumbNav({ c: "ugs-publications" }, "discover").view).toBe("catalog");
+    expect(crumbNav({}, "map")).toEqual({ view: "catalog", c: undefined, i: undefined, s: undefined });
+  });
+});
+
+describe("the parent crumb (up) at each level", () => {
+  const pubs = { id: "ugs-publications", title: "Publications" };
+  const ofr = { id: "ugs-publications/OFR", title: "Open File Report", parentId: "ugs-publications" };
+  const upOf = (t: ReturnType<typeof catalogTrail>) => t.at(-2);
+
+  it("goes item -> publication -> series -> group -> root", () => {
+    const item = catalogTrail({ collectionId: "ugs-publications/OFR/OFR-9", itemUrl: "OFR-9_plate", subCats: [pubs],
+      leaf: ofr, pub: { sid: "OFR-9", title: "Map X" }, itemTitle: "Plate" });
+    expect(upOf(item)).toEqual({ label: "Map X", to: { c: "ugs-publications/OFR", i: "OFR-9" } });
+    const pub = catalogTrail({ collectionId: "ugs-publications/OFR", itemUrl: "OFR-9", subCats: [pubs], leaf: ofr,
+      itemTitle: "Map X" });
+    expect(upOf(pub)?.to).toEqual({ c: "ugs-publications/OFR", keepSeries: true });
+    const series = catalogTrail({ collectionId: "ugs-publications/OFR", subCats: [pubs], leaf: ofr });
+    expect(upOf(series)?.to).toEqual({ c: "ugs-publications" });
+    const group = catalogTrail({ collectionId: "ugs-publications", subCats: [pubs], subCat: pubs });
+    expect(upOf(group)?.to).toEqual({});
+  });
+
+  it("goes serving-topic item -> schema collection -> ugs-serving-topics -> root, by title", () => {
+    const topics = { id: "ugs-serving-topics", title: "Serving Topics" };
+    const hazards = { id: "ugs-serving-topics/hazards", title: "Hazards", parentId: topics.id };
+    const item = catalogTrail({ collectionId: hazards.id, itemUrl: "hazards_qfaults", subCats: [topics],
+      leaf: hazards, itemTitle: "Quaternary Faults" });
+    expect(item.map((c) => c.label)).toEqual(["Catalog", "Serving Topics", "Hazards", "Quaternary Faults"]);
+    expect(upOf(item)?.to).toEqual({ c: hazards.id, keepSeries: true });
+    const schema = catalogTrail({ collectionId: hazards.id, subCats: [topics], leaf: hazards });
+    expect(upOf(schema)).toEqual({ label: "Serving Topics", to: { c: topics.id } });
+    expect(upOf(catalogTrail({ collectionId: topics.id, subCats: [topics], subCat: topics }))?.to).toEqual({});
+  });
+
+  it("reaches the group from an item deep-linked into a sub-catalog", () => {
+    const topics = { id: "ugs-serving-topics", title: "Serving Topics" };
+    const t = catalogTrail({ collectionId: topics.id, itemUrl: "hazards_qfaults", subCats: [topics], subCat: topics,
+      itemTitle: "Quaternary Faults" });
+    expect(upOf(t)).toEqual({ label: "Serving Topics", to: { c: topics.id } });
   });
 });

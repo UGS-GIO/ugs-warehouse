@@ -9,17 +9,9 @@ Auth: Application Default Credentials. In prod the Cloud Run service account nee
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from django.conf import settings
-
-
-def series_code(sid: str) -> str:
-    """Viewer collection id for a pub = its alpha series prefix (OFR-593 → OFR). Matches the
-    warehouse's sink_stac.series_code so deep-links resolve to the right nested collection."""
-    m = re.match(r"[A-Za-z]+", (sid or "").strip())
-    return m.group(0).upper() if m else "OTHER"
 
 
 @dataclass(frozen=True)
@@ -48,7 +40,8 @@ STAGES = [
     {"n": "④", "title": "Styling", "jobs": ["restyle", "topics-thumbs"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
-              "re-renders only changed styles)."},
+              "re-renders only changed data or styles). Restyle and each vector ingest start the "
+              "thumbnails on their own; the button is for a manual re-run."},
     {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "vectors",
                                                  "pubs-ingest", "graph", "fts"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
@@ -57,8 +50,9 @@ STAGES = [
               "rebuilds from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
-              "One mosaic per portal layer. The intermediate and 500k tiers build here; the statewide "
-              "24k tier runs on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide). Add the 250k "
+              "One mosaic per portal layer. The 500k tier builds here; the statewide 24k and "
+              "intermediate tiers run on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide "
+              "[--scale 100k]). Add the 250k "
               "(1 x 2 degree) tier to this console and the job's args once one of those sheets has a COG."},
 ]
 
@@ -66,17 +60,23 @@ STAGES = [
 # The triggerable warehouse jobs (Cloud Run job names from cloudbuild.yaml).
 JOBS: dict[str, Job] = {j.key: j for j in [
     Job("pubs-pipeline", "ugs-pubs-pipeline", "Full refresh (one click)",
-        "Orchestrator: loops Cover thumbnails to completion, then Rebuild pubs STAC — binds covers / "
-        "in-this-issue / volume + builds the search corpus. Runs server-side for as long as it takes "
+        "Orchestrator: loops Cover thumbnails to completion, then Extract map layers (which also builds "
+        "their tiles), then Rebuild pubs STAC — binds covers / in-this-issue / volume + builds the "
+        "search corpus. Runs server-side for as long as it takes "
         "(survives closing this tab). Use this instead of the 3-step dance.", danger=True),
     Job("harvest", "geolmap-harvest", "Harvest COGs",
         "Convert publication map plates → COGs (SKIP_EXISTING; safe to re-run). Heavy. "
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),
     Job("vectors", "ugs-pubs-vectors", "Extract map layers",
         "Extract every layer and companion table from the GIS zip of each pub that has one, as "
-        "GeoParquet. Skips pubs already extracted; then Rebuild pubs STAC to bind them."),
+        "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted, then "
+        "fills in what already-extracted pubs are missing (map tiles, relationships between "
+        "layers and tables) within a time budget. Runs as 5 parallel tasks, each owning a fifth of "
+        "the pubs and printing its own summary with how much is still pending. Run it again "
+        "until every task reports 0 pending; then Rebuild pubs STAC to bind them."),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
-        "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
+        "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items, and record layer "
+        "relationships. It does not build map-layer tiles: run Extract map layers (or Full refresh)."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
         "Render each pub's PDF first page → cover WebP (every pub incl. Survey Notes; SKIP_EXISTING; "
         "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),
@@ -97,15 +97,16 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         modes=(("report", "Report"), ("dry-run", "Dry run"))),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
         "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
-    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (intermediate + 500k)",
-        "Rebuild the intermediate-scale and 1:500,000 raster PMTiles mosaics of the published geologic "
-        "maps. Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it "
-        "runs on Cloud Batch, and a Cloud Run build would overwrite its z17 mosaic with a z14 one.",
-        danger=True, tiers=(("100k", "Intermediate"), ("500k", "1:500,000"))),
+    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (500k)",
+        "Rebuild the 1:500,000 raster PMTiles mosaic of the published geologic maps. The 24k and "
+        "intermediate tiers are not built here: they run on Cloud Batch, and a Cloud Run build would "
+        "overwrite their z17 and z15 mosaics with lower-zoom ones, or run out of memory.",
+        danger=True, tiers=(("500k", "1:500,000"),)),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
-        "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
-        "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
-        "Run a Vector reingest after to bind the new thumbnail assets. 3 shards.", tasks=3),
+        "Render each vector serving-topic's styled PMTiles → preview WebP (headless MapLibre; a neutral "
+        "sand style when unstyled). Content-hash skip — re-renders only topics whose data or style "
+        "changed. Starts on its own after each vector ingest and restyle, and nightly as a backstop; "
+        "stamps the thumbnail assets and refreshes the catalog itself. 3 shards.", tasks=3),
     # Out of STAGES while the viewer has no semantic search; here so a manual run shows in Watch.
     Job("embed", "ugs-pubs-embed", "Build semantic search",
         "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
@@ -124,6 +125,17 @@ JOBS: dict[str, Job] = {j.key: j for j in [
 
 def _job_path(job: Job) -> str:
     return f"projects/{settings.GCP_PROJECT}/locations/{settings.GCP_REGION}/jobs/{job.name}"
+
+
+def _start(job: Job, message: str, args: list[str] | None = None, *, tasks: int | None = None,
+           env: dict[str, str] | None = None) -> dict:
+    """Start `job`; `args` replace its configured ones. {ok, message, execution} or the error."""
+    try:
+        from ugs_warehouse.core.jobs import run_job
+        execution = run_job(_job_path(job), args, tasks=tasks, env=env)
+        return {"ok": True, "message": message, "execution": execution.split("/")[-1] or "(started)"}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 
 def _logging_client():
@@ -154,17 +166,7 @@ def run(key: str) -> dict:
     shards = f" ×{job.tasks} shards" if job.tasks else ""
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name}{shards}", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        req = run_v2.RunJobRequest(name=_job_path(job))
-        if job.tasks:
-            req.overrides = run_v2.RunJobRequest.Overrides(task_count=job.tasks)
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
-        return {"ok": True, "message": f"started {job.name}{shards}", "execution": exec_name}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"started {job.name}{shards}", tasks=job.tasks)
 
 
 # The ingest job is deployed with command=cloudrun_entrypoint.sh, args=[--all]; the entrypoint
@@ -182,60 +184,41 @@ def run_ingest(force: bool = False) -> dict:
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} --all --force",
                 "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=INGEST_FORCE_ARGS)
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override]))
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
-        return {"ok": True, "message": f"started {job.name} --all --force", "execution": exec_name}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"started {job.name} --all --force", INGEST_FORCE_ARGS)
 
 
 # A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
 # `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle runs `python`, so its
-# mode names a module: the catalog rebuild an ingest ends with.
+# mode names the module too.
 MODE_ARGS = {
     "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
     "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},
 }
 
 
-def run_mode(key: str, mode: str) -> dict:
-    """Run a job with a variant's args in place of its configured ones."""
+def run_mode(key: str, mode: str, extra: list[str] | None = None) -> dict:
+    """Run a job with a variant's args, plus `extra`, in place of its configured ones."""
     job = JOBS.get(key)
     args = MODE_ARGS.get(key, {}).get(mode)
     if not job:
         return {"ok": False, "message": f"unknown job {key!r}"}
     if not args:
         return {"ok": False, "message": f"unknown mode {mode!r} for {key!r}"}
+    args = [*args, *(extra or [])]
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
                 "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args)
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
-        return {"ok": True, "message": f"started {job.name} {' '.join(args)}", "execution": exec_name}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"started {job.name} {' '.join(args)}", args, tasks=1)
+
+
+def run_catalog_refresh(item_id: str) -> dict:
+    """Refresh the catalog, then invalidate `item_id` on the CDN (an override edit)."""
+    return run_mode("restyle", "refresh", ["--mark", item_id])
 
 
 # The retire job shares the ingest image + entrypoint (`python -m $RUN_MODULE "$@"`), so the topic
 # arrives as CLI args. `--yes` skips the CLI's own typed confirmation, which the console has already
 # taken from the operator — see views.retire_execute, which re-checks it server-side.
-RETIRE_MODULE = "ugs_warehouse.vector.retire"
-
-
 def retire_args(topic: str, *, dry_run: bool, purge_overrides: bool = False) -> list[str]:
     args = ["--topic", topic, "--dry-run"] if dry_run else ["--topic", topic, "--yes"]
     if purge_overrides and not dry_run:
@@ -262,19 +245,8 @@ def run_retire(topic: str, *, dry_run: bool, purge_overrides: bool = False,
     what = f"{job.name} {' '.join(args)}"
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {what}", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        env = [run_v2.EnvVar(name="RETIRE_REQUESTED_BY", value=requested_by)] if requested_by else []
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args, env=env)
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        op = client.run_job(request=req)
-        exec_name = (op.metadata.name if op.metadata else "") or ""
-        return {"ok": True, "message": f"started {what}", "execution": exec_name.split("/")[-1]}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    env = {"RETIRE_REQUESTED_BY": requested_by} if requested_by else None
+    return _start(job, f"started {what}", args, tasks=1, env=env)
 
 
 MOSAIC_MODULE = "ugs_warehouse.pubs.geolmap_mosaics"
@@ -289,18 +261,8 @@ def rebuild_mosaic(tier: str) -> dict:
         return {"ok": False, "message": f"unknown mosaic tier {tier!r}"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would rebuild the {tier} mosaic", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
-            args=["-m", MOSAIC_MODULE, "--scale", tier])
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        client.run_job(request=req)
-        return {"ok": True, "message": f"rebuilding the {tier} mosaic"}
-    except Exception as e:  # noqa: BLE001 — surface the error to the operator
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"rebuilding the {tier} mosaic", ["-m", MOSAIC_MODULE, "--scale", tier],
+                  tasks=1)
 
 
 def recent(key: str, limit: int = 5) -> list[dict]:
@@ -335,6 +297,15 @@ def recent(key: str, limit: int = 5) -> list[dict]:
         return []
 
 
+def log_line(e, **fields) -> dict:
+    """One Cloud Logging entry as a tail row: time, severity and text, plus `fields`."""
+    p = e.payload
+    text = p if isinstance(p, str) else (p.get("message") or p.get("msg") or str(p)) \
+        if isinstance(p, dict) else str(p)
+    return {"time": e.timestamp.isoformat() if e.timestamp else "",
+            "severity": (e.severity or "DEFAULT"), **fields, "text": (text or "").rstrip()}
+
+
 def logs(key: str, limit: int = 80, execution: str = "") -> dict:
     """Recent Cloud Logging lines for a job (near-live; newest fetched, returned chronological).
 
@@ -358,18 +329,11 @@ def logs(key: str, limit: int = 80, execution: str = "") -> dict:
         lines = []
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):
-            p = e.payload
-            text = p if isinstance(p, str) else (p.get("message") or p.get("msg") or str(p)) \
-                if isinstance(p, dict) else str(p)
             labels = e.labels or {}
-            lines.append({
-                "time": e.timestamp.isoformat() if e.timestamp else "",
-                "severity": (e.severity or "DEFAULT"),
-                "task": labels.get("run.googleapis.com/task_index", ""),
-                "execution": labels.get("run.googleapis.com/execution_name", "").split("/")[-1],
-                "category": (p.get("category", "") if isinstance(p, dict) else ""),
-                "text": (text or "").rstrip(),
-            })
+            lines.append(log_line(
+                e, task=labels.get("run.googleapis.com/task_index", ""),
+                execution=labels.get("run.googleapis.com/execution_name", "").split("/")[-1],
+                category=e.payload.get("category", "") if isinstance(e.payload, dict) else ""))
         lines.reverse()  # oldest → newest, like a tail
         # latest_execution = the newest run → the template draws a "run started here" divider at it.
         return {"ok": True, "lines": lines,
@@ -454,18 +418,8 @@ def reharvest_one(series_id: str) -> dict:
         return {"ok": False, "message": "no series id"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would re-harvest {sid} --force", "dry_run": True}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
-            args=["-m", "ugs_warehouse.pubs.harvest", sid, "--force"])
-        req = run_v2.RunJobRequest(
-            name=_job_path(job),
-            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
-        client.run_job(request=req)
-        return {"ok": True, "message": f"re-harvesting {sid} (--force)"}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    return _start(job, f"re-harvesting {sid} (--force)",
+                  ["-m", "ugs_warehouse.pubs.harvest", sid, "--force"], tasks=1)
 
 
 def reharvest_many(series_ids: list[str]) -> dict:
@@ -477,19 +431,9 @@ def reharvest_many(series_ids: list[str]) -> dict:
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "dry_run": True,
                 "message": f"DRY-RUN: would re-harvest {len(sids)} pub(s) --force"}
-    try:
-        from google.cloud import run_v2
-        client = run_v2.JobsClient()
-        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
-            args=["-m", "ugs_warehouse.pubs.harvest", *sids, "--force"])
-        req = run_v2.RunJobRequest(
-            name=_job_path(JOBS["harvest"]),
-            overrides=run_v2.RunJobRequest.Overrides(
-                container_overrides=[override], task_count=min(5, len(sids))))
-        client.run_job(request=req)
-        return {"ok": True, "message": f"re-harvesting {len(sids)} pub(s) (--force, {min(5, len(sids))} shards)"}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    shards = min(5, len(sids))
+    return _start(JOBS["harvest"], f"re-harvesting {len(sids)} pub(s) (--force, {shards} shards)",
+                  ["-m", "ugs_warehouse.pubs.harvest", *sids, "--force"], tasks=shards)
 
 
 def attention_pubs(limit: int = 200) -> dict:
@@ -502,6 +446,7 @@ def attention_pubs(limit: int = 200) -> dict:
         client = _logging_client()
         flt = (f'resource.type="cloud_run_job" resource.labels.job_name="{HARVEST_JOB}" '
                f'jsonPayload.category="attention"')
+        from ugs_warehouse.pubs.sink_stac import series_code
         seen: dict[str, dict] = {}
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):

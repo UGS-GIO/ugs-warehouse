@@ -29,6 +29,7 @@ def test_streaming_path_runs_sinks_once():
     with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
          patch("ugs_warehouse.vector.sink_ducklake.write") as ducklake, \
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
+         patch("ugs_warehouse.vector.sink_archive.write_geojson") as geojson, \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -41,6 +42,7 @@ def test_streaming_path_runs_sinks_once():
     backend.iter_chunks.assert_not_called()      # streaming, not chunked
     ducklake.assert_called_once()
     archive.assert_called_once()
+    geojson.assert_called_once()
     pmtiles.assert_called_once()
     stac_write.assert_called_once()
     refresh.assert_called_once()
@@ -98,7 +100,7 @@ def test_connection_closed_when_a_sink_raises():
 
 # --- #54: the fingerprint gates the DATA sinks, never the STAC sink ------------------------
 
-def _run_unchanged(**kwargs):
+def _run_unchanged(item_changed=False, **kwargs):
     """Ingest a topic whose fingerprint matches the published item."""
     topic = Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current")
     backend = MagicMock()
@@ -109,8 +111,9 @@ def _run_unchanged(**kwargs):
          patch("ugs_warehouse.vector.fingerprint.is_unchanged", return_value=True), \
          patch("ugs_warehouse.vector.sink_ducklake.write") as ducklake, \
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
+         patch("ugs_warehouse.vector.sink_archive.write_geojson"), \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
-         patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
+         patch("ugs_warehouse.vector.sink_stac.write", return_value=item_changed) as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as refresh:
 
@@ -153,6 +156,9 @@ def _run_with_failing(failing=None, published="old-hash"):
          patch("ugs_warehouse.vector.fingerprint.published_hash", return_value=published), \
          patch("ugs_warehouse.vector.sink_ducklake.write", side_effect=effect("ducklake")), \
          patch("ugs_warehouse.vector.sink_archive.write", side_effect=effect("archive")), \
+         patch("ugs_warehouse.vector.sink_archive.write_overviews",
+               side_effect=effect("overview")) as overview, \
+         patch("ugs_warehouse.vector.sink_archive.write_geojson", side_effect=effect("geojson")), \
          patch("ugs_warehouse.vector.sink_pmtiles.build", side_effect=effect("pmtiles")), \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -160,27 +166,32 @@ def _run_with_failing(failing=None, published="old-hash"):
 
         rc = _ingest(topic, dry_run=False, skip_refresh=False)
 
-    return rc, stac_write.call_args.kwargs["content_hash"]
+    return rc, stac_write.call_args.kwargs["content_hash"], overview.call_count
 
 
-@pytest.mark.parametrize("failing", ["ducklake", "archive", "pmtiles"])
+@pytest.mark.parametrize("failing", ["ducklake", "archive", "overview", "geojson", "pmtiles"])
 def test_a_failed_data_sink_keeps_the_published_hash(failing):
     """The hash vouches for the published artifacts. If it moved while an old one stayed, the next
-    --skip-unchanged run would skip the rebuild, and the tiles service would cache the old
-    PMTiles under the new version for a year."""
-    rc, content_hash = _run_with_failing(failing)
+    --skip-unchanged run would skip the rebuild."""
+    rc, content_hash, _ = _run_with_failing(failing)
     assert rc == 1
     assert content_hash == "old-hash"
 
 
+def test_no_overview_beside_a_failed_archive():
+    """The published overviews are of the published archive, so a run whose archive failed keeps all."""
+    *_, overview_calls = _run_with_failing("archive")
+    assert overview_calls == 0
+
+
 def test_a_failed_first_ingest_stamps_no_hash():
-    rc, content_hash = _run_with_failing("pmtiles", published=None)
+    rc, content_hash, _ = _run_with_failing("pmtiles", published=None)
     assert rc == 1
     assert content_hash is None  # nothing published to vouch for, so the next run rebuilds
 
 
 def test_a_clean_run_stamps_the_fresh_hash():
-    rc, content_hash = _run_with_failing()
+    rc, content_hash, _ = _run_with_failing()
     assert rc == 0
     assert content_hash == "fresh-hash"
 
@@ -194,3 +205,27 @@ def test_force_runs_every_sink_even_when_unchanged():
     archive.assert_called_once()
     pmtiles.assert_called_once()
     stac_write.assert_called_once()
+
+
+@pytest.fixture
+def pending(monkeypatch):
+    """The ids marked pending on the CDN, with invalidation configured."""
+    from ugs_warehouse.core import cdn, gcs
+    monkeypatch.setattr(cdn, "URL_MAP", "lb")
+    monkeypatch.setattr(cdn, "PROJECT", "p")
+    return lambda: [p.rsplit("/", 1)[-1] for p in gcs.list_paths(f"{cdn.PENDING_PREFIX}/")]
+
+
+def test_a_rebuilt_topic_is_marked_pending_on_the_cdn(pending):
+    _run_unchanged(skip_unchanged=False)
+    assert pending() == ["enmin_ucrc_wells"]
+
+
+def test_an_unchanged_topic_is_not_marked_pending(pending):
+    _run_unchanged()
+    assert pending() == []
+
+
+def test_a_metadata_edit_is_marked_pending(pending):
+    _run_unchanged(item_changed=True)
+    assert pending() == ["enmin_ucrc_wells"]

@@ -1,6 +1,8 @@
 """Restyle (manifest → STAC render rebind) — hermetic, in-memory GCS + fake styles manifest."""
+import pytest
+
 from ugs_warehouse import restyle as R
-from ugs_warehouse.core import gcs, stac, styles
+from ugs_warehouse.core import config, gcs, stac, styles
 
 
 def _mem_gcs(monkeypatch):
@@ -201,3 +203,133 @@ def test_restyle_verify_reports_drift_when_the_item_holds_an_older_legend(monkey
     store[obj] = json.dumps(item).encode()
 
     assert R._verify(R._scoped_groups("ugs-serving-topics")) == ["ugs-serving-topics/enmin_ucrc_wells"]
+
+
+def test_restyle_fails_the_run_when_written_renders_drift(monkeypatch):
+    """A drifted render fails the job, whatever number of items changed."""
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    monkeypatch.setattr(R, "_verify", lambda groups: ["ugs-serving-topics/enmin_ucrc_wells"])
+    with pytest.raises(RuntimeError, match="1 render"):
+        R.restyle()
+
+
+def _styled_wells(monkeypatch) -> list:
+    """A styled wells item in an in-memory bucket; returns the recorded thumbnail-job starts."""
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    return kicked
+
+
+def test_a_restyle_that_rebinds_starts_the_thumbnail_job(monkeypatch):
+    """A style change is a preview change; the thumbnail job re-renders what it affects."""
+    kicked = _styled_wells(monkeypatch)
+    R.restyle()
+    assert kicked == [None]
+
+
+def test_a_dry_run_restyle_starts_nothing(monkeypatch):
+    kicked = _styled_wells(monkeypatch)
+    R.restyle(dry_run=True)
+    assert kicked == []
+
+
+def test_a_restyle_of_a_topic_in_a_schema_collection_starts_the_thumbnail_job(monkeypatch):
+    """Topics live one level down, at ugs-serving-topics/<schema>/<id>/<id>.json (sink_stac)."""
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "hazards_qfaults", "render": "default", "kind": "vector",
+                                  "assets": ["pmtiles"], "path": "styles/q/default.json"}])
+    stac.write_item(stac.build_item(
+        item_id="hazards_qfaults", collection="hazards", collection_path="ugs-serving-topics/hazards",
+        geometry=None, bbox=None, datetime_iso=None, properties={"title": "Q"},
+        assets={"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    assert R.restyle() == 1
+    assert kicked == [None]
+
+
+def test_a_restyle_that_rebinds_no_topic_starts_nothing(monkeypatch):
+    """Only serving-topic previews are drawn from styles, so a raster-only rebind has none to redo."""
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "geolmap_500k", "render": "default", "kind": "raster",
+                                  "assets": ["cog"], "path": "styles/x/default.json"}])
+    stac.write_item(stac.build_item(
+        item_id="geolmap_500k", collection="geolmap", collection_path="ugs-rasters/geolmap",
+        geometry=None, bbox=[0, 1, 2, 3], datetime_iso=None, properties={"title": "500k"},
+        assets={"cog": {"href": "h", "type": "image/tiff; application=geotiff"}}))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    assert R.restyle(collection="ugs-rasters") == 1
+    assert kicked == []
+
+
+def test_a_restyle_with_nothing_styled_starts_nothing(monkeypatch):
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [])
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    R.restyle()
+    assert kicked == []
+
+
+def test_restyle_rebinds_a_publication_collection_but_not_a_serving_topic_layer_collection(monkeypatch):
+    import json
+
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "OFR-1", "render": "default", "kind": "vector",
+                                  "assets": ["pmtiles"], "path": "styles/ofr1/default.json"}])
+    prefix = config.STAC_PREFIX
+    pub = f"{prefix}/ugs-publications/OFR/OFR-1/collection.json"
+    topic = f"{prefix}/ugs-serving-topics/hazards/hazards_qfaults/collection.json"
+    store[pub] = json.dumps({"type": "Collection", "id": "OFR-1", "links": [],
+                             "assets": {"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}}).encode()
+    topic_doc = json.dumps({"type": "Collection", "id": "hazards_qfaults", "links": [],
+                            "ugs:renders": {"default": {"style_url": "gone"}}}).encode()
+    store[topic] = topic_doc
+
+    assert R.restyle(collection="all") == 1
+
+    assert "default" in json.loads(store[pub])["ugs:renders"]
+    assert store[topic] == topic_doc
+    assert R._single_file_collections("all", {}, [pub, topic]) == ["ugs-publications/OFR/OFR-1"]
+
+
+@pytest.fixture
+def cdn_calls(monkeypatch) -> list:
+    """Invalidation configured; records the mark, refresh and flush calls in order."""
+    calls: list = []
+    monkeypatch.setattr(R.cdn, "URL_MAP", "lb")
+    monkeypatch.setattr(R.cdn, "PROJECT", "p")
+    monkeypatch.setattr(R.cdn, "mark", lambda ids: calls.append(("mark", ids)))
+    monkeypatch.setattr(R.cdn, "flush", lambda p: calls.append("flush"))
+    monkeypatch.setattr(R.stac, "refresh_catalog", lambda: calls.append("refresh"))
+    return calls
+
+
+def test_a_restyle_refreshes_the_catalog_then_invalidates_the_rebound_topics(monkeypatch, cdn_calls):
+    """The FeatureServer reads the bindings from items.json, so the refresh comes first."""
+    _styled_wells(monkeypatch)
+    R.restyle()
+    assert cdn_calls == [("mark", ["enmin_ucrc_wells"]), "refresh", "flush"]
+
+
+def test_a_restyle_without_cdn_invalidation_refreshes_only_when_asked(monkeypatch, cdn_calls):
+    monkeypatch.setattr(R.cdn, "URL_MAP", "")
+    _styled_wells(monkeypatch)
+    R.restyle()
+    assert cdn_calls == []
+
+
+def test_a_failed_cdn_invalidation_fails_the_restyle_after_its_writes(monkeypatch, cdn_calls):
+    kicked = _styled_wells(monkeypatch)
+
+    def fail(problems):
+        raise RuntimeError("403")
+    monkeypatch.setattr(R.cdn, "flush", fail)
+    with pytest.raises(RuntimeError, match="invalidate the CDN"):
+        R.restyle()
+    assert kicked == [None]
+    assert cdn_calls == [("mark", ["enmin_ucrc_wells"]), "refresh"]

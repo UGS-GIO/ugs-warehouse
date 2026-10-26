@@ -391,7 +391,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
           getCursor={() => "grab"}
           style={{ position: "relative", width: "100%", height: "100%" }}
         />
-        <div className="absolute top-3 left-3 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-none max-w-[230px]">
+        <div className="absolute top-3 left-3 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-none max-w-57.5">
           <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
             <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
             Free 3D Orbit
@@ -410,7 +410,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       </div>
 
       {/* Control sidebar + geologic legend */}
-      <div className="w-full md:w-80 bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
+      <div className="w-full md:w-80 bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-60 md:h-full">
         <div className="border-b border-border pb-3">
           <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>
           <div className="flex flex-col gap-2 text-xs">
@@ -447,7 +447,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
           </div>
           <input type="text" placeholder="Filter units..." value={search} onChange={(e) => setSearch(e.target.value)}
             className="w-full text-xs border border-border bg-card px-2.5 py-1.5 rounded mb-2.5 focus:outline-none focus:border-primary" />
-          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 max-h-[220px] md:max-h-none">
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 max-h-55 md:max-h-none">
             {legend
               .filter((l) => !search || l.unit.toLowerCase().includes(search.toLowerCase()) || l.label.toLowerCase().includes(search.toLowerCase()))
               .map((l) => (

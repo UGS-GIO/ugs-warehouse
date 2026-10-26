@@ -84,6 +84,17 @@
   --color-ring: hsl(var(--ring));
 }
 
+@theme {
+  --text-2xs: 11px;
+  --text-3xs: 10px;
+  --container-lead: 75ch;
+  --container-lightbox: 92vw;
+  --spacing-modal: 85vh;
+  --spacing-popup: 70vh;
+  --spacing-preview: 75svh;
+  --spacing-preview-lg: 55svh;
+}
+
 /* Utah DS typography. Source Sans 3 is the DS body font ("can be universally used"); we self-host
    it so the app doesn't depend on the header package for its own text. UT Industry comes FROM the
    header package (v5+ loads all four weights and exposes the variable) — no second @font-face. */
@@ -149,6 +160,19 @@ body {
 /* The emblem is the <img> we hand the DS via `logo.htmlString`. */
 .dark .utah-design-system.utds-header img {
   filter: brightness(0) invert(1);
+}
+/* Action items (the review user badge): the DS paints them a white pill with gray ink. */
+.dark .utds-header .utds-header-action-item__icon-button {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+}
+.dark .utds-header .utds-header-action-item__icon-button.icon-button:hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+.dark .utds-header .utds-header-action-item__icon-button.icon-button svg,
+.dark .utds-header .utds-header-action-item__icon-button.icon-button:hover svg {
+  fill: currentColor;
 }
 
 /* Hover and focus on the header lockup must never paint a plate behind the emblem — on the dark

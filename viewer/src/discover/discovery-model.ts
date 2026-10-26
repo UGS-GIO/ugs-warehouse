@@ -4,15 +4,20 @@
 // The view component wires these to MiniSearch (the shared search-index) and the live map; neither
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
-import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, hasGeometry, propsOf,
+import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
   scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
+import { hasFootprint, pubOfEntry } from "@/stac";
 
 // The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
 // the discovery-facing names so this module's API and the view stay unchanged.
-export { collectionLabel, docIdOf, hasGeometry, typeOf };
+export { docIdOf, typeOf };
 export const discoveryTitle = title;
+
+// Discover shows one card per publication, so it leaves out the publication layers and tables the
+// root index also lists (tagged with their publication) for the map.
+export const discoverable = (items: ItemRef[]): ItemRef[] => items.filter((it) => !pubOfEntry(it.data));
 
 export type FacetCount = { key: string; label: string; n: number };
 export type Facets = {
@@ -50,7 +55,7 @@ export function extractFacets(items: ItemRef[]): Facets {
     const t = typeOf(it);
     if (t) bump(types, t, t);
     for (const f of formatsOf(it)) bump(formats, f, f);
-    if (hasGeometry(it)) has++;
+    if (hasFootprint(it.data)) has++;
     else none++;
   }
   const geometry: FacetCount[] = [];
@@ -91,8 +96,8 @@ export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
     if (cats.size && !cats.has(categorize(it).key)) return false;
     if (types.size && !types.has(typeOf(it))) return false;
     if (formats.size && !formatsOf(it).some((f) => formats.has(f))) return false;
-    if (sel.geometry === GEOM_HAS && !hasGeometry(it)) return false;
-    if (sel.geometry === GEOM_NONE && hasGeometry(it)) return false;
+    if (sel.geometry === GEOM_HAS && !hasFootprint(it.data)) return false;
+    if (sel.geometry === GEOM_NONE && hasFootprint(it.data)) return false;
     return true;
   });
 }
@@ -213,7 +218,7 @@ export const effectiveSort = (s: DiscoveryState): SortKey =>
 // The Discover view's whole filter/sort/layout state lives in the URL so a category tile or a shared
 // link reproduces the view. These two pure functions are the validated boundary: parse the raw search
 // (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
-// drops defaults (so a pristine view stays a clean `/discover`). Namespaced keys — q / collections
+// drops defaults (so a pristine view stays a clean `/`). Namespaced keys — q / collections
 // / types / category / formats / geometry / sort / layout / density / area — never touch App's c/i/l/s.
 export type Layout = "gallery" | "list";
 export type Density = "comfortable" | "compact";
@@ -297,7 +302,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
 const csv = (list: string[]): string | undefined => (list.length ? list.join(",") : undefined);
 
 /** A DiscoveryState → a search patch (each Discover key set or cleared). Defaults serialize to
- *  `undefined` so they drop out of the URL, keeping a pristine view a bare `/discover`. */
+ *  `undefined` so they drop out of the URL, keeping a pristine view a bare `/`. */
 export function discoveryPatch(s: DiscoveryState): Record<string, string | undefined> {
   return {
     // Keep the RAW query (internal + trailing spaces intact) whenever it has real content — the box is

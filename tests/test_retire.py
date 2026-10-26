@@ -94,7 +94,7 @@ def _published() -> list[str]:
         f"{config.ARCHIVE_PREFIX}/{stem}/{stem}.parquet",
         f"{config.ARCHIVE_PREFIX}/{stem}/{stem}_20260901.parquet",
         f"{config.PMTILES_PREFIX}/{stem}/{stem}.pmtiles",
-        f"{config.THUMBS_PREFIX}/{stem}/{stem}.png",
+        f"{config.THUMBS_PREFIX}/{stem}/{stem}.webp",
         f"{config.THUMBS_PREFIX}/{stem}/{stem}.sha",
         f"{config.STAC_PREFIX}/{CATALOG}/{TOPIC.schema}/{stem}/{stem}.json",
         f"{config.STAC_PREFIX}/{CATALOG}/{TOPIC.schema}/{stem}/{stem}.iso.xml",
@@ -178,3 +178,23 @@ def test_a_dry_run_needs_no_confirmation(fake_gcs, monkeypatch):
 
     assert retire.retire(TOPIC, dry_run=True) == 0
     assert deleted == []
+
+
+def test_retire_invalidates_the_topic_after_the_refresh(fake_gcs, monkeypatch):
+    _, refreshed = fake_gcs
+    calls: list = []
+    monkeypatch.setattr(retire.cdn, "mark", lambda ids: calls.append(("mark", ids, len(refreshed))))
+    monkeypatch.setattr(retire.cdn, "flush", lambda p: calls.append(("flush", len(refreshed))))
+    assert retire.retire(TOPIC, assume_yes=True) == 0
+    assert calls == [("mark", [TOPIC.stem], 0), ("flush", 1)]
+
+
+def test_a_failed_invalidation_fails_the_retire_after_the_refresh(fake_gcs, monkeypatch):
+    _, refreshed = fake_gcs
+
+    def fail(problems):
+        raise RuntimeError("403")
+    monkeypatch.setattr(retire.cdn, "mark", lambda ids: None)
+    monkeypatch.setattr(retire.cdn, "flush", fail)
+    assert retire.retire(TOPIC, assume_yes=True) == 1
+    assert refreshed == [True]

@@ -18,7 +18,7 @@ import shutil
 import sys
 import tempfile
 
-from ..core import config, gcs
+from ..core import config, gcs, jobs
 from . import contents, identity, sink_stac, source, webp
 from .harvest import _series_ctx, download, encode_url, hlog, outcome_category, run
 
@@ -54,15 +54,8 @@ def thumb_one(p: dict, force: bool = False, existing: set[str] | None = None) ->
     cover_obj = cover_object(sid)
     contents_obj = identity.pub_contents_object(sid)
     fulltext_obj = identity.pub_fulltext_object(sid)
-    is_snt = sink_stac.series_code(sid) == "SNT"
-    exists = existing.__contains__ if existing is not None else gcs.exists
-    need_cover = force or not exists(cover_obj)
-    # Survey Notes get an "In this issue" sidecar parsed from the PDF. A hand-authored sidecar (saved
-    # from the ops console as source=manual) is never clobbered — not even with --force; skip-existing
-    # protects an auto-parsed one too, so re-runs only fill gaps.
-    need_contents = is_snt and (force or not exists(contents_obj)) and not _manual_contents(contents_obj)
-    # Whole-document text for the all-pub full-text index — every pub, not just Survey Notes.
-    need_fulltext = force or not exists(fulltext_obj)
+    need_cover, need_contents, need_fulltext = _missing(
+        sid, cover_obj, contents_obj, fulltext_obj, force, existing)
     if not need_cover and not need_contents and not need_fulltext:
         hlog("cover + contents + text already present", step="resolve", level="NOTICE", category="expected")
         return "skip:exists"
@@ -74,60 +67,90 @@ def thumb_one(p: dict, force: bool = False, existing: set[str] | None = None) ->
             hlog("downloading PDF", step="download")
             download(encode_url(pdf), pdfp, max_bytes=MAX_PDF_MB * 1024 * 1024)
         except Exception as e:  # noqa: BLE001 — over the size cap (rejected pre-download) or unfetchable
-            reason = _reason(e)
-            # The cover can still come from the harvest's map thumbnail (scanned-map plates that bust
-            # the cap already have geolmap/cogs/{SID}.thumb.webp); the contents parse can't.
-            if need_cover and _cog_cover(sid, cover_obj):
-                hlog(f"cover from the map thumbnail (PDF unavailable: {reason})", step="result", category="ok")
-                return "ok"
-            hlog(f"FAIL {reason}", step="result", level="ERROR", category="attention", err=True)
-            return f"fail:{type(e).__name__}"
+            return _without_pdf(sid, cover_obj, need_cover, e)
 
         # PDF in hand — derive whatever's missing, independently.
         try:
             if need_cover and not _render_cover(sid, pdfp, work, cover_obj):
                 return "fail:norender"
             if need_contents:
-                try:
-                    toc = contents.extract(pdfp)
-                    if toc:
-                        gcs.put_bytes(
-                            json.dumps({"series_id": sid.upper(), "contents": toc}, indent=2).encode(),
-                            contents_obj, content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-                        hlog(f"OK contents → {len(toc)} entries", step="result", category="ok")
-                        # Full-text search corpus: per-article text sliced by the TOC page ranges. Ingest
-                        # aggregates these per-issue sidecars into the one corpus the viewer searches.
-                        arts = contents.article_texts(pdfp, toc)
-                        if arts:
-                            gcs.put_bytes(
-                                json.dumps({"series_id": sid.upper(), "volume": sink_stac.issue_volume(sid),
-                                            "title": (p.get("pub_name") or "").strip(),
-                                            "pdf": sink_stac.href(p.get("pub_url")), "articles": arts}).encode(),
-                                identity.pub_search_object(sid),
-                                content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-                            hlog(f"OK search text → {len(arts)} articles", step="result", category="ok")
-                    else:
-                        # Pre-dot-leader / atypical layout — graceful; hand-author a sidecar to fix it.
-                        hlog("no parseable contents (layout)", step="result", level="NOTICE", category="expected")
-                except Exception as e:  # noqa: BLE001
-                    hlog(f"contents extraction failed: {e}", step="contents", level="WARNING")
+                _write_contents(p, sid, pdfp, contents_obj)
             if need_fulltext:
-                try:
-                    text = contents.full_text(pdfp)
-                    # An empty sidecar records "no text layer", so later runs skip this PDF instead of
-                    # downloading it again. The search builds skip empty bodies; --force retries it.
-                    gcs.put_bytes(text.encode(), fulltext_obj,
-                                  content_type="text/plain; charset=utf-8", cache_control=gcs.CACHE_MUTABLE)
-                    hlog(f"OK full text → {len(text)} chars" if text else "no text layer; recorded empty",
-                         step="result", category="ok" if text else "expected")
-                except Exception as e:  # noqa: BLE001
-                    hlog(f"full-text extraction failed: {e}", step="fulltext", level="WARNING")
+                _write_fulltext(pdfp, fulltext_obj)
         except Exception as e:  # noqa: BLE001
             hlog(f"processing failed: {e}", step="process", level="ERROR", category="attention", err=True)
             return f"fail:{type(e).__name__}"
         return "ok"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _missing(sid: str, cover_obj: str, contents_obj: str, fulltext_obj: str, force: bool,
+             existing: set[str] | None) -> tuple[bool, bool, bool]:
+    """Which of (cover, contents, full text) this run still has to write."""
+    is_snt = sink_stac.series_code(sid) == "SNT"
+    exists = existing.__contains__ if existing is not None else gcs.exists
+    need_cover = force or not exists(cover_obj)
+    # Survey Notes get an "In this issue" sidecar parsed from the PDF. A hand-authored sidecar (saved
+    # from the ops console as source=manual) is never clobbered — not even with --force; skip-existing
+    # protects an auto-parsed one too, so re-runs only fill gaps.
+    need_contents = is_snt and (force or not exists(contents_obj)) and not _manual_contents(contents_obj)
+    # Whole-document text for the all-pub full-text index — every pub, not just Survey Notes.
+    need_fulltext = force or not exists(fulltext_obj)
+    return need_cover, need_contents, need_fulltext
+
+
+def _without_pdf(sid: str, cover_obj: str, need_cover: bool, e: Exception) -> str:
+    """Result when the PDF can't be fetched: the map thumbnail as cover, else a failure."""
+    reason = _reason(e)
+    # The cover can still come from the harvest's map thumbnail (scanned-map plates that bust
+    # the cap already have geolmap/cogs/{SID}.thumb.webp); the contents parse can't.
+    if need_cover and _cog_cover(sid, cover_obj):
+        hlog(f"cover from the map thumbnail (PDF unavailable: {reason})", step="result", category="ok")
+        return "ok"
+    hlog(f"FAIL {reason}", step="result", level="ERROR", category="attention", err=True)
+    return f"fail:{type(e).__name__}"
+
+
+def _write_contents(p: dict, sid: str, pdfp: str, contents_obj: str) -> None:
+    """Parse the Survey Notes contents + per-article text into their sidecars (best-effort)."""
+    try:
+        toc = contents.extract(pdfp)
+        if toc:
+            gcs.put_bytes(
+                json.dumps({"series_id": sid.upper(), "contents": toc}, indent=2).encode(),
+                contents_obj, content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+            hlog(f"OK contents → {len(toc)} entries", step="result", category="ok")
+            # Full-text search corpus: per-article text sliced by the TOC page ranges. Ingest
+            # aggregates these per-issue sidecars into the one corpus the viewer searches.
+            arts = contents.article_texts(pdfp, toc)
+            if arts:
+                gcs.put_bytes(
+                    json.dumps({"series_id": sid.upper(), "volume": sink_stac.issue_volume(sid),
+                                "title": (p.get("pub_name") or "").strip(),
+                                "pdf": sink_stac.href(p.get("pub_url")), "articles": arts}).encode(),
+                    identity.pub_search_object(sid),
+                    content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+                hlog(f"OK search text → {len(arts)} articles", step="result", category="ok")
+        else:
+            # Pre-dot-leader / atypical layout — graceful; hand-author a sidecar to fix it.
+            hlog("no parseable contents (layout)", step="result", level="NOTICE", category="expected")
+    except Exception as e:  # noqa: BLE001
+        hlog(f"contents extraction failed: {e}", step="contents", level="WARNING")
+
+
+def _write_fulltext(pdfp: str, fulltext_obj: str) -> None:
+    """Write the whole-document text sidecar (best-effort)."""
+    try:
+        text = contents.full_text(pdfp)
+        # An empty sidecar records "no text layer", so later runs skip this PDF instead of
+        # downloading it again. The search builds skip empty bodies; --force retries it.
+        gcs.put_bytes(text.encode(), fulltext_obj,
+                      content_type="text/plain; charset=utf-8", cache_control=gcs.CACHE_MUTABLE)
+        hlog(f"OK full text → {len(text)} chars" if text else "no text layer; recorded empty",
+             step="result", category="ok" if text else "expected")
+    except Exception as e:  # noqa: BLE001
+        hlog(f"full-text extraction failed: {e}", step="fulltext", level="WARNING")
 
 
 def _manual_contents(obj: str) -> bool:
@@ -199,10 +222,8 @@ def main() -> int:
         work = [p for p in pubs if (p.get("series_id") or "").strip().upper() in want]
     hlog(f"{len(work)} publications", step="startup")
 
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    work, i, n = jobs.task_shard(work)
     if n > 1:
-        work = work[i::n]
         hlog(f"shard {i + 1}/{n}: {len(work)} publications", step="shard")
     if args.limit:
         work = work[:args.limit]

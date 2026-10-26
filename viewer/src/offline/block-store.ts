@@ -3,7 +3,7 @@
 // a block per file, and meta.json last, so a half-finished save is ignored. Free of geotiff, so listing what is saved stays light.
 import type { Bbox } from "./guards";
 import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
-import { finished, folderSize, isDirectory, namesIn, prune, readJson, versionKey } from "./guards";
+import { finished, folderSize, isDirectory, namesIn, prune, readJson, sweepDir, topDir, versionKey, writeFile } from "./guards";
 import { FileChangedError, fileNameFor, live, versionOf } from "./opfs-name";
 
 const DIR = "cogs";
@@ -30,7 +30,8 @@ async function cogDir(url: string, create: boolean) {
  * single response stays small), each block written as its own file; blocks already stored from an
  * earlier, overlapping save are skipped. meta.json goes last, so a half-finished save is ignored.
  */
-export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void): Promise<void> {
+export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal): Promise<void> {
   return (async () => {
     const parent = await cogDir(plan.url, true);
     if (!parent) throw new Error("This browser cannot store data offline.");
@@ -49,7 +50,7 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     for (const [first, last] of runs) {
       const start = first * plan.block;
       const end = Math.min(plan.size, (last + 1) * plan.block) - 1;
-      const r = await fetch(live(plan.url), { headers: { range: `bytes=${start}-${end}` } });
+      const r = await fetch(live(plan.url), { signal, headers: { range: `bytes=${start}-${end}` } });
       // Blocks are cut from the response by offset; a 200 (the whole file) would put them wrong.
       if (r.status !== 206) throw new Error(`Download failed: the server did not answer a range request (${r.status}).`);
       // The plan's offsets belong to one version of the file; bytes of another are garbage there.
@@ -59,9 +60,8 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
       }
       const buf = new Uint8Array(await r.arrayBuffer());
       for (let b = first; b <= last; b++) {
-        const out = await (await dir.getFileHandle(String(b), { create: true })).createWritable();
-        await out.write(buf.subarray((b - first) * plan.block, (b - first + 1) * plan.block));
-        await out.close();
+        signal?.throwIfAborted();
+        await writeFile(dir, String(b), buf.subarray((b - first) * plan.block, (b - first + 1) * plan.block));
         onProgress?.(++done, plan.blocks.length);
       }
     }
@@ -71,11 +71,9 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     // Counted once here, from the folder itself, so the store can list saved areas from meta.json
     // alone. Counting as blocks arrive would miss those an interrupted earlier attempt wrote.
     const { bytes } = await folderSize(dir);
-    const meta = await (await dir.getFileHandle("meta.json", { create: true })).createWritable();
-    await meta.write(JSON.stringify({
+    await writeFile(dir, "meta.json", JSON.stringify({
       size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(), bytes,
     } satisfies BlockMeta));
-    await meta.close();
     // The previous version served until now; this one replaces it.
     await prune(parent, key);
   })();
@@ -83,13 +81,6 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
 
 async function readMeta(dir: FileSystemDirectoryHandle): Promise<BlockMeta | null> {
   return parseBlockMeta(await readJson(dir, "meta.json"));
-}
-
-/** The areas saved of a file stored by blocks, or null when none is. */
-export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
-  const parent = await cogDir(url, false);
-  const done = parent && await finished(parent);
-  return parseBlockMeta(done?.meta)?.bboxes ?? null;
 }
 
 /** Forget a saved COG area. */
@@ -104,8 +95,7 @@ export type StoredBlocks = { url: string; bytes: number; version?: string; bboxe
 
 export async function listCogAreas(): Promise<StoredBlocks[]> {
   const out: StoredBlocks[] = [];
-  const root = await navigator.storage?.getDirectory?.().catch(() => null);
-  const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
+  const dir = await topDir(DIR);
   if (!dir) return out;
   for await (const [name, handle] of dir) {
     if (!isDirectory(handle)) continue;
@@ -120,11 +110,4 @@ export async function listCogAreas(): Promise<StoredBlocks[]> {
 }
 
 /** Remove the unfinished versions of every file no queued save is working on (`busy`). */
-export async function sweepCogAreas(busy: Set<string>): Promise<void> {
-  const root = await navigator.storage?.getDirectory?.().catch(() => null);
-  const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
-  if (!dir) return;
-  for await (const [name, handle] of dir) {
-    if (isDirectory(handle) && !busy.has(decodeURIComponent(name))) await prune(handle, null);
-  }
-}
+export const sweepCogAreas = (busy: Set<string>): Promise<void> => sweepDir(DIR, busy);

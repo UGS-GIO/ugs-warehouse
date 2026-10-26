@@ -298,13 +298,14 @@ POLY_NAME, LINE_NAME, MESH_NAME, CLASSES_NAME = "3d_polygons.parquet", "3d_lines
 
 def _localize(uri: str, dest: str) -> str:
     """Bring a gs:// or https:// file local; pass a local path through."""
-    import subprocess
-    import urllib.request
     if uri.startswith("gs://"):
-        subprocess.run(["gcloud", "storage", "cp", uri, dest], check=True)
+        from ..core import gcs
+        bucket, _, path = uri.removeprefix("gs://").partition("/")
+        gcs.download(path, dest, bucket=bucket)
         return dest
-    if uri.startswith("http://") or uri.startswith("https://"):
-        urllib.request.urlretrieve(uri, dest)  # noqa: S310 — fetching our own pub assets
+    if uri.startswith(("http://", "https://")):
+        from .harvest import download
+        download(uri, dest)
         return dest
     return uri
 
@@ -380,14 +381,8 @@ def _threed_sources() -> list[tuple[str, str, str]]:
 def run_all(force: bool = False, limit: int | None = None) -> int:
     """Convert every 3D-eligible pub whose artifacts aren't already present (skip-existing). Sharded via
     CLOUD_RUN_TASK_INDEX/COUNT — the pubs "harvest" of 3D, run before pubs-ingest binds the assets."""
-    import os
-
-    from ..core import gcs
-    srcs = _threed_sources()
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
-    if n > 1:
-        srcs = srcs[i::n]
+    from ..core import gcs, jobs
+    srcs, i, n = jobs.task_shard(_threed_sources())
     if limit:
         srcs = srcs[:limit]
     print(f"[3d] {len(srcs)} 3D-eligible pubs (shard {i + 1}/{n})")

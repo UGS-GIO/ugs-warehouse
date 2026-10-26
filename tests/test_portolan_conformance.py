@@ -22,6 +22,14 @@ from ugs_warehouse.vector import sink_stac as vec_sink
 
 rashid = pytest.importorskip("rashid", reason="rashid is an optional dev dependency")
 
+# Rules the publication tree must satisfy on top of GUARDED: single-file collections hold their data
+# at collection level, the landing page is not a `via` source link, and every collection has a thumbnail.
+PUBLICATION_GUARDED = {"PTL-COL-001", "PTL-PRO-004", "PTL-VIZ-001"}
+# A TIFF-only pub has no PDF to make a cover from and no COG, so no preview image exists for it. That is a
+# data gap, not a catalog bug, and rashid raises PTL-VIZ-001 on it; every other publication must pass.
+NO_PREVIEW_EXCEPTIONS = {"ugs-mining-district-files/MD/MD-1002/collection.json"}
+PUBLICATION_ROOTS = ("ugs-publications/", "ugs-mining-district-files/", "ugs-external/")
+
 # Rules this repo has fixed and must not break again. Each maps to work already merged.
 GUARDED = {
     "PTL-GEN-000",  # a readable root catalog.json
@@ -48,16 +56,39 @@ GUARDED = {
     "PTL-PRV-002",  # exactly one host, listed last
 }
 
+# Each serving-topic layer is published twice while the viewers move: as an item in its schema
+# collection and as its own collection in the same folder. rashid reads the folder as owned by the
+# layer collection, so the item's parent and the schema collection's item link look wrong to it.
+# Expected until the old items are retired (#257 step 4); then delete this and the check below.
+TRANSITIONAL = {"PTL-LNK-002", "PTL-LNK-006"}
+
+
+def _transitional(finding) -> bool:
+    return finding.rule_id in TRANSITIONAL and "ugs-serving-topics/" in str(finding.path)
+
+
+def _write_pub(p: dict, attachments: list[dict], **kw) -> None:
+    """Write a publication's collection and items through the real builders."""
+    coll, items = pubs_sink.build_publication(p, attachments, **{"registered_dois": frozenset(), **kw})
+    for it in items:
+        stac.write_item(it)
+    stac.write_collection(coll, children=len(items))
+
 
 def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     """Write a representative catalog through the real builders and return its root."""
     store: dict[str, bytes] = {}
     monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: store.__setitem__(p, b))
-    monkeypatch.setattr(stac.gcs, "get_bytes", lambda p: store[p])
+    def get(p):
+        if p not in store:
+            raise FileNotFoundError(p)
+        return store[p]
+
+    monkeypatch.setattr(stac.gcs, "get_bytes", get)
     monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
     monkeypatch.setattr(stac.gcs, "exists", lambda p: p in store)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # federated roots are not ours to validate
-    monkeypatch.setattr(stac, "attach_iso", lambda item: "")   # the sidecar is XML, not a STAC object
+    monkeypatch.setattr(stac, "prior_collection_field", lambda *a, **k: None)
     monkeypatch.setattr(stac, "attach_renders", lambda item: None)
     monkeypatch.setattr(stac.styles, "warm", lambda: None)
 
@@ -79,46 +110,79 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         extra_links=[stac.pmtiles_link(topic_assets["pmtiles"]["href"], ["hazards_qfaults"])]))
 
     # A publication, through the pubs builder so its properties and links are the real ones.
-    stac.write_item(pubs_sink.build_item(
+    _write_pub(
         {"series_id": "OFR-593", "series": "OFR", "pub_year": "2011", "pub_publisher": "UGS",
          "pub_name": "Interim geologic map of the Rush Valley quadrangle",
          "full_citation": "Clark, D.L., 2011, Interim geologic map of the Rush Valley quadrangle.",
          "keywords": "Geology--Utah--Tooele County--Maps", "pub_url": "ofr/ofr-593.pdf"},
-        [], override={}))
+        [], override={})
 
     # A publication whose source gives nothing beyond a name — the shape that used to publish
     # empty strings and a null-ish datetime.
-    stac.write_item(pubs_sink.build_item(
+    _write_pub(
         {"series_id": "MD-50", "series": "MD", "pub_year": "1954", "pub_publisher": "",
-         "pub_name": "Mining district file 50"}, [], override={}))
+         "pub_name": "Mining district file 50"}, [], override={})
 
     # An undated mining district file: no pub_year, so a null datetime with the source's interval.
-    stac.write_item(pubs_sink.build_item(
+    _write_pub(
         {"series_id": "MD-134-6", "series": "MD", "pub_year": "", "pub_publisher": "",
-         "pub_name": "List of Beaver County Properties"}, [], override={}))
+         "pub_name": "List of Beaver County Properties"}, [], override={})
 
     # A mining district file whose only file is the publisher's plain TIFF scan.
-    stac.write_item(pubs_sink.build_item(
+    _write_pub(
         {"series_id": "MD-1002", "series": "MD", "pub_year": "1956", "pub_publisher": "",
-         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], override={}))
+         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], override={})
 
     # An edition pair: a current map and its deprecated predecessor, both with a COG (exercises the
     # version/deprecated properties, predecessor/successor/latest links, and the currency-gated
     # related link — ALL-5954).
-    _current_href = config.public_url(stac.item_object_path(
-        pubs_sink.collection_group({"series_id": "M-296DM"}) + "/M", "M-296DM"))
-    stac.write_item(pubs_sink.build_item(
+    _current_href = config.public_url(stac.collection_object_path(
+        pubs_sink.pub_collection_path({"series_id": "M-296DM"})))
+    _write_pub(
         {"series_id": "M-296DM", "series": "M", "pub_year": "2022", "pub_publisher": "UGS",
          "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
-        [], has_cog=True,
+        [], has_cog=True, has_thumb=True,
         edition={"version": "2022", "deprecated": False, "predecessor_href": None,
-                 "successor_href": None, "latest_href": None}, override={}))
-    stac.write_item(pubs_sink.build_item(
+                 "successor_href": None, "latest_href": None}, override={})
+    _write_pub(
         {"series_id": "GQ-852", "series": "GQ", "pub_year": "1971", "pub_publisher": "USGS",
          "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
-        [], has_cog=True,
+        [], has_cog=True, has_thumb=True,
         edition={"version": "1971", "deprecated": True, "predecessor_href": None,
-                 "successor_href": _current_href, "latest_href": _current_href}, override={}))
+                 "successor_href": _current_href, "latest_href": _current_href}, override={})
+
+    # A report with no data: a Collection holding only its documents, with no Items.
+    _write_pub(
+        {"series_id": "C-139", "series": "C", "pub_year": "1990", "pub_publisher": "UGS",
+         "pub_name": "A circular with no extracted data"}, [], has_cover=True, override={})
+
+    # A publication with an extracted vector layer and a companion table: both become Items, joined
+    # by an inferred relationship (a related-table asset on the layer, a related link back).
+    _write_pub(
+        {"series_id": "OFR-784DM", "series": "OFR", "pub_year": "2026", "pub_publisher": "UGS",
+         "pub_name": "Interim geologic map of Mills Junction", "pub_scale": "1:24,000"},
+        [], has_cover=True, vector_layers=["geo__Faults"],
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}],
+        layers={"geo__Faults": {"rows": 12, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                                "geometry_types": ["LineString"], "proj_code": "EPSG:26912",
+                                "pmtiles_layer": "geo__Faults"},
+                "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}},
+        relationships=[{"origin": "geo__Faults", "origin_cols": ["MapUnit"],
+                        "destination": "geo__DMU", "destination_cols": ["MapUnit"],
+                        "cardinality": "many_to_one", "detected_by": "inferred",
+                        "confidence": 100, "overlap": 100.0}],
+        override={})
+
+    # A publication whose only data is one tiled layer: the layer, its tiles and their web-map
+    # link sit on the Collection.
+    _write_pub(
+        {"series_id": "OFR-790", "series": "OFR", "pub_year": "2026", "pub_publisher": "UGS",
+         "pub_name": "Faults of a single-layer map", "pub_scale": "1:24,000"},
+        [], has_cover=True, vector_layers=["faults"],
+        layers={"faults": {"rows": 3, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                           "geometry_types": ["LineString"], "proj_code": "EPSG:26912",
+                           "pmtiles_layer": "faults"}},
+        override={})
 
     stac.refresh_catalog()
 
@@ -137,17 +201,30 @@ def test_the_builders_produce_a_catalog_that_passes_the_rules_we_have_fixed(monk
     root = _catalog_on_disk(monkeypatch, tmp_path)
 
     report = rashid.validate(root, data=False, schema=True)
-    broken = [f for f in report.findings if f.rule_id in GUARDED]
+    broken = [f for f in report.findings if f.rule_id in GUARDED and not _transitional(f)]
 
     assert not broken, "\n".join(
         f"{f.rule_id} {f.severity.value if hasattr(f.severity, 'value') else f.severity} "
         f"{f.path}: {f.message}" for f in broken)
 
 
+def test_publication_collections_conform_to_the_single_file_provenance_and_thumbnail_rules(monkeypatch, tmp_path):
+    # Errors only: a pub with no cover and no COG thumbnail is a data gap rashid reports as a warning.
+    root = _catalog_on_disk(monkeypatch, tmp_path)
+
+    report = rashid.validate(root, data=False, schema=True)
+    broken = [f for f in report.findings
+              if f.rule_id in PUBLICATION_GUARDED and f.severity.name == "ERROR"
+              and str(f.path).startswith(PUBLICATION_ROOTS) and not (f.rule_id == "PTL-VIZ-001" and str(f.path) in NO_PREVIEW_EXCEPTIONS)]
+
+    assert not broken, "\n".join(f"{f.rule_id} {f.path}: {f.message}" for f in broken)
+
+
 def test_the_fence_names_rules_rashid_still_has(monkeypatch, tmp_path):
     """A rule renamed or dropped upstream would silently stop being enforced."""
     known = set(rashid.CHECKS)
-    assert GUARDED <= known, f"no longer in rashid: {sorted(GUARDED - known)}"
+    wanted = GUARDED | PUBLICATION_GUARDED
+    assert wanted <= known, f"no longer in rashid: {sorted(wanted - known)}"
 
 
 def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_path):
@@ -157,9 +234,51 @@ def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_p
     assert (root / "catalog.json").exists()
     # Nested catalogs above leaf collections, which is the layout both producers write.
     assert (root / "ugs-serving-topics" / "hazards" / "collection.json").exists()
-    assert (root / "ugs-publications" / "OFR" / "OFR-593" / "OFR-593.json").exists()
+    assert (root / "ugs-publications" / "OFR" / "OFR-593" / "collection.json").exists()
+    assert (root / "ugs-publications" / "OFR" / "catalog.json").exists()
+    # A data-less report is a Collection with no item directories.
+    report_dir = root / "ugs-publications" / "C" / "C-139"
+    assert (report_dir / "collection.json").exists()
+    assert [p.name for p in report_dir.iterdir() if p.is_dir()] == []
+    # A publication with a layer and a companion table carries them as Items.
+    mills = root / "ugs-publications" / "OFR" / "OFR-784DM"
+    item_dirs = sorted(p.name for p in mills.iterdir() if p.is_dir())
+    assert any(n.endswith("geo__Faults") for n in item_dirs), item_dirs
+    assert any(n.endswith("geo__DMU") for n in item_dirs), item_dirs
+    faults_dir = next(mills / n for n in item_dirs if n.endswith("geo__Faults"))
+    faults = json.loads((faults_dir / f"{faults_dir.name}.json").read_text())
+    assert faults["assets"]["pmtiles"]["proj:code"] == "EPSG:4326"
+    assert any(lk["rel"] == "pmtiles" for lk in faults["links"])
+    assert faults["assets"]["geo__DMU"]["roles"] == ["data", "related"]
+    dmu_dir = next(mills / n for n in item_dirs if n.endswith("geo__DMU"))
+    dmu = json.loads((dmu_dir / f"{dmu_dir.name}.json").read_text())
+    assert [lk["rel"] for lk in dmu["links"]].count("related") == 1
+    mills_coll = json.loads((mills / "collection.json").read_text())
+    assert {lk.get("ugs:layer_kind") for lk in mills_coll["links"] if lk["rel"] == "item"} \
+        == {"layer", "table"}
+    single_dir = root / "ugs-publications" / "OFR" / "OFR-790"
+    single = json.loads((single_dir / "collection.json").read_text())
+    assert [p for p in single_dir.iterdir() if p.is_dir()] == []
+    assert "pmtiles" in single["assets"] and any(lk["rel"] == "pmtiles" for lk in single["links"])
     items = json.loads((root / "ugs-serving-topics" / "hazards" / "collection.json").read_text())
     assert [lk for lk in items["links"] if lk["rel"] == "item"]
+
+
+def test_each_serving_topic_layer_is_also_its_own_collection(monkeypatch, tmp_path):
+    root = _catalog_on_disk(monkeypatch, tmp_path)
+    schema = json.loads((root / "ugs-serving-topics" / "hazards" / "collection.json").read_text())
+    layer = json.loads((root / "ugs-serving-topics" / "hazards" / "hazards_qfaults" / "collection.json").read_text())
+    rollup = json.loads((root / "ugs-serving-topics" / "items.json").read_text())
+
+    assert any(lk["rel"] == "child" and lk["href"] == "./hazards_qfaults/collection.json"
+               for lk in schema["links"])
+    assert layer["id"] == "hazards_qfaults" and layer["type"] == "Collection"
+    assert {"data", "pmtiles"} <= set(layer["assets"])
+    assert not [lk for lk in layer["links"] if lk["rel"] == "item"]
+    assert (root / "ugs-serving-topics" / "hazards" / "hazards_qfaults" / "AGENTS.md").exists()
+    entry = next(e for e in rollup["items"] if e["id"] == "hazards_qfaults")
+    link = next(lk for lk in entry["links"] if lk["rel"] == stac.LAYER_COLLECTION_REL)
+    assert link["href"] == "./hazards/hazards_qfaults/collection.json"
 
 
 def _bad_catalog(tmp_path: Path) -> Path:

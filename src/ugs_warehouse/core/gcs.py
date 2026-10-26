@@ -6,19 +6,25 @@ immutable/dated artifacts (a dated archive, a content-addressed COG) cache long.
 
 Every write returns a `FileMeta` — the size and sha256 the caller needs for the STAC `file`
 extension (`file:size` / `file:checksum`). Computed from the bytes as they are written, so no
-object is read back to describe it.
+object is read back to describe it. The write also stores both as object metadata, so a builder
+that only links to the object (a pub cover, a COG) reads them from a listing (`list_file_meta`).
 """
 from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
 import obstore as obs
 from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
+from obstore.exceptions import AlreadyExistsError, NotFoundError, PreconditionError
 from obstore.store import GCSStore
 
 from . import config
@@ -37,6 +43,10 @@ CACHE_CATALOG = "public, max-age=60, stale-while-revalidate=600"
 # STAC's file extension requires multihash encoding, not a bare hex digest.
 _MULTIHASH_SHA2_256 = "1220"
 _HASH_CHUNK = 1 << 20  # stream the file past the hasher — a COG never lands in memory
+# Object metadata keys (x-goog-meta-*). The size is stored too: a gzipped object's stored size is
+# not the size a consumer receives.
+META_SIZE = "file-size"
+META_CHECKSUM = "file-checksum"
 
 
 class FileMeta(NamedTuple):
@@ -73,10 +83,10 @@ def _store(bucket: str | None = None) -> GCSStore:
 
 
 def _gcs_client() -> gcloud_storage.Client:
-    # A secondary google-cloud-storage client (ADC auth, no new footprint — already installed
-    # transitively via firebase-admin). Two uses: copy_from_uri's server-side cross-bucket rewrite
-    # (obstore has no cross-bucket copy primitive), and the get_bytes/exists fallback for gzipped
-    # objects obstore can't read (GCS strips Content-Length under decompressive transcoding).
+    # A secondary google-cloud-storage client (ADC auth). Two uses: copy_from_uri's server-side
+    # cross-bucket rewrite (obstore has no cross-bucket copy primitive), and the get_bytes/exists
+    # fallback for gzipped objects obstore can't read (GCS strips Content-Length under decompressive
+    # transcoding).
     global _cached_gcs_client
     if _cached_gcs_client is None:
         _cached_gcs_client = gcloud_storage.Client()
@@ -84,21 +94,26 @@ def _gcs_client() -> gcloud_storage.Client:
 
 
 def _attrs(content_type: str, cache_control: str | None,
-           content_encoding: str | None = None) -> dict[str, str]:
+           content_encoding: str | None = None, meta: FileMeta | None = None) -> dict[str, str]:
     attrs = {"Content-Type": content_type}
     if cache_control:
         attrs["Cache-Control"] = cache_control
     if content_encoding:
         attrs["Content-Encoding"] = content_encoding
+    if meta is not None:  # any other key becomes user metadata (x-goog-meta-*)
+        attrs[META_SIZE] = str(meta.size)
+        if meta.checksum:
+            attrs[META_CHECKSUM] = meta.checksum
     return attrs
 
 
 def upload(local_path: str, object_path: str, *, content_type: str,
            cache_control: str | None = None) -> FileMeta:
     """Upload a local file to `gs://{BUCKET}/{object_path}`."""
+    meta = _file_meta(local_path)
     obs.put(_store(), object_path, Path(local_path),
-            attributes=_attrs(content_type, cache_control))
-    return _file_meta(local_path)
+            attributes=_attrs(content_type, cache_control, meta=meta))
+    return meta
 
 
 def put_bytes(data: bytes, object_path: str, *, content_type: str,
@@ -116,8 +131,40 @@ def put_bytes(data: bytes, object_path: str, *, content_type: str,
     meta = FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
     body = gzip.compress(data, 6) if compress else data
     obs.put(_store(), object_path, body,
-            attributes=_attrs(content_type, cache_control, "gzip" if compress else None))
+            attributes=_attrs(content_type, cache_control, "gzip" if compress else None, meta))
     return meta
+
+
+class Changed(Exception):
+    """A conditional write found the object changed or deleted since it was read; nothing was written."""
+
+
+def get_bytes_versioned(object_path: str) -> tuple[bytes, dict[str, str]]:
+    """An object's bytes plus the version token `put_bytes_if_unchanged` checks against (on GCS the
+    object generation, plus its ETag). A 404 raises FileNotFoundError. For small JSON stored plain,
+    e.g. STAC items (stac.write_item never gzips one). Unlike get_bytes there is no gzip fallback, so
+    a gzipped object fails loudly (here, or at the caller's parse if obstore ever hands back the
+    compressed bytes) instead of being misread."""
+    r = obs.get(_store(), object_path)
+    # obstore rejects a None field in the token, so only the fields this store returned go in.
+    version = {k: v for k in ("e_tag", "version") if (v := r.meta.get(k)) is not None}
+    return bytes(r.bytes()), version
+
+
+def put_bytes_if_unchanged(data: bytes, object_path: str, version: dict[str, str], *,
+                           content_type: str, cache_control: str | None = None) -> FileMeta:
+    """`put_bytes`, but only if the object is still the version `get_bytes_versioned` returned. On GCS
+    this is an if-generation-match write, so a write or delete in between makes it raise `Changed`
+    rather than overwrite a newer object or re-create a deleted one."""
+    if not version:
+        raise ValueError(f"{object_path}: no version token to write against")
+    try:
+        obs.put(_store(), object_path, data, attributes=_attrs(content_type, cache_control), mode=version)
+    # GCS answers a deleted object with 412 too (checked against the real bucket); a 404 is treated the
+    # same so the caller's re-read, not this call, decides whether the object is gone.
+    except (PreconditionError, FileNotFoundError) as e:
+        raise Changed(object_path) from e
+    return FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
 
 
 def _gunzip(raw: bytes) -> bytes:
@@ -234,6 +281,53 @@ def exists(object_path: str) -> bool:
         return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 
 
+def download(object_path: str, dest: str, *, bucket: str | None = None) -> None:
+    """Stream an object to a local file without holding it in memory."""
+    res = obs.get(_store(bucket), object_path)  # a missing object raises before dest is touched
+    with open(dest, "wb") as f:
+        for chunk in res.stream(min_chunk_size=_HASH_CHUNK):
+            f.write(chunk)
+
+
+class _ObjectReader(io.RawIOBase):
+    """A seekable file object over an obstore reader, which pyarrow needs (`closed`, `readable`)."""
+
+    def __init__(self, reader) -> None:
+        super().__init__()
+        self._reader = reader
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def readinto(self, buf) -> int:
+        data = self._reader.read(len(buf))
+        buf[: len(data)] = data
+        return len(data)
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        return self._reader.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._reader.tell()
+
+    def close(self) -> None:
+        # Not every obstore reader can be closed; those are released with the last reference.
+        closer = getattr(self._reader, "close", None)
+        if closer is not None:
+            closer()
+        super().close()
+
+
+def open_reader(object_path: str) -> io.RawIOBase:
+    """A seekable file object over an object, read with range requests. `pq.ParquetFile` over it
+    fetches the footer and only the column chunks asked for, so a few columns of a large file are
+    read without downloading it."""
+    return _ObjectReader(obs.open_reader(_store(), object_path))
+
+
 def get_tail(object_path: str, length: int) -> bytes:
     """The last `length` bytes of an object, such as a Parquet footer, without the rest of it."""
     size = obs.head(_store(), object_path)["size"]
@@ -261,13 +355,141 @@ def delete(object_path: str) -> None:
         pass
 
 
-def list_etags(prefix: str) -> dict[str, str]:
-    """{path: etag} for every object under `prefix`. An etag changes whenever the object is
-    rewritten, so this fingerprints a prefix without reading any object."""
+# Paths per batched delete call. GCS has no bulk delete; obstore runs these as concurrent requests.
+DELETE_BATCH = 1000
+
+
+def delete_many(paths: list[str], *, strict: bool = True) -> None:
+    """Delete objects, one batched `obs.delete` per DELETE_BATCH paths. A missing object is not an
+    error. With `strict`, any other failure raises once every path has been tried; without it,
+    failures are ignored like `delete`'s."""
+    failed: list[str] = []
+    for start in range(0, len(paths), DELETE_BATCH):
+        batch = list(paths[start:start + DELETE_BATCH])
+        try:
+            obs.delete(_store(), batch)
+            continue
+        except Exception:  # noqa: BLE001 - one error per batch: retried path by path to classify
+            pass
+        # A path the batch already deleted reads as not found here.
+        for path in batch:
+            try:
+                obs.delete(_store(), path)
+            except (FileNotFoundError, NotFoundError):
+                pass
+            except Exception as e:  # noqa: BLE001 - collected and raised below when strict
+                failed.append(f"{path}: {type(e).__name__}: {e}")
+    if failed and strict:
+        raise RuntimeError(f"{len(failed)} object(s) not deleted: {failed}")
+
+
+class LeaseTimeout(RuntimeError):
+    """Another holder kept the lease past the wait."""
+
+
+def _version(meta) -> dict:
+    """The parts of an object's put/get metadata a versioned put matches on."""
+    return {k: meta[k] for k in ("e_tag", "version") if meta.get(k)}
+
+
+@contextmanager
+def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) -> Iterator[None]:
+    """Hold an exclusive lease: an object created only if absent, holding its expiry time.
+
+    Waits up to `wait_s` for a live holder. A lease past its expiry belongs to a job that died, so
+    it is taken over with a versioned put (only one taker wins). Release also uses a versioned put,
+    marking the lease expired, so it never clobbers a lease another run has taken over."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        body = str(time.time() + ttl_s).encode()
+        try:
+            ours = _version(obs.put(_store(), object_path, body, mode="create"))
+            break
+        except AlreadyExistsError:
+            pass
+        try:
+            held = obs.get(_store(), object_path)
+            raw = bytes(held.bytes())
+        except FileNotFoundError:
+            continue  # released between our put and get
+        try:
+            expires = float(raw)
+        except ValueError:
+            raise ValueError(f"lease {object_path} holds {raw[:40]!r}, not an expiry time; "
+                             "delete it to unblock") from None
+        if time.time() > expires:
+            try:
+                ours = _version(obs.put(_store(), object_path, body, mode=_version(held.meta)))
+                break
+            except PreconditionError:
+                continue  # another waiter took it first
+        if time.monotonic() >= deadline:
+            raise LeaseTimeout(f"lease {object_path} still held after {wait_s:.0f}s")
+        time.sleep(poll_s)
+    try:
+        yield
+    finally:
+        try:
+            obs.put(_store(), object_path, b"0", mode=ours)
+        except PreconditionError:
+            pass  # taken over since
+        except Exception as e:  # noqa: BLE001 — keep the caller's exception; the lease expires anyway
+            print(f"[gcs] lease release failed for {object_path}: {e}", file=sys.stderr)
+
+
+def list_etags(prefix: str, *, bucket: str | None = None) -> dict[str, str]:
+    """{path: etag} for every object under `prefix` in `bucket` (default BUCKET). An etag changes
+    whenever the object is rewritten, so this fingerprints a prefix without reading any object."""
     out: dict[str, str] = {}
-    for batch in obs.list(_store(), prefix=prefix):
+    for batch in obs.list(_store(bucket), prefix=prefix):
         out.update((m["path"], m.get("e_tag") or "") for m in batch)
     return out
+
+
+def _meta_of(blob) -> FileMeta | None:
+    """FileMeta from a listed blob: stored metadata first, else the stored size (not for a gzipped
+    object, whose stored size is not what a consumer receives)."""
+    md = blob.metadata or {}
+    if md.get(META_SIZE, "").isdigit():
+        return FileMeta(int(md[META_SIZE]), md.get(META_CHECKSUM) or None)
+    if blob.content_encoding == "gzip" or not blob.size:
+        return None
+    return FileMeta(blob.size)
+
+
+def list_file_meta(prefix: str) -> dict[str, FileMeta]:
+    """{path: FileMeta} for every object under `prefix`, from one listing (no object is read).
+
+    google-cloud-storage, not obstore: only the JSON API listing returns custom metadata.
+    """
+    blobs = _gcs_client().list_blobs(
+        config.BUCKET, prefix=prefix,
+        fields="items(name,size,contentEncoding,metadata),nextPageToken")
+    return {b.name: m for b in blobs if (m := _meta_of(b)) is not None}
+
+
+def get_file_meta(object_path: str) -> FileMeta | None:
+    """FileMeta for one object, or None when it does not exist (a metadata GET, not a listing)."""
+    blob = _gcs_client().bucket(config.BUCKET).get_blob(object_path)
+    return _meta_of(blob) if blob is not None else None
+
+
+def hash_object(object_path: str) -> FileMeta:
+    """Size + sha256 of an existing object, streamed (for objects written before the metadata)."""
+    h = hashlib.sha256()
+    size = 0
+    for chunk in obs.get(_store(), object_path).stream(min_chunk_size=_HASH_CHUNK):
+        h.update(chunk)
+        size += len(chunk)
+    return FileMeta(size, multihash_sha256(h.digest()))
+
+
+def set_file_meta(object_path: str, meta: FileMeta) -> None:
+    """Store `meta` on an existing object (metadata-only PATCH; the bytes are untouched)."""
+    blob = _gcs_client().bucket(config.BUCKET).blob(object_path)
+    blob.metadata = {META_SIZE: str(meta.size),
+                     **({META_CHECKSUM: meta.checksum} if meta.checksum else {})}
+    blob.patch()
 
 
 def list_paths(prefix: str, *, bucket: str | None = None) -> list[str]:

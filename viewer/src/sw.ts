@@ -15,7 +15,7 @@ import { assemble, parseBlockMeta } from "./offline/cog-blocks";
 import { finished } from "./offline/guards";
 import { fileNameFor, isLive, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
-import { isAppAsset, isCatalogJson, isShell } from "./sw-routes";
+import { isAppAsset, isCatalogJson, isLayerStyle, isShell } from "./sw-routes";
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<{ url: string; revision: string | null }> };
 
@@ -74,25 +74,23 @@ registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html"), { denyl
 // StaleWhileRevalidate, not CacheFirst: items.json already ships max-age 60 + SWR 600, and a
 // catalog pinned forever is worse than no catalog. 200 only — an opaque response on this route is
 // a failed request, and caching it would serve the failure back as catalog data.
-registerRoute(isCatalogJson, new StaleWhileRevalidate({
-  cacheName: "ugs-stac-json",
+const swr = (cacheName: string, maxEntries: number) => new StaleWhileRevalidate({
+  cacheName,
   plugins: [
-    new ExpirationPlugin({ maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 }),
+    new ExpirationPlugin({ maxEntries, maxAgeSeconds: 60 * 60 * 24 * 30 }),
     new CacheableResponsePlugin({ statuses: [200] }),
   ],
-}));
+});
+registerRoute(isCatalogJson, swr("ugs-stac-json", 500));
+
+// Layer styles, cached as layers are viewed, so a layer saved for offline keeps its colors.
+registerRoute(isLayerStyle, swr("ugs-layer-styles", 300));
 
 // Basemap glyphs, cached as the map asks for them so labels survive going offline (the sprites are
 // precached with the shell; tiles come from saved archives).
 registerRoute(
   ({ url }) => url.hostname === "maps-assets.geology.utah.gov" && url.pathname.startsWith("/styles/fonts/"),
-  new StaleWhileRevalidate({
-    cacheName: "ugs-basemap-style",
-    plugins: [
-      new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 }),
-      new CacheableResponsePlugin({ statuses: [200] }),
-    ],
-  }),
+  swr("ugs-basemap-style", 300),
 );
 
 // The table engine's .wasm, once someone saves a table for offline (offline/engine.ts puts it in

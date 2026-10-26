@@ -55,7 +55,6 @@ export async function readJson(dir: Readable, name: string): Promise<unknown> {
   }
 }
 
-
 // ---- files saved by area: a folder per file, holding a folder per version of it ----
 //
 // An update saves the new version beside the copy it replaces, which keeps working until the new
@@ -87,4 +86,25 @@ export async function prune(parent: FileSystemDirectoryHandle, keep: string | nu
     if (keep !== null ? name !== keep : !isDirectory(h) || !isRecord(await readJson(h, "meta.json"))) drop.push(name);
   }
   for (const name of drop) await parent.removeEntry(name, { recursive: true }).catch(() => {});
+}
+
+export async function writeFile(dir: FileSystemDirectoryHandle, name: string, data: BlobPart) {
+  const out = await (await dir.getFileHandle(name, { create: true })).createWritable();
+  await out.write(data);
+  await out.close();
+}
+
+/** A top-level folder of saved files (cogs/, areas/), or null when it or storage is missing. */
+export async function topDir(name: string): Promise<FileSystemDirectoryHandle | null> {
+  const root = await navigator.storage?.getDirectory?.().catch(() => null);
+  return (await root?.getDirectoryHandle(name).catch(() => null)) ?? null;
+}
+
+/** Remove the unfinished versions of every file in `top` no queued save is working on (`busy`). */
+export async function sweepDir(top: string, busy: Set<string>): Promise<void> {
+  const dir = await topDir(top);
+  if (!dir) return;
+  for await (const [name, handle] of dir) {
+    if (isDirectory(handle) && !busy.has(decodeURIComponent(name))) await prune(handle, null);
+  }
 }

@@ -6,17 +6,16 @@ import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { cardText } from "./card-text";
-import { hasGeometry, seriesLabel } from "./item-view";
-import { thumbnailAsset } from "@/stac";
+import { formatBadgeAssets, seriesLabel } from "./item-view";
+import type { Density } from "@/discover/discovery-model";
+import { hasFootprint, thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
-
-export type Density = "comfortable" | "compact";
 
 // A <Link> descriptor, not an <a>. The router builds the href (basepath applied), does SPA nav on a
 // plain click and leaves modifier/middle-click to the browser — all of which this used to hand-roll.
 export type LinkAttrs = {
-  to: "/catalog" | "/discover";
+  to: "/catalog" | "/";
   search: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>);
   "data-href": string;
   onMouseEnter?: () => void;
@@ -34,7 +33,7 @@ type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs; 
 export const itemLink = (it: ItemRef, wide: boolean): LinkAttrs => {
   const sel = { c: it.collId, i: it.href.split("/").slice(-2)[0] };
   return {
-    to: wide ? "/discover" : "/catalog",
+    to: wide ? "/" : "/catalog",
     search: wide ? (prev: Record<string, unknown>) => ({ ...prev, ...sel }) : sel,
     "data-href": it.href,
   };
@@ -46,8 +45,8 @@ function Badges({ interim, idMatch }: { interim: boolean; idMatch?: boolean }) {
   if (!interim && !idMatch) return null;
   return (
     <span className="flex shrink-0 gap-1">
-      {idMatch && <span className="rounded bg-emerald-100 px-1.5 text-[11px] font-semibold text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100">Series ID match</span>}
-      {interim && <span className="rounded bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">Interim</span>}
+      {idMatch && <span className="rounded bg-emerald-100 px-1.5 text-2xs font-semibold text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100">Series ID match</span>}
+      {interim && <span className="rounded bg-amber-100 px-1.5 text-2xs font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">Interim</span>}
     </span>
   );
 }
@@ -55,12 +54,12 @@ function Badges({ interim, idMatch }: { interim: boolean; idMatch?: boolean }) {
 function Meta({ it, meta }: { it: ItemRef; meta: string[] }) {
   if (!meta.length) {
     const sid = seriesLabel(it);
-    return sid ? <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div> : null;
+    return sid ? <div className="truncate font-mono text-2xs text-muted-foreground" title={sid}>{sid}</div> : null;
   }
   const [id, ...rest] = meta;
   // One block of inline text, so a narrow card ends in "…" rather than clipping mid-word.
   return (
-    <div className="truncate text-[11px] text-muted-foreground" title={meta.join(" · ")}>
+    <div className="truncate text-2xs text-muted-foreground" title={meta.join(" · ")}>
       <span className="font-mono font-semibold text-foreground">{id}</span>
       {rest.length ? ` · ${rest.join(" · ")}` : ""}
     </div>
@@ -68,10 +67,8 @@ function Meta({ it, meta }: { it: ItemRef; meta: string[] }) {
 }
 
 // Muted, NON-anchor format chips — the card is itself an <a>, so it must contain no nested anchors.
-// Thumbnails/images are already the card image, so they're dropped.
 const formatBadges = (it: ItemRef) =>
-  Object.entries(it.data?.assets ?? {})
-    .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.type?.startsWith("image/"))
+  formatBadgeAssets(it)
     .slice(0, 4)
     .map(([k, a]) => <span key={k} className={C.badge}>{a.title ?? k}</span>);
 
@@ -93,7 +90,7 @@ export function ResultCard({ it, density, on, link, addSlot, idMatch }: CardProp
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
             <p className={`min-w-0 flex-1 font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{c.heading}</p>
-            {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
+            {hasFootprint(it.data) && <span className="shrink-0 text-3xs font-medium text-primary"><span aria-hidden>◆</span> map</span>}
           </div>
           {c.sub && <div className="truncate text-xs text-muted-foreground" title={c.sub}>{c.sub}</div>}
           <Meta it={it} meta={c.meta} />
@@ -119,12 +116,12 @@ export function ResultRow({ it, density, on, link, addSlot, idMatch }: CardProps
           <span className="text-foreground">{c.heading}</span>
           {c.sub && <span className="text-muted-foreground"> · {c.sub}</span>}
         </span>
-        {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
+        {sid && <span className="shrink-0 font-mono text-2xs text-muted-foreground">{sid}</span>}
         {!compact && rest.length > 0 && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{rest.join(" · ")}</span>}
         <Badges interim={c.interim} idMatch={idMatch} />
-        {hasGeometry(it) && (
+        {hasFootprint(it.data) && (
           <span className="ml-auto shrink-0 text-primary">
-            <span aria-hidden className="text-[10px]">◆</span><span className="sr-only">on the map</span>
+            <span aria-hidden className="text-3xs">◆</span><span className="sr-only">on the map</span>
           </span>
         )}
       </Link>

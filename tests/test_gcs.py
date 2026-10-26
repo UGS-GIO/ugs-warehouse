@@ -157,3 +157,94 @@ def test_upload_write_once_refuses_to_overwrite(monkeypatch, tmp_path):
     gcs.upload_write_once(str(f), "geolmap/cogs/M-1.cog.tif", content_type="image/tiff")
     with pytest.raises(gcs.WriteOnceViolation):
         gcs.upload_write_once(str(f), "geolmap/cogs/M-1.cog.tif", content_type="image/tiff")
+
+
+# Conditional writes: run against obstore's real in-memory store, so the version token and the
+# precondition check are the library's own. On GCS the same token carries the object generation
+# (x-goog-if-generation-match).
+@pytest.fixture
+def mem(monkeypatch):
+    import obstore as obs
+    from obstore.store import MemoryStore
+
+    store = MemoryStore()
+    monkeypatch.setattr(gcs, "_store", lambda: store)
+    return store, obs
+
+
+def test_a_conditional_write_lands_when_nothing_changed_since_the_read(mem):
+    store, obs = mem
+    obs.put(store, "stac/a/a.json", b'{"v": 1}')
+    body, version = gcs.get_bytes_versioned("stac/a/a.json")
+    assert body == b'{"v": 1}'
+    gcs.put_bytes_if_unchanged(b'{"v": 2}', "stac/a/a.json", version, content_type="application/geo+json")
+    assert bytes(obs.get(store, "stac/a/a.json").bytes()) == b'{"v": 2}'
+
+
+def test_a_conditional_write_never_overwrites_a_newer_object(mem):
+    store, obs = mem
+    obs.put(store, "stac/a/a.json", b'{"v": 1}')
+    _, version = gcs.get_bytes_versioned("stac/a/a.json")
+    obs.put(store, "stac/a/a.json", b'{"v": "ingest"}')
+    with pytest.raises(gcs.Changed):
+        gcs.put_bytes_if_unchanged(b'{"v": 2}', "stac/a/a.json", version, content_type="application/geo+json")
+    assert bytes(obs.get(store, "stac/a/a.json").bytes()) == b'{"v": "ingest"}'
+
+
+def test_a_conditional_write_never_recreates_a_deleted_object(mem):
+    store, obs = mem
+    obs.put(store, "stac/a/a.json", b'{"v": 1}')
+    _, version = gcs.get_bytes_versioned("stac/a/a.json")
+    obs.delete(store, "stac/a/a.json")
+    with pytest.raises(gcs.Changed):
+        gcs.put_bytes_if_unchanged(b'{"v": 2}', "stac/a/a.json", version, content_type="application/geo+json")
+    with pytest.raises(FileNotFoundError):
+        obs.get(store, "stac/a/a.json")
+
+
+def test_a_conditional_write_that_404s_is_a_change_too(mem, monkeypatch):
+    """GCS answers a generation match on a deleted object with 412 (checked against the real
+    bucket). A store that answered 404 must still read as Changed, so the caller re-reads and
+    finds the object gone instead of failing."""
+    import obstore as obs
+
+    def gone(*args, **kwargs):
+        raise FileNotFoundError("stac/a/a.json")
+
+    monkeypatch.setattr(obs, "put", gone)
+    with pytest.raises(gcs.Changed):
+        gcs.put_bytes_if_unchanged(b"{}", "stac/a/a.json", {"version": "1"}, content_type="application/geo+json")
+
+
+def test_a_versioned_read_of_a_missing_object_is_a_404(mem):
+    with pytest.raises(FileNotFoundError):
+        gcs.get_bytes_versioned("stac/missing/missing.json")
+
+
+def test_open_reader_range_reads_parquet_columns_and_seeks(monkeypatch):
+    import io
+
+    import obstore as obs
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from obstore.store import MemoryStore
+
+    table = pa.table({"a": list(range(1000)), "b": [str(i) for i in range(1000)],
+                      "c": [float(i) for i in range(1000)]})
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    data = buf.getvalue()
+    store = MemoryStore()
+    obs.put(store, "x/t.parquet", data)
+    monkeypatch.setattr(gcs, "_store", lambda bucket=None: store)
+
+    reader = gcs.open_reader("x/t.parquet")
+    assert not reader.closed and reader.readable() and reader.seekable()
+    assert pq.ParquetFile(reader).read(columns=["a", "b"]).equals(table.select(["a", "b"]))
+
+    assert reader.seek(0) == 0 and reader.read(4) == b"PAR1" and reader.tell() == 4
+    assert reader.seek(-4, io.SEEK_END) == len(data) - 4
+    assert reader.read(100) == data[-4:]  # a short read at the end of the object
+    assert reader.read(10) == b""
+    reader.close()
+    assert reader.closed

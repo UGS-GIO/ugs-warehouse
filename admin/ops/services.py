@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
+from .jobs import log_line
+
 
 @dataclass(frozen=True)
 class Service:
@@ -95,16 +97,9 @@ def logs(key: str, limit: int = 80) -> dict:
         lines = []
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):
-            p = e.payload
-            text = p if isinstance(p, str) else (p.get("message") or p.get("msg") or str(p)) \
-                if isinstance(p, dict) else str(p)
             labels = e.labels or {}
-            lines.append({
-                "time": e.timestamp.isoformat() if e.timestamp else "",
-                "severity": (e.severity or "DEFAULT"),
-                "revision": labels.get("run.googleapis.com/revision_name", "").split("/")[-1] if labels else "",
-                "text": (text or "").rstrip(),
-            })
+            lines.append(log_line(
+                e, revision=labels.get("run.googleapis.com/revision_name", "").split("/")[-1]))
         lines.reverse()  # oldest → newest, like a tail
         return {"ok": True, "lines": lines}
     except Exception as e:  # noqa: BLE001 — surface to the operator

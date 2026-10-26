@@ -70,12 +70,18 @@ def _extent_line(extent: dict | None) -> str:
 
 def readme(*, title: str, description: str, kind: str, children: int,
            extent: dict | None = None, items: list[dict] | None = None,
-           license_id: str | None = None) -> str:
-    """The human entry point. `kind` is "catalog" or "collection"; `children` counts what it holds."""
+           license_id: str | None = None, publications: bool = False) -> str:
+    """The human entry point. `kind` is "catalog", "collection" or "layer" (a collection holding one
+    dataset as its own assets); `children` counts what it holds. `publications` marks a publication
+    series catalog, whose items.json lists its publications."""
     noun = "collections" if kind == "catalog" else "items"
+    doc_type = "catalog" if kind == "catalog" else "collection"
     lic = license_id or config.DATA_LICENSE
     out = [f"# {title}\n\n", f"{description}\n\n"]
-    out.append(f"- {children} {noun}\n")
+    if kind != "layer":  # a layer is one dataset: its files are assets, it holds nothing
+        out.append(f"- {children} {noun}\n")
+    if publications:
+        out.append("- `items.json` lists the publications in this series, one entry each\n")
     out.append(_extent_line(extent))
     # PTL-FIL-005 wants the license and the provenance in the README itself, not only in the JSON.
     out.append(f"- License: {lic} ({config.LICENSE_URL})\n")
@@ -84,14 +90,16 @@ def readme(*, title: str, description: str, kind: str, children: int,
     if formats:
         out.append("\n## Reading the data\n\n")
         out.extend(f"- **{name}** — {how}\n" for name, how in formats)
-    out.append(f"\nThe machine-readable description of this {kind} is `{'catalog' if kind == 'catalog' else 'collection'}.json` "
+    out.append(f"\nThe machine-readable description of this {doc_type} is `{doc_type}.json` "
                f"beside this file. `{AGENTS_NAME}` covers access patterns for programs.\n")
     return "".join(out)
 
 
 def agents(*, title: str, kind: str, path: str, children: int,
-           items: list[dict] | None = None, service: bool = False) -> str:
+           items: list[dict] | None = None, service: bool = False, publications: bool = False) -> str:
     """What a program needs to use this node without fetching everything first.
+
+    `publications` is True for a publication series catalog, whose items.json lists publications.
 
     `service` is True for the nodes the Features service serves live (flat collections and the
     serving-topic schemas, per `core.stac.has_feature_service`). Those DO have a query endpoint —
@@ -122,7 +130,17 @@ def agents(*, title: str, kind: str, path: str, children: int,
                    "`ugs:item_count`, so a listing needs one fetch rather than one per child.\n")
         if not path:
             out.append("\nTo get every item at once, read `items.json` beside this file: one index "
-                       "of the whole catalog, each entry with a `self` link to its full item.\n")
+                       "of the whole catalog. It lists each publication once, with a `self` link to "
+                       "its `collection.json`; each publication's layers and tables, tagged "
+                       "`ugs:in_publication` and `ugs:publication_title`; and every other item. Each "
+                       "entry has a `self` link to its full document.\n")
+        if publications:
+            out.append("\n`items.json` beside this file lists this series' publications, one entry "
+                       "each, with a `self` link to the publication's `collection.json`. A "
+                       "publication's layers and tables are the `rel:item` links in that file.\n")
+    elif kind == "layer":
+        out.append(f"This collection is one dataset. Its files are the assets in `{doc}`; it has "
+                   "no items.\n")
     else:
         out.append(f"Follow the `rel:item` links in `{doc}`; each carries the item's title, so a "
                    "listing does not need to fetch every item.\n")
@@ -136,9 +154,11 @@ def agents(*, title: str, kind: str, path: str, children: int,
         # The endpoint that motivated #280: a consumer that loads the whole OGC API Features
         # collection to draw it OOMs the service. Name the query endpoint AND say what each thing is
         # for — filtered queries on the API, whole-layer/bulk on the GeoParquet asset.
-        out.append("\n## Querying\n\n"
-                   "These items are also served live via OGC API Features — each item carries a "
-                   "`rel:service` link to its own `/collections/<item id>` endpoint. Use it for "
+        served = ("This layer is also served live via OGC API Features; its `rel:service` link "
+                  "points at its `/collections/<id>` endpoint." if kind == "layer" else
+                  "These items are also served live via OGC API Features — each item carries a "
+                  "`rel:service` link to its own `/collections/<item id>` endpoint.")
+        out.append(f"\n## Querying\n\n{served} Use it for "
                    "attribute queries and server-side spatial filters that return a few features. "
                    "For a whole layer, or bulk or spatial analysis, read the GeoParquet `data` asset "
                    "directly (it is range-readable) instead of paging the API — that is the cheaper "
@@ -148,6 +168,6 @@ def agents(*, title: str, kind: str, path: str, children: int,
                "its own `proj:code`, which overrides the item's.\n"
                "- Fields prefixed `ugs:` are ours and are not part of any STAC extension. Standard "
                "clients ignore them safely.\n"
-               "- Assets carry `file:size` where the warehouse wrote the bytes, and `file:checksum` "
-               "where it could compute one; an absent value means it could not, not that it is zero.\n")
+               "- Assets the warehouse hosts carry `file:size` and `file:checksum`; one without a "
+               "checksum has not been hashed yet. Files linked on other hosts carry neither.\n")
     return "".join(out)

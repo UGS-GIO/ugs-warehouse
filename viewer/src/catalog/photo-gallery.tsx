@@ -47,7 +47,7 @@ export function PhotoGallery({ href }: { href: string }) {
                   className="group block overflow-hidden rounded border border-border bg-muted text-left"
                   title={String(r.filename ?? sp.split("/").pop())}>
                   <img src={thumbUrl(sp)} loading="lazy" alt={String(r.filename ?? "core photo")}
-                    className="aspect-[4/3] w-full object-cover transition group-hover:opacity-90" />
+                    className="aspect-4/3 w-full object-cover transition group-hover:opacity-90" />
                   {cap && <div className="truncate px-1 py-0.5 text-xs text-muted-foreground">{cap}</div>}
                 </button>
               );
@@ -100,8 +100,8 @@ function Lightbox({ rows, index, onIndex, onClose }: {
       {rows.length > 1 && <button className={`${nav} left-3`} onClick={(e) => { e.stopPropagation(); go(-1); }}>‹</button>}
       {rows.length > 1 && <button className={`${nav} right-3`} onClick={(e) => { e.stopPropagation(); go(1); }}>›</button>}
       <img src={fullUrl(sp)} alt={String(r.filename ?? "core photo")}
-        className="max-h-[85vh] max-w-[92vw] object-contain" onClick={(e) => e.stopPropagation()} />
-      <div className="mt-2 max-w-[92vw] truncate text-center text-xs text-white/80">
+        className="max-h-modal max-w-lightbox object-contain" onClick={(e) => e.stopPropagation()} />
+      <div className="mt-2 max-w-lightbox truncate text-center text-xs text-white/80">
         {cap} <span className="text-white/50">({index + 1} of {rows.length})</span>
       </div>
     </div>

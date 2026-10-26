@@ -66,6 +66,7 @@ def test_prepare_plates_virtual_vfs():
     mock_zip_instance.namelist.return_value = ["plate1.tif", "plate1.tfw"]
 
     with patch("zipfile.ZipFile") as mock_zipfile, \
+         patch("ugs_warehouse.pubs.harvest._plate_kind", return_value="byte"), \
          patch("ugs_warehouse.pubs.harvest.corrected_georef") as mock_corrected_georef:
         mock_zipfile.return_value.__enter__.return_value = mock_zip_instance
         mock_corrected_georef.return_value = "mocked_gtif_path"
@@ -171,7 +172,7 @@ def test_harvest_one_does_not_retry_after_first_attempt_already_uploaded_cog(mon
 
     cog_uploaded = {"value": False}
 
-    def fake_attempt(pub, zurls):
+    def fake_attempt(pub, zurls, **_):
         if not cog_uploaded["value"]:
             # First attempt: "uploads" the COG, then fails in a later derivative step.
             cog_uploaded["value"] = True
@@ -292,6 +293,7 @@ def test_report_geotiff_fallback_tier(monkeypatch, tmp_path):
 
     monkeypatch.setattr(harvest, "COG_DPI", 600)
     monkeypatch.setattr(harvest, "corrected_georef", lambda *a, **k: "mocked_gtif")
+    monkeypatch.setattr(harvest, "_plate_kind", lambda p: "byte")
     harvest._report_begin("M-1")
     mock_zip = MagicMock()
     mock_zip.namelist.return_value = _BUNDLE
@@ -321,9 +323,10 @@ def test_report_records_produced_cog(monkeypatch, tmp_path):
     monkeypatch.setattr(harvest, "THUMBS", False)
     monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
     monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
-    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work, **_: (str(tmp_path / "plate.tif"), None))
     monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
     monkeypatch.setattr(harvest, "run", lambda cmd: None)  # gdalwarp no-op
+    _stub_8bit(monkeypatch, harvest)
 
     def fake_cog_translate(src, dst, prof, **k):
         with open(dst, "wb") as f:
@@ -343,6 +346,47 @@ def test_report_records_produced_cog(monkeypatch, tmp_path):
     assert cog is not None
     assert cog["object"] == pub.cog_object
     assert cog["compress"].lower() == "deflate"  # lossless master, not webp
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_new_units_file_uploads_mutable_and_its_cog_immutable(monkeypatch, tmp_path):
+    """The self-heal can rewrite a units file in place, so it is never cached as immutable; a COG
+    is write-once and stays immutable."""
+    from ugs_warehouse.pubs import harvest
+
+    pub = identity.Pub(series_id="M-1")
+    harvest._report_begin("M-1")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates",
+                        lambda zips, work, **_: (str(tmp_path / "plate.tif"), str(tmp_path / "units.shp")))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)
+    monkeypatch.setattr(harvest.geoparquet, "write", lambda src, path: open(path, "wb").close())
+    _stub_8bit(monkeypatch, harvest)
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    headers = {}
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda local, obj, **k: headers.__setitem__(obj, k["cache_control"]))
+    monkeypatch.setattr(harvest.gcs, "upload", lambda local, obj, **k: headers.__setitem__(obj, k["cache_control"]))
+
+    assert _harvest_attempt(pub, ["http://x/m-1.zip"]) == "ok"
+    assert headers == {pub.cog_object: harvest.gcs.CACHE_IMMUTABLE,
+                       f"{identity.UNITS_PREFIX}/M-1/M-1.units.parquet": harvest.gcs.CACHE_MUTABLE}
+
+
+def _stub_8bit(monkeypatch, harvest):
+    """_harvest_attempt tests fake the plate and COG files; treat both as already 8-bit."""
+    monkeypatch.setattr(harvest, "_plate_kind", lambda p: "byte")
+    monkeypatch.setattr(harvest, "_band_types", lambda p: ["Byte"] * 4)
+    monkeypatch.setattr(harvest, "_embed_band_statistics", lambda p: None)  # the plate is a fake
 
 
 # --- color source selection (ALL-5995) --------------------------------------------------------
@@ -436,13 +480,14 @@ def test_harvest_attempt_guards_grayscale_cog(monkeypatch, tmp_path):
     monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
     monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
 
-    def fake_prepare(zips, work):
+    def fake_prepare(zips, work, **_):
         harvest._report(color_source_sat=50.0)   # a color source was chosen
         return (str(tmp_path / "plate.tif"), None)
 
     monkeypatch.setattr(harvest, "prepare_plates", fake_prepare)
     monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
     monkeypatch.setattr(harvest, "run", lambda cmd: None)   # gdalwarp no-op
+    _stub_8bit(monkeypatch, harvest)
 
     def fake_cog_translate(src, dst, prof, **k):
         with open(dst, "wb") as f:
@@ -529,13 +574,14 @@ def test_harvest_attempt_publishes_color_cog(monkeypatch, tmp_path):
     monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
     monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
 
-    def fake_prepare(zips, work):
+    def fake_prepare(zips, work, **_):
         harvest._report(color_source_sat=50.0)   # a color source was chosen
         return (str(tmp_path / "plate.tif"), None)
 
     monkeypatch.setattr(harvest, "prepare_plates", fake_prepare)
     monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
     monkeypatch.setattr(harvest, "run", lambda cmd: None)
+    _stub_8bit(monkeypatch, harvest)
 
     def fake_cog_translate(src, dst, prof, **k):
         with open(dst, "wb") as f:
@@ -589,9 +635,10 @@ def test_cog_zoom_strategy_reaches_cog_translate(monkeypatch, tmp_path):
     monkeypatch.setattr(harvest, "THUMBS", False)
     monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
     monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
-    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work, **_: (str(tmp_path / "plate.tif"), None))
     monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
     monkeypatch.setattr(harvest, "run", lambda cmd: None)   # gdalwarp no-op
+    _stub_8bit(monkeypatch, harvest)
 
     seen = {}
 
@@ -607,7 +654,10 @@ def test_cog_zoom_strategy_reaches_cog_translate(monkeypatch, tmp_path):
 
     assert _harvest_attempt(pub, ["http://x/m-z.zip"]) == "ok"
     assert seen["zoom_level_strategy"] == "upper"
-    assert seen["web_optimized"] is True   # still web-optimized, only the zoom rounding changed
+    # Still web-mercator tiled (`tms`, which rio-cogeo wants in place of web_optimized), carrying
+    # the band statistics embedded on its input.
+    assert seen["tms"].id == "WebMercatorQuad" and "web_optimized" not in seen
+    assert seen["forward_band_tags"] is True
 
 
 @pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
@@ -622,9 +672,10 @@ def test_cog_zoom_strategy_reaches_lzw_fallback(monkeypatch, tmp_path):
     monkeypatch.setattr(harvest, "THUMBS", False)
     monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
     monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
-    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work, **_: (str(tmp_path / "plate.tif"), None))
     monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
     monkeypatch.setattr(harvest, "run", lambda cmd: None)
+    _stub_8bit(monkeypatch, harvest)
 
     calls = []
 
@@ -642,3 +693,479 @@ def test_cog_zoom_strategy_reaches_lzw_fallback(monkeypatch, tmp_path):
     assert _harvest_attempt(pub, ["http://x/m-zl.zip"]) == "ok"
     assert len(calls) == 2                              # the fallback fired
     assert calls[1]["zoom_level_strategy"] == "upper"  # the lzw retry carries the strategy too
+
+
+# --- 8-bit plates (#420) ----------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _fresh_plate_kind_cache():
+    from ugs_warehouse.pubs import harvest
+    if hasattr(harvest._plate_kind, "cache_clear"):
+        harvest._plate_kind.cache_clear()
+
+
+def _write_nodata_tif(path, arr, dtype, nodata):
+    import rasterio
+    from rasterio.transform import from_origin
+    bands, h, w = arr.shape
+    with rasterio.open(path, "w", driver="GTiff", height=h, width=w, count=bands, dtype=dtype,
+                       nodata=nodata, crs="EPSG:26712",
+                       transform=from_origin(436939.0, 4637304.0, 1.55, 1.55)) as ds:
+        ds.write(arr)
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_plate_kind_classifies_each_plate_shape(tmp_path):
+    import numpy as np
+    import rasterio
+
+    from ugs_warehouse.pubs import harvest
+    rng = np.random.default_rng(0)
+    color16 = rng.integers(0, 256, (3, 64, 64)).astype("uint16")
+    color16[:, :4, :] = 256                                    # OFR-688: 0-255 color, nodata 256
+    _write_nodata_tif(str(tmp_path / "color16.tif"), color16, "uint16", 256)
+    line = rng.integers(0, 2, (1, 64, 64)).astype("int16")
+    line[:, :4, :] = 255                                       # CR-92-8: 0 paper, 1 ink, nodata 255
+    _write_nodata_tif(str(tmp_path / "line.tif"), line, "int16", 255)
+    _write_nodata_tif(str(tmp_path / "grid.tif"),              # SS-144: an Int32 data surface
+                      rng.integers(-5218, 7232, (1, 64, 64)).astype("int32"), "int32", None)
+    _write_nodata_tif(str(tmp_path / "wide16.tif"),            # real 16-bit color
+                      rng.integers(0, 65535, (3, 64, 64)).astype("uint16"), "uint16", None)
+    _write_nodata_tif(str(tmp_path / "float.tif"), np.zeros((3, 64, 64), "float32"), "float32", None)
+    _write_nodata_tif(str(tmp_path / "byte.tif"), np.zeros((3, 64, 64), "uint8"), "uint8", None)
+    _write_nodata_tif(str(tmp_path / "palette.tif"), np.zeros((1, 64, 64), "uint8"), "uint8", None)
+    with rasterio.open(str(tmp_path / "palette.tif"), "r+") as ds:   # M-254DM: 8-bit color table
+        ds.write_colormap(1, {0: (255, 0, 0, 255)})
+    kinds = {n: harvest._plate_kind(str(tmp_path / f"{n}.tif"))
+             for n in ("color16", "line", "grid", "wide16", "float", "byte", "palette")}
+    assert kinds == {"color16": "color", "line": "lineart", "grid": "grid", "wide16": "grid",
+                     "float": "grid", "byte": "byte", "palette": "palette"}
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_lineart_to_byte_renders_paper_white_ink_black_nodata_clear(tmp_path):
+    import numpy as np
+    import rasterio
+
+    from ugs_warehouse.pubs import harvest
+    arr = np.array([[[0, 1, 255]]], dtype="int16")
+    _write_nodata_tif(str(tmp_path / "line.tif"), arr, "int16", 255)
+    out = harvest._lineart_to_byte(str(tmp_path / "line.tif"), str(tmp_path))
+    with rasterio.open(out) as ds:
+        assert ds.dtypes == ("uint8", "uint8")
+        assert ds.crs.to_epsg() == 26712
+        # The nodata pixel's gray is never drawn: its alpha is 0.
+        assert ds.read(1).tolist()[0][:2] == [255, 0] and ds.read(2).tolist() == [[255, 255, 0]]
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_plate_kind_reads_exact_min_max_so_a_rare_value_is_not_line_art(tmp_path):
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    _write_nodata_tif(str(tmp_path / "line.tif"), np.array([[[0, 1, 2]]], dtype="int16"), "int16", 255)
+    assert harvest._plate_kind(str(tmp_path / "line.tif")) == "grid"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_source_saturation_treats_a_line_scan_as_a_grayscale_map(tmp_path):
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    _write_nodata_tif(str(tmp_path / "line.tif"),
+                      np.random.default_rng(1).integers(0, 2, (1, 64, 64)).astype("int16"), "int16", 255)
+    assert harvest._source_saturation(str(tmp_path / "line.tif")) == 0.0
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_prepare_plates_name_pick_skips_a_data_grid(monkeypatch, tmp_path):
+    """SS-144: a bundle whose only raster is a data grid yields no plate, not a grid warped as a map."""
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "_render_geospatial_pdf", lambda cands, work: None)
+    zp = str(tmp_path / "ss.zip")
+    _zip_tifs(zp, [("salinity.tif",
+                    np.random.default_rng(2).integers(-5218, 7232, (1, 32, 32)).astype("int32"), "int32")])
+    plate, _ = harvest.prepare_plates([zp], str(tmp_path))
+    assert plate is None
+
+
+def _attempt_with(monkeypatch, tmp_path, kind, cog_types=("Byte",) * 4):
+    from ugs_warehouse.pubs import harvest
+    pub = identity.Pub(series_id="M-8")
+    harvest._report_begin("M-8")
+    calls = []
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work, **_: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr(harvest, "_plate_kind", lambda p: kind)
+    monkeypatch.setattr(harvest, "_lineart_to_byte", lambda p, work: str(tmp_path / "plate.lineart.tif"))
+    monkeypatch.setattr(harvest, "_band_types", lambda p: list(cog_types))
+    monkeypatch.setattr(harvest, "_embed_band_statistics", lambda p: None)  # the plate is a fake
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    uploads = []
+    monkeypatch.setattr(harvest.gcs, "upload_write_once", lambda *a, **k: uploads.append(a))
+    monkeypatch.setattr(harvest.gcs, "upload", lambda *a, **k: None)
+    return _harvest_attempt(pub, ["http://x/m-8.zip"]), calls, uploads
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_casts_a_16bit_color_plate_to_byte_in_the_warp(monkeypatch, tmp_path):
+    res, calls, uploads = _attempt_with(monkeypatch, tmp_path, "color")
+    warp = next(c for c in calls if c[0] == "gdalwarp")
+    assert res == "ok" and warp[warp.index("-ot") + 1] == "Byte" and uploads
+    assert warp[warp.index("-dstnodata") + 1] == "None"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_warps_the_rendered_line_scan(monkeypatch, tmp_path):
+    res, calls, _ = _attempt_with(monkeypatch, tmp_path, "lineart")
+    warp = next(c for c in calls if c[0] == "gdalwarp")
+    assert res == "ok" and str(tmp_path / "plate.lineart.tif") in warp and "-ot" not in warp
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_refuses_a_data_grid_plate(monkeypatch, tmp_path):
+    res, calls, uploads = _attempt_with(monkeypatch, tmp_path, "grid")
+    assert res == "fail:not_8bit" and not calls and not uploads
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_refuses_to_publish_a_non_8bit_cog(monkeypatch, tmp_path):
+    res, _, uploads = _attempt_with(monkeypatch, tmp_path, "byte", ("UInt16",) * 4)
+    assert res == "fail:not_8bit" and not uploads
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_refuses_a_cog_with_no_bands(monkeypatch, tmp_path):
+    res, _, uploads = _attempt_with(monkeypatch, tmp_path, "byte", ())
+    assert res == "fail:not_8bit" and not uploads
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_plate_kind_refuses_a_non_8bit_palette(tmp_path):
+    """0/1 hardcoded as paper/ink would ignore the plate's own color table, so don't guess."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+
+    from ugs_warehouse.pubs import harvest
+    p = str(tmp_path / "pal16.tif")
+    _write_nodata_tif(p, np.random.default_rng(3).integers(0, 2, (1, 32, 32)).astype("uint16"), "uint16", None)
+    with rasterio.open(p, "r+") as ds:
+        ds.colorinterp = (ColorInterp.palette,)
+    assert harvest._plate_kind(p) == "grid"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_lineart_to_byte_keeps_gcp_georeferencing(tmp_path):
+    import numpy as np
+    import rasterio
+    from rasterio.control import GroundControlPoint
+    from rasterio.crs import CRS
+
+    from ugs_warehouse.pubs import harvest
+    p = str(tmp_path / "gcp.tif")
+    gcps = [GroundControlPoint(0, 0, 436939.0, 4637304.0), GroundControlPoint(0, 8, 436939.0, 4637291.6),
+            GroundControlPoint(8, 0, 436951.4, 4637304.0)]
+    with rasterio.open(p, "w", driver="GTiff", height=8, width=8, count=1, dtype="int16", nodata=255,
+                       gcps=gcps, crs=CRS.from_epsg(26712)) as ds:
+        ds.write(np.ones((1, 8, 8), "int16"))
+    out = harvest._lineart_to_byte(p, str(tmp_path))
+    with rasterio.open(out) as ds:
+        got, crs = ds.gcps
+        assert len(got) == 3 and crs.to_epsg() == 26712
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_an_unreadable_plate_fails_only_that_pub(monkeypatch, tmp_path):
+    """A probe error becomes that pub's fail:* (logged for attention), never a raise that ends the run."""
+    from ugs_warehouse.pubs import harvest
+
+    def boom(p):
+        raise RuntimeError("cannot open plate")
+    _attempt_with(monkeypatch, tmp_path, "byte")          # installs the other stubs
+    monkeypatch.setattr(harvest, "_plate_kind", boom)
+    res = _harvest_attempt(identity.Pub(series_id="M-8"), ["http://x/m-8.zip"])
+    assert res == "fail:RuntimeError"
+    assert harvest.exit_code({"ok": 0, "expected": 0, "attention": 1}) == 0
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_plate_kind_and_saturation_treat_a_bandless_dataset_as_not_a_map(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "_gdalinfo", lambda p, *f: {"bands": []})
+    assert harvest._plate_kind("empty.tif") == "grid"
+    ds = MagicMock(count=0, dtypes=(), colorinterp=())
+    cm = MagicMock(__enter__=MagicMock(return_value=ds), __exit__=MagicMock(return_value=False))
+    monkeypatch.setattr("rasterio.open", lambda p: cm)
+    assert harvest._source_saturation("empty.tif") == -1.0
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_palette_plate_keeps_its_colors_through_the_warp(monkeypatch, tmp_path):
+    """Stripes of red (index 1) and blue (index 3) reprojected with Lanczos. Warping the indices
+    blends them to index 2, which is green; warping colors only mixes red and blue."""
+    import shutil
+
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+    plate = str(tmp_path / "palette.tif")
+    arr = np.where((np.arange(64) // 2) % 2 == 0, 1, 3).astype("uint8")[None, :].repeat(64, 0)
+    arr[:, :8] = 0                                                   # NoData collar
+    with rasterio.open(plate, "w", driver="GTiff", height=64, width=64, count=1, dtype="uint8",
+                       crs="EPSG:26912", transform=from_origin(400000, 4400000, 30, 30), nodata=0) as ds:
+        ds.write(arr, 1)
+        ds.write_colormap(1, {0: (0, 0, 0, 255), 1: (255, 0, 0, 255), 2: (0, 255, 0, 255),
+                              3: (0, 0, 255, 255)})
+    harvest._plate_kind.cache_clear()
+    harvest._report_begin("M-PAL")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 0))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work, **_: (plate, None))
+    published = str(tmp_path / "published.tif")
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda local, *a, **k: shutil.copy(local, published))
+
+    assert _harvest_attempt(identity.Pub(series_id="M-PAL"), ["http://x/m-pal.zip"]) == "ok"
+    with rasterio.open(published) as ds:
+        r, g, b, a = ds.read()
+    opaque = a > 0
+    assert opaque.any()
+    assert g[opaque].max() == 0
+    assert r[opaque].max() > 200 and b[opaque].max() > 200
+    assert not opaque.all()                                         # the NoData collar is clear
+
+
+# --- source rasters ------------------------------------------------------------------------------
+
+SOURCES = identity.SOURCES_PREFIX
+
+
+def test_source_raster_finds_the_map_by_series_id():
+    import obstore as obs
+
+    from ugs_warehouse.pubs import harvest
+    obs.put(harvest.gcs._store(), f"{SOURCES}/M-180DM.tif", b"tif")
+    assert harvest.source_raster("M-180DM") == f"{SOURCES}/M-180DM.tif"
+    assert harvest.source_raster("M-999") is None
+
+
+def test_a_source_raster_fixes_the_plate_and_skips_the_geotiff_retry(monkeypatch):
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "_get_attached_zips",
+                        lambda sid: ("https://x/gt.zip", "https://x/gis.zip"))
+    monkeypatch.setattr(harvest, "source_raster", lambda sid: f"{SOURCES}/{sid}.tif")
+    attempt = MagicMock(return_value="fail:CalledProcessError")
+    monkeypatch.setattr(harvest, "_harvest_attempt", attempt)
+
+    assert harvest.harvest_one("M-180DM") == "fail:CalledProcessError"
+    attempt.assert_called_once()
+    args, kwargs = attempt.call_args
+    assert args[1] == ["https://x/gis.zip"]                 # units only; the GeoTIFF zip isn't needed
+    assert kwargs == {"source": f"{SOURCES}/M-180DM.tif"}
+
+
+def test_a_source_raster_without_a_gis_zip_still_harvests(monkeypatch):
+    """OFR-731 has no GIS bundle; the source raster alone makes the COG."""
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, None))
+    monkeypatch.setattr(harvest, "source_raster", lambda sid: f"{SOURCES}/{sid}.tif")
+    attempt = MagicMock(return_value="ok")
+    monkeypatch.setattr(harvest, "_harvest_attempt", attempt)
+    assert harvest.harvest_one("OFR-731") == "ok"
+    assert attempt.call_args[0][1] == []
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_source_raster_is_warped_and_published(monkeypatch, tmp_path):
+    """OFR-549DM: the plate is the portal's raster in the sources folder, already in Web Mercator."""
+    import shutil
+
+    import numpy as np
+    import obstore as obs
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+    src = str(tmp_path / "SeepRidge.tif")
+    with rasterio.open(src, "w", driver="GTiff", height=64, width=64, count=3, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12246872, 4868744, 80, 80)) as ds:
+        ds.write(np.stack([np.full((64, 64), v, "uint8") for v in (200, 120, 40)]))
+    obj = f"{SOURCES}/OFR-549DM.tif"
+    obs.put(harvest.gcs._store(), obj, open(src, "rb").read())
+    harvest._report_begin("OFR-549DM")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 0))
+    published = str(tmp_path / "published.tif")
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda local, *a, **k: shutil.copy(local, published))
+
+    assert _harvest_attempt(identity.Pub(series_id="OFR-549DM"), [], source=obj) == "ok"
+    assert harvest._pub_report["tier"] == "source"
+    assert harvest._pub_report["used"]["plate"]["name"] == obj
+    with rasterio.open(published) as ds:
+        assert ds.crs.to_epsg() == 3857
+        assert ds.read(1).max() == 200
+
+
+def test_a_source_raster_without_a_crs_fails_loud(monkeypatch, tmp_path):
+    """A hand-placed raster missing its CRS stops the map rather than warping it to the wrong place."""
+    import numpy as np
+    import obstore as obs
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+    src = str(tmp_path / "nocrs.tif")
+    with rasterio.open(src, "w", driver="GTiff", height=8, width=8, count=3, dtype="uint8",
+                       transform=from_origin(499544, 4136889, 2, 2)) as ds:
+        ds.write(np.zeros((3, 8, 8), "uint8"))
+    obj = f"{SOURCES}/OFR-443DM.tif"
+    obs.put(harvest.gcs._store(), obj, open(src, "rb").read())
+    harvest._report_begin("OFR-443DM")
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda *a, **k: pytest.fail("a raster with no CRS must not publish"))
+
+    assert _harvest_attempt(identity.Pub(series_id="OFR-443DM"), [], source=obj) == "fail:source_no_crs"
+
+
+def test_the_report_says_a_source_raster_superseded_the_zip_plates(monkeypatch):
+    from ugs_warehouse.pubs import harvest
+    harvest._report_begin("M-294DM")
+    harvest._report_add("found", {"name": "M-294DM_RushValley30x60_Geotiff.tif", "kind": "geotiff"})
+    harvest._report_add("found", {"name": "M-294DM_Plate1.pdf", "kind": "pdf"})
+    harvest._report(tier="source")
+    harvest._report("used", plate={"name": f"{SOURCES}/M-294DM.tif", "dpi": None})
+    harvest._report_derive_skipped(None)
+    assert {e["reason"] for e in harvest._pub_report["skipped"]} == {"superseded by source raster"}
+
+
+def test_main_counts_a_source_raster_in_the_tier_roll_up(monkeypatch, tmp_path, capsys):
+    """The job summary tallies every tier a harvest can report; an unknown one would end the job."""
+    import sys
+
+    from ugs_warehouse.pubs import harvest
+
+    def from_source(sid, **_):
+        harvest._report_begin(sid)
+        harvest._report(tier="source")
+        return "ok"
+
+    monkeypatch.setattr(harvest, "harvest_one", from_source)
+    monkeypatch.setattr(harvest, "_run_report", [])
+    monkeypatch.setenv("HARVEST_REPORT", str(tmp_path / "report.json"))
+    monkeypatch.setattr(sys, "argv", ["harvest", "OFR-549DM"])
+    assert harvest.main() == 0
+    assert "1 source raster" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_units_only_extracts_the_units_and_picks_no_plate(monkeypatch, tmp_path):
+    """With a source raster, the GIS zip supplies the units; its own plates are neither picked nor rendered."""
+    import zipfile as zf
+
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    harvest._report_begin("M-180DM")
+    render = MagicMock(return_value=None)
+    monkeypatch.setattr(harvest, "_render_geospatial_pdf", render)
+    zp = str(tmp_path / "m-180.zip")
+    _zip_tifs(zp, [("gis/M-180DM_Geotiff.tif", np.full((3, 16, 16), 90, "uint8"))])
+    with zf.ZipFile(zp, "a") as z:
+        for ext in (".shp", ".shx", ".dbf", ".prj"):
+            z.writestr(f"gis/GeologicUnits{ext}", b"x")
+    plate, shp = harvest.prepare_plates([zp], str(tmp_path / "work"), units_only=True)
+    assert plate is None
+    assert shp == str(tmp_path / "work" / "gis/GeologicUnits.shp")
+    assert os.path.exists(shp)
+    render.assert_not_called()
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_stale_statistics_on_the_input_never_reach_the_cog(tmp_path):
+    """Every input band tag is forwarded, so older statistics must not survive the recompute."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+
+    tif = str(tmp_path / "plate.tif")
+    with rasterio.open(tif, "w", driver="GTiff", width=10, height=10, count=1, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12_400_000, 4_900_000, 30, 30)) as ds:
+        ds.write(np.full((1, 10, 10), 7, dtype="uint8"))
+        ds.update_tags(1, STATISTICS_APPROXIMATE="YES", STATISTICS_VALID_PERCENT="12",
+                       STATISTICS_MEAN="99", OTHER="kept")
+
+    harvest._embed_band_statistics(tif)
+
+    with rasterio.open(tif) as ds:
+        tags = ds.tags(1)
+    assert "STATISTICS_APPROXIMATE" not in tags
+    assert float(tags["STATISTICS_VALID_PERCENT"]) == 100 and float(tags["STATISTICS_MEAN"]) == 7
+    assert tags["OTHER"] == "kept"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_plate_cog_carries_band_statistics_with_the_web_mercator_tiling(tmp_path):
+    """The real path on a tiny RGBA plate: statistics embedded on the input reach every COG band,
+    the alpha band included, the COG validates, and `tms` tiles exactly as `web_optimized` did."""
+    import warnings
+
+    import morecantile
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rasterio.transform import from_origin
+    from rio_cogeo.cogeo import cog_translate, cog_validate
+    from rio_cogeo.profiles import cog_profiles
+
+    from ugs_warehouse.pubs import harvest
+
+    src = str(tmp_path / "rgba.tif")
+    data = np.zeros((4, 300, 400), dtype="uint8")
+    data[0, :, :200], data[0, :, 200:] = 50, 250  # the half the alpha masks out carries 250
+    data[1], data[2] = 100, 150
+    data[3, :, :200] = 255
+    with rasterio.open(src, "w", driver="GTiff", width=400, height=300, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12_400_000, 4_900_000, 30, 30)) as ds:
+        ds.write(data)
+        ds.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+
+    harvest._embed_band_statistics(src)
+    cog, old = str(tmp_path / "new.tif"), str(tmp_path / "old.tif")
+    prof = cog_profiles.get("deflate")
+    cog_translate(src, cog, dict(prof), tms=morecantile.tms.get("WebMercatorQuad"),
+                  forward_band_tags=True, quiet=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        cog_translate(src, old, dict(prof), web_optimized=True, quiet=True)
+
+    assert cog_validate(cog)[0]
+    with rasterio.open(cog) as new, rasterio.open(old) as was:
+        stats = [{k: float(new.tags(b)[f"STATISTICS_{k}"]) for k in ("MINIMUM", "MAXIMUM", "MEAN", "STDDEV")}
+                 for b in new.indexes]
+        assert (new.transform, new.shape, new.block_shapes, new.overviews(1)) == (
+            was.transform, was.shape, was.block_shapes, was.overviews(1))
+        assert {k: new.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")} == {
+            k: was.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")}
+    assert stats[0] == {"MINIMUM": 50.0, "MAXIMUM": 50.0, "MEAN": 50.0, "STDDEV": 0.0}  # masked out
+    assert stats[3]["MINIMUM"] == 0.0 and stats[3]["MAXIMUM"] == 255.0  # the alpha band too

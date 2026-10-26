@@ -10,6 +10,9 @@ description the source doesn't carry. Changes land in STAC on the next ingest/re
 from __future__ import annotations
 
 import json
+import logging
+
+log = logging.getLogger(__name__)
 
 _TOPICS = "ugs-serving-topics"
 
@@ -70,20 +73,33 @@ def search(q: str = "", limit: int = 50) -> list[dict]:
     return rows
 
 
-def _locate(item_id: str) -> str | None:
-    """GCS object path of the published item.json for an id (topic or pub), or None if not published.
-    Topics are flat under the collection; pubs are nested under their top-level group + series."""
+def _locate(item_id: str) -> tuple[str, bool] | None:
+    """`(object path, is_collection)` of the published document an id's override patches, or None if
+    not published. Topics are flat under the collection. A publication is patched where its
+    series index points: on its collection.json once the series has a catalog.json (the refresh
+    writes it when every pub in the series has migrated), else on its old `<SID>/<SID>.json` item,
+    which a pending series is still indexed from. A pending series with no old item for the pub
+    falls back to its collection.json."""
     from ugs_warehouse.core import config, gcs, stac
     from ugs_warehouse.pubs import sink_stac, source
 
-    topic = f"{config.STAC_PREFIX}/{_TOPICS}/{item_id}/{item_id}.json"
-    if gcs.exists(topic):
-        return topic
+    # A topic's item is one level down, under its schema: <topics>/<schema>/<id>/<id>.json.
+    for path in gcs.list_paths(f"{config.STAC_PREFIX}/{_TOPICS}/"):
+        if path.endswith(f"/{item_id}/{item_id}.json"):
+            return path, False
     for p in source.read_pubs():
         sid = (p.get("series_id") or "").strip()
-        if sid and sid.upper() == item_id.upper():
-            path = stac.item_object_path(f"{sink_stac.collection_group(p)}/{sink_stac.series_code(sid)}", sid)
-            return path if gcs.exists(path) else None
+        if not sid or sid.upper() != item_id.upper():
+            continue
+        coll_path = sink_stac.pub_collection_path(p)
+        coll = stac.collection_object_path(coll_path)
+        series = coll_path.rsplit("/", 1)[0]
+        if gcs.exists(f"{config.STAC_PREFIX}/{series}/catalog.json"):
+            return (coll, True) if gcs.exists(coll) else None
+        path = stac.item_object_path(series, sink_stac.item_id_for(sid))
+        if gcs.exists(path):
+            return path, False
+        return (coll, True) if gcs.exists(coll) else None
     return None
 
 
@@ -98,7 +114,7 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
     """Write (or clear) the override sidecar AND patch the live item.json in place so the edit shows
     immediately (no full reingest). The sidecar stays the durable source — a later reingest reapplies
     it. Clearing deletes the sidecar; the source value is restored on the next reingest."""
-    from ugs_warehouse.core import gcs, stac
+    from ugs_warehouse.core import cdn, gcs, stac
 
     doc: dict = {"source": "manual"}
     if (description or "").strip():
@@ -111,8 +127,25 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
         return {"id": item_id, "cleared": True}
     gcs.put_bytes(json.dumps(doc, indent=2).encode(), obj,
                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    # Instant apply: patch the published item now (best-effort; item may not be published yet).
+    # Instant apply: patch the published document now (it may not be published yet).
     updates = {k: v for k, v in doc.items() if k in ("title", "description")}
-    path = _locate(item_id)
-    applied = bool(path) and stac.patch_item_properties(path, updates)
-    return {"id": item_id, "fields": [k for k in doc if k != "source"], "applied": applied}
+    # The sidecar is already written, so a failed live patch is reported beside it, not raised over it.
+    result = {"id": item_id, "fields": [k for k in doc if k != "source"], "applied": False}
+    try:
+        target = _locate(item_id)
+        if target is not None:
+            result["applied"] = stac.patch_published(
+                target[0], updates, target="fields" if target[1] else "properties")
+            # The FeatureServer serves a topic's title and description: the console's catalog
+            # refresh (views.overrides_save) then invalidates it on the CDN.
+            if result["applied"] and f"/{_TOPICS}/" in target[0]:
+                result["serving_topic"] = True
+                try:
+                    cdn.mark([item_id])
+                except Exception as e:  # noqa: BLE001 — the refresh job marks it again
+                    log.exception("override for %s applied but not marked for the CDN", item_id)
+                    result["cdn_error"] = f"{type(e).__name__}: {e}"
+    except Exception as e:  # noqa: BLE001
+        log.exception("override for %s saved but not applied live", item_id)
+        result["apply_error"] = f"{type(e).__name__}: {e}"
+    return result

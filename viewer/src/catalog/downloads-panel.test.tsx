@@ -84,9 +84,9 @@ beforeEach(() => {
 });
 
 describe("DownloadsPanel", () => {
-  it("lists the item's files and every format we can build, as one grid", () => {
+  it("lists every format we can build from the GeoParquet", () => {
     show();
-    for (const label of ["GeoParquet archive", "ISO 19139 metadata", "Shapefile (zip)",
+    for (const label of ["Shapefile (zip)",
       "GeoPackage", "File Geodatabase (zip)", "FlatGeobuf", "GeoJSON", "CSV (WKT)"]) {
       expect(screen.getByText(label), label).toBeDefined();
     }

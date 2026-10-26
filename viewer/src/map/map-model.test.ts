@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
-  mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
+import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, GEOM_FILTER, LAYER_COLORS, layerParam, mapDefaultLayers, NEUTRAL_VECTOR_COLOR, previewDefaultLayers,
+  mapKindOf, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
@@ -70,19 +70,6 @@ describe("mapKindOf", () => {
   });
 });
 
-describe("hasFootprint", () => {
-  it("is true for geometry or a real (>=4) bbox", () => {
-    expect(hasFootprint({ geometry: { type: "Point", coordinates: [-111, 39] } } as StacDoc)).toBe(true);
-    expect(hasFootprint({ bbox: [-114, 37, -109, 42] } as StacDoc)).toBe(true);
-  });
-
-  it("is false for aspatial items / too-short bbox / undefined", () => {
-    expect(hasFootprint(undefined)).toBe(false);
-    expect(hasFootprint({} as StacDoc)).toBe(false);
-    expect(hasFootprint({ bbox: [1, 2] } as StacDoc)).toBe(false);
-  });
-});
-
 describe("nextPick", () => {
   it("starts the nonce at 1 from a null previous pick", () => {
     expect(nextPick(null, 42)).toEqual({ id: 42, nonce: 1 });
@@ -97,56 +84,6 @@ describe("nextPick", () => {
 
   it("carries the new id and bumps the nonce when the feature changes", () => {
     expect(nextPick({ id: 42, nonce: 3 }, 99)).toEqual({ id: 99, nonce: 4 });
-  });
-});
-
-describe("nearestDetent", () => {
-  it("snaps to the closest detent", () => {
-    expect(nearestDetent(0)).toBe(0);
-    expect(nearestDetent(0.2)).toBe(0);
-    expect(nearestDetent(0.5)).toBe(1);
-    expect(nearestDetent(1)).toBe(2);
-  });
-
-  it("breaks a tie toward the lower detent, which shows more map", () => {
-    const mid = (DETENTS[0] + DETENTS[1]) / 2;
-    expect(nearestDetent(mid)).toBe(0);
-  });
-});
-
-describe("releaseDetent", () => {
-  it("snaps to the nearest detent on a slow release", () => {
-    expect(releaseDetent(0.5, 0.2)).toBe(1);
-  });
-
-  it("goes one detent further on a flick, even a short one", () => {
-    expect(releaseDetent(0.1, 2)).toBe(1);
-    expect(releaseDetent(0.6, 2)).toBe(2);
-    expect(releaseDetent(0.5, -2)).toBe(0);
-    expect(releaseDetent(0.9, -2)).toBe(1);
-    expect(releaseDetent(DETENTS[1], -2)).toBe(0);
-    expect(releaseDetent(DETENTS[1], 2)).toBe(2);
-  });
-
-  it("stays at the end when a flick has nowhere further to go", () => {
-    expect(releaseDetent(DETENTS[2], 2)).toBe(2);
-    expect(releaseDetent(DETENTS[0], -2)).toBe(0);
-  });
-});
-
-describe("contentTakesDrag", () => {
-  it("drags down only from the top of the content", () => {
-    expect(contentTakesDrag(0, 5, true, 2)).toBe(true);
-    expect(contentTakesDrag(0, 5, false, 2)).toBe(false);
-  });
-
-  it("drags up only while the sheet can grow", () => {
-    expect(contentTakesDrag(0, -5, false, 1)).toBe(true);
-    expect(contentTakesDrag(0, -5, true, 2)).toBe(false);
-  });
-
-  it("leaves a sideways swipe alone", () => {
-    expect(contentTakesDrag(6, 5, true, 1)).toBe(false);
   });
 });
 
@@ -271,7 +208,7 @@ describe("orderedSublayerIds", () => {
   it("omits a COG until its protocol is ready, and a zarr datacube always (the deck overlay draws it)", () => {
     expect(orderedSublayerIds([L("dem", { cogHref: "x" })], { styledCount: () => undefined, cogReady: false }))
       .toEqual([]);
-    expect(orderedSublayerIds([L("cube", { zarr: { href: "x", variable: "v", pinDims: [] } })],
+    expect(orderedSublayerIds([L("cube", { zarr: { href: "x", variable: "v", variables: ["v"], stepDims: {}, selection: {} } })],
       { styledCount: () => undefined, cogReady: true })).toEqual([]);
   });
 
@@ -280,5 +217,33 @@ describe("orderedSublayerIds", () => {
       { styledCount: () => undefined, cogReady: false }))
       .toEqual(["rpm-a_b_c-raster", "pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
     expect(slugOf("a.b:c")).toBe("a_b_c");
+  });
+});
+
+describe("the unstyled renders on the preview and the Map page", () => {
+  it("are both defaultVectorLayers: neutral in the preview, the layer's swatch on the Map page", () => {
+    const strip = (ls: ReturnType<typeof defaultVectorLayers>) => ls.map(({ type, filter, paint }) => ({ type, filter, paint }));
+    expect(previewDefaultLayers()).toEqual(strip(defaultVectorLayers(NEUTRAL_VECTOR_COLOR)));
+    expect(mapDefaultLayers("hazards_qfaults")).toEqual(defaultVectorLayers(colorForId("hazards_qfaults")));
+    // Same layers, same filters, same paint properties: only the colour differs.
+    expect(strip(mapDefaultLayers("x")).map((l) => [l.type, l.filter, Object.keys(l.paint)]))
+      .toEqual(previewDefaultLayers().map((l) => [l.type, l.filter, Object.keys(l.paint)]));
+  });
+});
+
+describe("defaultVectorLayers", () => {
+  it("draws every geometry type visibly when there is no style: fill + outline, line, circle", () => {
+    const layers = defaultVectorLayers("#123456");
+    expect(layers.map((l) => [l.kind, l.type])).toEqual([["fill", "fill"], ["line", "line"], ["circle", "circle"]]);
+    expect(layers.map((l) => l.filter)).toEqual([GEOM_FILTER.fill, GEOM_FILTER.line, GEOM_FILTER.point]);
+    const [fill, line, circle] = layers;
+    expect(fill.paint["fill-color"]).toBe("#123456");
+    expect(fill.paint["fill-opacity"]).toBeGreaterThan(0);
+    expect(fill.paint["fill-outline-color"]).toBe("#123456");
+    // The line layer's filter takes polygons too, so a polygon gets a real outline.
+    expect(GEOM_FILTER.line).toContainEqual(expect.arrayContaining(["Polygon"]));
+    expect(line.paint["line-width"]).toBeGreaterThan(0);
+    expect(circle.paint["circle-radius"]).toBeGreaterThan(0);
+    expect(circle.paint["circle-opacity"]).toBeGreaterThan(0);
   });
 });

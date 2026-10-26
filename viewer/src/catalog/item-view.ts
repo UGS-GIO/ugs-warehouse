@@ -1,14 +1,14 @@
 // Pure, unit-tested item view-model: the field getters, the one "home category" taxonomy, the
 // byline, the format buckets, and the curated/derived metadata partition — everything the catalog
 // item + discovery cards + the item-detail page derive from a STAC item. Framework/DOM-free: it reads
-// the STAC shapes (type-only ItemRef) plus the already-pure stac.ts helpers + map-model.validBbox, so
+// the STAC shapes (type-only ItemRef) plus the already-pure stac.ts helpers, so
 // it runs in the node test env. Consolidates the getters that had drifted between browse.tsx and
 // discovery-model.ts into ONE source of truth (both now import from here).
 import type { ItemRef } from "./browse";
-import { validBbox } from "@/map/map-model";
+import { GEOM_NAMES } from "@/data/columns";
 import {
-  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
-  type TableColumn, zarrAsset,
+  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, isOverview, KIND_RANK,
+  parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -98,14 +98,16 @@ export const fmtDate = (iso: string): string => {
   return iso;                                             // genuine full date
 };
 
-// "Has geometry" = a valid lon/lat bbox or an explicit geometry — i.e. it can draw on the map.
-export const hasGeometry = (it: ItemRef): boolean =>
-  Boolean(validBbox(it.data?.bbox) || it.data?.geometry);
+// Whether the item's data has geometry to export as a spatial format. A null geometry, or a
+// published column schema with no geometry column, means a plain table.
+export const isSpatialData = (d: StacDoc | undefined): boolean => {
+  if (!d || d.geometry === null) return false;
+  const cols = tableColumns(d);
+  return !cols || cols.some((c) => c.type?.toLowerCase() === "geometry" || GEOM_NAMES.includes(c.name));
+};
 
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
 export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
-
-
 
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {
@@ -186,10 +188,109 @@ export const categoryLabel = (key: string): string =>
 const FORMAT_LABEL: Partial<Record<ReturnType<typeof assetKind>, string>> = {
   cog: "COG", zarr: "Datacube", threeD: "3D", pdf: "PDF", image: "Image", parquet: "GeoParquet", text: "Text",
 };
+// ---- a publication's layers and tables, grouped ----
+// The publication page lists its Items: the plate, units and fence (no kind) first under "Map", then
+// by kind (Map layers, Tables, Supporting tables), and by source dataset first when there are several
+// (a publication of several quads). A source groups by its raw key, so two whose titles read the same
+// stay apart, and shows its title. A group of more than PART_GROUP_OPEN entries starts collapsed. A
+// publication whose links carry no kind is one flat list.
+export type PartGroup = { label?: string; parts: CollectionPart[]; collapsed: boolean };
+export type PartSection = { label?: string; count: number; collapsed: boolean; groups: PartGroup[] };
+export const PART_GROUP_OPEN = 8;
+const KINDS: [string, string][] = [["layer", "Map layers"], ["table", "Tables"], ["supporting", "Supporting tables"]];
+
+const kindGroups = (parts: CollectionPart[]): PartGroup[] => {
+  const known = new Set(KINDS.map(([k]) => k));
+  const other = [...new Set(parts.flatMap((p) => (p.kind && !known.has(p.kind) ? [p.kind] : [])))].sort();
+  return [...KINDS, ...other.map((k): [string, string] => [k, k])].flatMap(([kind, label]) => {
+    const of = parts.filter((p) => p.kind === kind);
+    return of.length ? [{ label, parts: of, collapsed: of.length > PART_GROUP_OPEN }] : [];
+  });
+};
+
+// A publication's parts by the attachment they came from (`ugs:source_file`), each then grouped
+// by groupParts (source dataset, then kind). The plate, units and fence stay one "Map" entry on
+// top. One file, or parts that carry none (older catalogs), is groupParts alone, with no file level.
+export type FileGroup = { label?: string; count: number; collapsed: boolean; sections: PartSection[] };
+
+export const groupPartsByFile = (parts: CollectionPart[]): FileGroup[] => {
+  const kinded = parts.filter((p) => p.kind);
+  const files = [...new Set(kinded.flatMap((p) => (p.sourceFile ? [p.sourceFile] : [])))];
+  if (!files.length) return parts.length ? [{ count: parts.length, collapsed: false, sections: groupParts(parts) }] : [];
+  const map = parts.filter((p) => !p.kind);
+  const out: FileGroup[] = map.length ? [{ count: map.length, collapsed: false, sections: [
+    { count: map.length, collapsed: false, groups: [{ label: "Map", parts: map, collapsed: false }] }] }] : [];
+  const loose = kinded.filter((p) => !p.sourceFile);
+  const groups = [...files.map((f) => ({ label: f, of: kinded.filter((p) => p.sourceFile === f) })),
+                  ...(loose.length ? [{ label: "Other files", of: loose }] : [])];
+  if (groups.length === 1) return [...out, { count: kinded.length, collapsed: false, sections: groupParts(kinded) }];
+  return [...out, ...groups.map(({ label, of }) =>
+    ({ label, count: of.length, collapsed: of.length > PART_GROUP_OPEN, sections: groupParts(of) }))];
+};
+
+export const groupParts = (parts: CollectionPart[]): PartSection[] => {
+  const kinded = parts.filter((p) => p.kind);
+  if (!kinded.length) return parts.length ? [{ count: parts.length, collapsed: false, groups: [{ parts, collapsed: false }] }] : [];
+  const map = parts.filter((p) => !p.kind);
+  const sections: PartSection[] = map.length
+    ? [{ count: map.length, collapsed: false, groups: [{ label: "Map", parts: map, collapsed: false }] }] : [];
+  const keyOf = (p: CollectionPart) => p.sourceKey ?? p.source ?? "";
+  const bySource = new Map<string, CollectionPart[]>();
+  for (const p of kinded) bySource.set(keyOf(p), [...(bySource.get(keyOf(p)) ?? []), p]);
+  if (bySource.size < 2) return [...sections, { count: kinded.length, collapsed: false, groups: kindGroups(kinded) }];
+  const labelled = [...bySource].map(([key, of]) => ({ key, of, label: of[0].source || key || "Other" }))
+    .sort((a, b) => a.label.localeCompare(b.label) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return [...sections, ...labelled.map(({ label, of }) =>
+    ({ label, count: of.length, collapsed: of.length > PART_GROUP_OPEN, groups: kindGroups(of) }))];
+};
+
+// ---- the item preview ----
+// Which preview an item gets: vector tiles (a serving topic, or a publication layer with its own
+// PMTiles) → the map plus its table; a raster mosaic → its tiles; anything else → the asset tabs.
+export const previewKindOf = (d: StacDoc): "vector" | "mosaic" | "assets" =>
+  pmtilesLink(d) ? "vector" : rasterTilesAsset(d) ? "mosaic" : "assets";
+
+// ---- the asset viewer's tabs ----
+export type AssetEntry = { key: string; asset: Asset; kind: AssetKind; doc?: StacDoc };
+
+// The publication's plate as one more tab: its COG (the drawable copy where there is one), read with
+// the plate Item for its projection. Absent until the plate loads, and for a pub with no plate.
+export const plateEntry = (plate: StacDoc | undefined): AssetEntry | undefined => {
+  const asset = plate && (cogRenderAsset(plate) ?? cogAsset(plate));
+  return asset && plate
+    ? { key: "plate", kind: "cog", doc: plate,
+        asset: { ...asset, title: String(plate.properties?.title ?? asset.title ?? "Map plate") } }
+    : undefined;
+};
+
+// The tabs over an item's assets, the publication PDF first, then by kind. `extra` (the plate) follows.
+export const assetEntries = (item: StacDoc, extra?: AssetEntry): AssetEntry[] => [
+  ...Object.entries(item.assets ?? {})
+    // thumbnails are redundant with the real image/cog, and overviews are only the FeatureServer's
+    .filter(([, a]) => !a.roles?.includes("thumbnail") && !isOverview(a))
+    .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
+    .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
+      || KIND_RANK[x.kind] - KIND_RANK[y.kind]
+      // A raster item carries the canonical COG in its source projection AND a web-mercator
+      // derivative, both kind "cog"; the drawable one leads, since this client cannot draw the other.
+      || Number(isDrawableCog(y.asset, item)) - Number(isDrawableCog(x.asset, item))),
+  ...(extra ? [extra] : []),
+];
+
+// A thumbnail or a metadata record (the ISO 19139 sidecar) describes the dataset; it isn't one of
+// its formats, so format chips and the Format facet skip it.
+export const isFormatAsset = (a: Asset): boolean =>
+  !a.roles?.includes("thumbnail") && !a.roles?.includes("metadata") && !isOverview(a);
+
+// The assets a result card lists as format chips. Thumbnails/images are already the card image and
+// metadata records are not formats, so they're dropped.
+export const formatBadgeAssets = (it: ItemRef): [string, Asset][] =>
+  Object.entries(it.data?.assets ?? {}).filter(([, a]) => isFormatAsset(a) && !a.type?.startsWith("image/"));
+
 export const formatsOf = (it: ItemRef): string[] => {
   const out = new Set<string>();
   for (const a of Object.values(it.data?.assets ?? {})) {
-    if ((a as Asset).roles?.includes("thumbnail")) continue; // a thumbnail isn't the dataset's format
+    if (!isFormatAsset(a as Asset)) continue;
     const label = FORMAT_LABEL[assetKind(a as Asset)];
     if (label) out.add(label);
   }
@@ -275,5 +376,12 @@ export const curatedDerived = (props: Record<string, unknown>): { curated: MetaR
   };
 };
 
-// Re-export the column-schema type so item-detail's schema table can import one thing from here.
-export type { TableColumn };
+// The curated record a reader wants on a layer's page: where the data comes from, how it may be used,
+// and who to ask.
+const ABOUT_DEFS: MetaDef[] = [
+  { key: "ugs:lineage", label: "Source" },
+  { key: "ugs:use_constraints", label: "Use constraints" },
+  { key: "ugs:point_of_contact", label: "Contact" },
+  { key: "ugs:topic_category", label: "Topic" },
+];
+export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);

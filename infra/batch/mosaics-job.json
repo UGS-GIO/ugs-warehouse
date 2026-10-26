@@ -27,13 +27,16 @@
             "displayName": "mosaics",
             "container": {
               "imageUri": "SET_BY_submit_mosaics_batch.sh",
-              "options": "--network host",
+              "options": "--network host --ulimit nofile=65536:65536",
               "volumes": ["/mnt/disks/mosaic-work:/mnt/mosaic-work"],
               "commands": ["SET_BY_submit_mosaics_batch.sh"]
             },
             "environment": {
               "variables": {
                 "MOSAIC_WORK_DIR": "/mnt/mosaic-work",
+                "CDN_URL_MAP": "ut-dnr-ugs-maps-prod-public-lb",
+                "CDN_PROJECT": "ut-dnr-ugs-maps-prod",
+                "CDN_HOST": "api.geology.utah.gov",
                 "GDAL_CACHEMAX": "8192",
                 "PUBS_DB_URL": "host=127.0.0.1 port=5432 dbname=ucrc user=schema_reader",
                 "PUBS_TABLE": "publications.pubs_feed_v1",

@@ -1,8 +1,9 @@
 import json
-import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pmtiles.reader import MmapSource, Reader
+from pmtiles.tile import TileType
 
 from ugs_warehouse.pubs import geolmap_mosaics as gm
 from ugs_warehouse.pubs import identity
@@ -19,7 +20,10 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         # ORPHAN-9 has a COG but no pub record -> must be skipped (no item to link to)
         gm._write_item("24k", ["GQ-968", "BYU-1", "ORPHAN-9"], gm.mosaic_object("24k"), by_sid,
-                       bounds=[-112.0, 39.0, -111.5, 39.4])
+                       bounds=[-112.0, 39.0, -111.5, 39.4], published=gm.PublishedPubs(
+                           plates=frozenset({"ugs-publications/GQ/GQ-968", "ugs-external/BYU/BYU-1"}),
+                           collections=frozenset({"ugs-publications/GQ/GQ-968",
+                                                  "ugs-external/BYU/BYU-1"})))
     item = captured["item"]
     assert item["bbox"] == [-112.0, 39.0, -111.5, 39.4]   # the mosaic's real footprint, not all of Utah
     assert item["geometry"]["coordinates"][0][0] == [-112.0, 39.0]
@@ -29,8 +33,9 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     derived = [lnk for lnk in item["links"] if lnk["rel"] == "derived_from"]
     hrefs = [lnk["href"] for lnk in derived]
     assert len(derived) == 2  # ORPHAN-9 skipped
-    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968.json") for h in hrefs)
-    assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1.json") for h in hrefs)
+    assert all(h.endswith("_plate.json") for h in hrefs)
+    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json") for h in hrefs)
+    assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1_plate/BYU-1_plate.json") for h in hrefs)
     assert "ORPHAN-9" in capsys.readouterr().err  # orphan COG must warn to stderr (fail loud)
 
 
@@ -229,10 +234,13 @@ def test_build_non_scoped_writes_catalog_item_and_refreshes():
          patch.object(gm.editions, "quad_by_series", return_value={"M-296DM": "Park City East Quad"}), \
          patch.object(gm.editions, "edition_graph", return_value={"M-296DM": {"deprecated": False}}), \
          patch.object(gm, "build_tier", return_value=True) as mock_build_tier, \
-         patch.object(gm.stac, "refresh_catalog") as mock_refresh:
+         patch.object(gm.stac, "refresh_catalog", return_value=[]) as mock_refresh, \
+         patch.object(gm.cdn, "mark") as mock_mark, patch.object(gm.cdn, "flush") as mock_flush:
         built = gm.build(["24k"], edition_mode="current")
 
     assert built == 1
+    mock_mark.assert_called_once_with(["geologic-maps-24k"])  # the COG is rewritten in place
+    mock_flush.assert_called_once_with([])
     call = mock_build_tier.call_args
     assert call.kwargs.get("suffix") == ""
     assert call.kwargs.get("write_stac_item") is True
@@ -261,71 +269,69 @@ def test_vrt_order_puts_unparseable_years_at_the_bottom_and_breaks_ties_by_sid()
     assert gm._vrt_order(["M-1", "M-2", "M-3", "M-4"], by_sid) == ["M-2", "M-3", "M-1", "M-4"]
 
 
-def test_pack_tiles_to_mbtiles_flips_y_verbatim_and_skips_sidecars(tmp_path):
-    """The packer copies `gdal raster tile`'s XYZ tree into MBTiles byte-for-byte (no re-encode) and
-    flips y to TMS. Non-tile sidecars (.aux.xml) are skipped; metadata carries format/zoom/bounds so
-    `pmtiles convert` can read it."""
-    tiles = {(14, 3, 6): b"webp-A", (14, 3, 7): b"webp-B", (13, 1, 2): b"webp-C"}
+def test_vrt_order_draws_reissues_of_older_maps_beneath_the_originals():
+    by_sid = {
+        "OFR-675DM": {"pub_year": "2017",
+                      "pub_name": "White Canyon area (GIS reproduction of plate 1 of USGS Bulletin 1125 [1964])"},
+        "MP-08-3DM": {"pub_year": "2008", "pub_name": "Geologic map of the White Canyon area"},
+        "OFR-713DR": {"pub_year": "2019", "pub_name": "Cedar Mesa area (GIS Reproduction of USGS Map in B-1186 [1965])"},
+        "M-1": {"pub_year": "2017", "pub_name": "Reproduction rates of Pennsylvanian brachiopods"},
+        "M-2": {"pub_year": "2017"},   # no title: an original
+    }
+    order = gm._vrt_order(["OFR-675DM", "MP-08-3DM", "OFR-713DR", "M-1", "M-2"], by_sid)
+    assert order == ["OFR-675DM", "OFR-713DR", "MP-08-3DM", "M-1", "M-2"]
+
+
+def _tree(root, tiles):
     for (z, x, y), blob in tiles.items():
-        d = tmp_path / "t" / str(z) / str(x)
+        d = root / str(z) / str(x)
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{y}.webp").write_bytes(blob)
-    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")   # sidecar, must be skipped
 
-    mb = tmp_path / "out.mbtiles"
-    n, minz, maxz = gm._pack_tiles_to_mbtiles(
-        str(tmp_path / "t"), str(mb), bounds=[-114.0, 37.0, -109.0, 42.0], name="geologic-maps-24k")
+
+def test_write_pmtiles_copies_tiles_verbatim_and_skips_sidecars(tmp_path):
+    """Tiles land byte-for-byte at their XYZ address and a .aux.xml sidecar never replaces one; the
+    header carries the real bounds, zoom range and WebP type; each tile file is gone once copied."""
+    tiles = {(14, 3, 6): b"webp-A", (14, 3, 7): b"webp-B", (13, 1, 2): b"webp-C"}
+    _tree(tmp_path / "t", tiles)
+    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")
+
+    out = tmp_path / "out.pmtiles"
+    n, minz, maxz = gm._write_pmtiles(
+        str(tmp_path / "t"), str(out), bounds=[-114.0, 37.0, -109.0, 42.0], name="geologic-maps-24k")
     assert (n, minz, maxz) == (3, 13, 14)
+    assert not list((tmp_path / "t").rglob("*.webp"))
 
-    con = sqlite3.connect(str(mb))
-    rows = {(z, x, y): blob for z, x, y, blob in
-            con.execute("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles")}
-    meta = dict(con.execute("SELECT name, value FROM metadata"))
-    con.close()
-    # y flipped XYZ->TMS: (14,3,6) -> row 2^14-1-6, blob byte-identical
-    assert rows[(14, 3, (1 << 14) - 1 - 6)] == b"webp-A"
-    assert rows[(14, 3, (1 << 14) - 1 - 7)] == b"webp-B"
-    assert rows[(13, 1, (1 << 13) - 1 - 2)] == b"webp-C"
-    assert meta["format"] == "webp"
-    assert meta["minzoom"] == "13" and meta["maxzoom"] == "14"
-    assert meta["bounds"] == "-114.0,37.0,-109.0,42.0"
-    assert meta["center"] == "-111.5,39.5,13"               # opens at the coarsest zoom, not maxz
-    con = sqlite3.connect(str(mb))
-    with pytest.raises(sqlite3.IntegrityError):             # MBTiles spec: metadata.name is unique
-        con.execute("INSERT INTO metadata VALUES ('format', 'png')")
-    con.close()
+    with open(out, "rb") as f:
+        reader = Reader(MmapSource(f))
+        header, meta = reader.header(), reader.metadata()
+        assert {zxy: reader.get(*zxy) for zxy in tiles} == tiles
+    assert header["tile_type"] == TileType.WEBP and header["clustered"]
+    assert header["center_zoom"] == 13
+    assert (header["min_lon_e7"], header["max_lat_e7"]) == (-1140000000, 420000000)
+    assert meta["name"] == "geologic-maps-24k"
 
 
-def test_pack_tiles_to_mbtiles_raises_when_every_zoom_dir_is_empty(tmp_path):
-    """A fully blank build can leave only empty zoom dirs; that must not become an empty MBTiles."""
+def test_write_pmtiles_raises_when_every_zoom_dir_is_empty(tmp_path):
+    """A fully blank build can leave only empty zoom dirs; that must not become an empty archive."""
     (tmp_path / "t" / "14" / "3").mkdir(parents=True)
     (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")
     with pytest.raises(RuntimeError, match="no tile files"):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "t"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
+        gm._write_pmtiles(str(tmp_path / "t"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
 
 
-def test_pack_tiles_to_mbtiles_raises_when_the_tile_dir_is_missing(tmp_path):
+def test_write_pmtiles_raises_when_the_tile_dir_is_missing(tmp_path):
     with pytest.raises(RuntimeError, match="no output dir"):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "nope"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
+        gm._write_pmtiles(str(tmp_path / "nope"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
 
 
-def test_pack_tiles_to_mbtiles_rejects_a_tile_in_another_format(tmp_path):
-    """Metadata says webp, so a .png tile would be silently mislabelled; refuse it."""
+def test_write_pmtiles_rejects_a_tile_in_another_format(tmp_path):
+    """The header says WebP, so a .png tile would be silently mislabelled; refuse it."""
     d = tmp_path / "t" / "14" / "3"
     d.mkdir(parents=True)
     (d / "6.png").write_bytes(b"b")
     with pytest.raises(RuntimeError, match="expected .webp"):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "t"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
-
-
-def test_pack_tiles_to_mbtiles_raises_on_empty_tree(tmp_path):
-    (tmp_path / "empty").mkdir()
-    with pytest.raises(RuntimeError):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "empty"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
+        gm._write_pmtiles(str(tmp_path / "t"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
 
 
 def test_vrt_zoom_and_bounds_reads_zoom_and_real_extent():
@@ -374,7 +380,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
     """build_tier's `gdal raster tile` argv: -r nearest at/above the mosaic's native zoom (the aligned
     masters copy through pixel-exact), -r average when a tier caps BELOW native; the full provisional
     flag set is always passed (guards a silent typo on a GDAL bump); and the mosaic's REAL bounds
-    (not the statewide UTAH_BBOX) reach the packer."""
+    (not the statewide UTAH_BBOX) reach the PMTiles writer."""
     by_sid = {"M-1": {"pub_year": "2022"}}
     extent = [-112.0, 39.0, -111.5, 39.4]
     calls: list[list[str]] = []
@@ -384,7 +390,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
         calls.append(cmd)
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    def fake_pack(tiledir, mbtiles, *, bounds, name):
+    def fake_pack(tiledir, out, *, bounds, name):
         captured["bounds"] = bounds
         return (10, min(gm.MOSAIC_MINZOOM, 17), 17)
 
@@ -394,7 +400,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
              patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, aligned, extent)), \
              patch.object(gm, "_band_types", return_value={"M-1": ["Byte"] * 4}), \
              patch.object(gm, "_check_vrt_sources") as check, \
-             patch.object(gm, "_pack_tiles_to_mbtiles", side_effect=fake_pack), \
+             patch.object(gm, "_write_pmtiles", side_effect=fake_pack), \
              patch.object(gm.os.path, "getsize", return_value=1 << 20), \
              patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
              patch.object(gm.gcs, "upload"), patch.object(gm, "MOSAIC_WORK_DIR", str(tmp_path)):
@@ -407,20 +413,87 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
     for flag in ("--overview-resampling", "--skip-blank", "--convention", "--min-zoom", "--max-zoom",
                  "-f", "--co"):
         assert flag in tile, f"missing {flag}"
-    assert tile[tile.index("--convention") + 1] == "xyz"               # the packer's y-flip assumes XYZ
+    assert tile[tile.index("--convention") + 1] == "xyz"               # the writer reads the tree as XYZ
     assert tile[tile.index("-f") + 1] == "WEBP"
     assert tile[tile.index("--co") + 1] == f"QUALITY={gm.TILE_QUALITY}"
     assert tile[tile.index("--max-zoom") + 1] == "17"
     assert captured["bounds"] == extent                               # real footprint, not UTAH_BBOX
 
     t12 = tile_argv(12)
-    assert t12[t12.index("--resampling") + 1] == "average"            # capped below native
+    assert t12[t12.index("--resampling") + 1] == "nearest"            # the z12 grid VRT copies through
+    assert t12[-2].endswith("24k-z12.vrt")
+    z12 = next(c for c in calls if c[0] == "gdalbuildvrt" and "-tr" in c)
+    assert z12[z12.index("-tr") + 1] == str(gm._WEBMERC_Z0_MPP / 2 ** 12) and "-tap" in z12
 
     off = tile_argv(17, aligned=False)
     assert off[off.index("--resampling") + 1] == "average"            # native zoom, but off-grid source
 
     up = tile_argv(18)
     assert up[up.index("--resampling") + 1] == "nearest"              # on-grid, upsampled past native
+    assert up[-2].endswith("24k.vrt")
+
+
+@pytest.mark.parametrize("maxz,aligned,cog_zoom,grid_vrts", [
+    (17, True, 15, ["24k-z15.vrt"]),               # native z17 PMTiles, COG on the z15 grid
+    (15, True, 15, ["24k-z15.vrt"]),               # the PMTiles and the COG share one grid VRT
+    (12, True, 12, ["24k-z12.vrt"]),               # a tier capped below z15 caps its COG too
+    (None, True, 15, ["24k-z15.vrt"]),
+])
+def test_build_tier_writes_a_webp_cog_from_a_grid_vrt(tmp_path, maxz, aligned, cog_zoom, grid_vrts):
+    calls: list[list[str]] = []
+    uploads: list[tuple] = []
+
+    def rec(cmd, *a, **k):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch.object(gm.subprocess, "run", side_effect=rec), \
+         patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, aligned, [-112, 39, -111, 40])), \
+         patch.object(gm, "_band_types", return_value={"M-1": ["Byte"] * 4}), \
+         patch.object(gm, "_check_vrt_sources"), \
+         patch.object(gm, "_write_pmtiles", return_value=(1, 4, 17)), \
+         patch.object(gm.os.path, "getsize", return_value=1 << 20), \
+         patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
+         patch.object(gm.gcs, "upload", side_effect=lambda *a, **k: uploads.append((a, k))), \
+         patch.object(gm, "MOSAIC_WORK_DIR", str(tmp_path)):
+        gm.build_tier("24k", ["M-1"], {"M-1": {}}, maxz=maxz, suffix="-test-current",
+                      write_stac_item=False)
+    built = [c[-1].rsplit("/", 1)[1] for c in calls if c[0] == "gdalbuildvrt"]
+    assert built == ["24k.vrt", *grid_vrts]                           # one grid VRT, never two
+    cog = next(c for c in calls if c[0] == "gdal_translate")
+    assert cog[2].endswith(grid_vrts[-1]) and cog[cog.index("-of") + 1] == "COG"
+    for co in ("TILING_SCHEME=GoogleMapsCompatible", f"ZOOM_LEVEL={cog_zoom}", "COMPRESS=WEBP",
+               f"QUALITY={gm.TILE_QUALITY}", "WARP_RESAMPLING=nearest", "OVERVIEW_RESAMPLING=average",
+               "BIGTIFF=YES"):
+        assert co in cog
+    (path, obj), kw = uploads[-1]
+    assert obj == f"{identity.MOSAIC_PREFIX}/geologic-maps-24k-test-current.cog.tif"
+    assert kw["content_type"] == gm.config.COG_MIME
+
+
+def test_cog_asset_is_a_visual_geotiff_with_header_fields(tmp_path):
+    """The ImageServer lists an item by a GeoTIFF asset keyed visual/cog/data."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    path = tmp_path / "m.cog.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=4, height=4, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(0, 0, 4.77, 4.77)) as ds:
+        ds.write(np.zeros((4, 4, 4), dtype="uint8"))
+    asset = gm._cog_asset(str(path), "geolmap/mosaics/geologic-maps-100k.cog.tif",
+                          gm.gcs.FileMeta(123, "1220ab"), "100k")
+    assert asset["type"].startswith("image/tiff") and asset["roles"] == ["visual"]
+    assert asset["href"].endswith("/geolmap/mosaics/geologic-maps-100k.cog.tif")
+    assert asset["proj:code"] == "EPSG:3857" and len(asset["bands"]) == 4
+    assert asset["file:size"] == 123
+
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("100k", [], gm.mosaic_object("100k"), {}, bounds=[-112, 39, -111, 40],
+                       published=gm.PublishedPubs(frozenset(), frozenset()), cog=asset)
+    assets = captured["item"]["assets"]
+    assert assets["visual"] == asset and assets["tiles"]["type"] == gm.PMTILES_MIME
 
 
 @pytest.mark.parametrize("built,scales,rc", [
@@ -593,7 +666,7 @@ def test_build_tier_gdal_cache_follows_the_environment(monkeypatch, env_value, e
     ([], ["24k", "100k", "250k", "500k"]),
     (["--scale", "all"], ["24k", "100k", "250k", "500k"]),
     (["--scale", "100k", "--scale", "500k"], ["100k", "500k"]),
-    (["--scale=100k", "--scale=500k"], ["100k", "500k"]),   # the Cloud Run job's args (cloudbuild.yaml)
+    (["--scale=100k", "--scale=500k"], ["100k", "500k"]),   # the --scale=<tier> form
     (["--scale", "500k", "--scale", "500k"], ["500k"]),
 ])
 def test_main_scale_is_repeatable(argv, expected):
@@ -624,17 +697,77 @@ def test_a_review_bake_reads_public_cogs_and_links_members_to_the_public_catalog
 
     monkeypatch.setattr(gm.gcs, "list_paths", fake_list)
     assert gm._cog_sids() == {"M-1"} and seen["bucket"] == "ut-dnr-ugs-maps-prod-public"
-    href = gm._public_item_href("ugs-publications/GQ", "GQ-968")
+    href = gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
     assert href == ("https://maps-assets.geology.utah.gov/warehouse/stac/"
-                    "ugs-publications/GQ/GQ-968/GQ-968.json")
+                    "ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
 
 
-def test_public_item_href_matches_the_public_item_path_in_a_public_bake():
-    assert gm._public_item_href("ugs-publications/GQ", "GQ-968") == gm.config.public_url(
-        gm.stac.item_object_path("ugs-publications/GQ", "GQ-968"))
+def test_public_href_matches_the_public_item_path_in_a_public_bake():
+    assert gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate")) == gm.config.public_url(
+        gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
 
 
-def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
+def test_public_href_with_an_empty_stac_prefix(monkeypatch):
     monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
-    assert gm._public_item_href("ugs-publications/GQ", "GQ-968").endswith(
-        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968.json")
+    assert gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate")).endswith(
+        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
+
+
+def test_mosaic_links_a_single_file_member_to_its_collection_and_others_to_the_plate_item():
+    by_sid = {
+        "GQ-968": {"series_id": "GQ-968", "pub_publisher": "USGS", "pub_name": "Geologic map of Foo"},
+        "GQ-852": {"series_id": "GQ-852", "pub_publisher": "USGS", "pub_name": "Geologic map of Bar"},
+    }
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("24k", ["GQ-968", "GQ-852"], gm.mosaic_object("24k"), by_sid,
+                       bounds=[-112.0, 39.0, -111.5, 39.4], published=gm.PublishedPubs(
+                           plates=frozenset({"ugs-publications/GQ/GQ-852"}),
+                           collections=frozenset({"ugs-publications/GQ/GQ-968",
+                                                  "ugs-publications/GQ/GQ-852"})))
+    hrefs = [lk["href"] for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
+    assert any(h.endswith("/GQ/GQ-968/collection.json") for h in hrefs)
+    assert any(h.endswith("/GQ/GQ-852/GQ-852_plate/GQ-852_plate.json") for h in hrefs)
+    assert not any(h.endswith("GQ-968_plate.json") for h in hrefs)
+
+
+def test_a_member_not_yet_in_the_collection_layout_links_to_its_old_item():
+    by_sid = {"GQ-1": {"series_id": "GQ-1", "pub_publisher": "USGS", "pub_name": "Old layout"}}
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("24k", ["GQ-1"], gm.mosaic_object("24k"), by_sid, bounds=[-112, 39, -111, 40],
+                       published=gm.PublishedPubs(frozenset(), frozenset()))
+    (link,) = [lk for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
+    assert link["href"].endswith("/ugs-publications/GQ/GQ-1/GQ-1.json")
+    assert link["type"] == "application/geo+json"
+
+
+def test_published_pubs_reads_the_public_catalog_in_the_source_bucket(monkeypatch):
+    monkeypatch.setattr(gm.config, "BUCKET", "review-bucket")
+    monkeypatch.setattr(gm.config, "SOURCE_BUCKET", "public-bucket")
+    monkeypatch.setattr(gm.config, "STAC_PREFIX", "review/stac")  # a review bake
+    pfx = "warehouse/stac"  # the public catalog's prefix, from PUBLIC_CATALOG_URL
+    listing = [
+        f"{pfx}/ugs-publications/GQ/GQ-1/collection.json",
+        f"{pfx}/ugs-publications/GQ/GQ-1/GQ-1_plate/GQ-1_plate.json",
+        f"{pfx}/ugs-publications/GQ/GQ-1/GQ-1__geo__Faults/GQ-1__geo__Faults.json",
+        f"{pfx}/ugs-publications/GQ/GQ-2/collection.json",                 # single-file
+        f"{pfx}/ugs-publications/GQ/GQ-2/README.md",
+        f"{pfx}/ugs-publications/GQ/GQ-3/GQ-3.json",                        # old layout
+        f"{pfx}/ugs-publications/GQ/collection.json",                       # an old series collection
+        f"{pfx}/ugs-mining-district-files/MD/MD-5/MD-5_plate/MD-5_plate.json",
+        f"{pfx}/ugs-external/BYU/BYU-1/collection.json",
+    ]
+    seen = []
+
+    def list_paths(prefix, *, bucket=None):
+        seen.append((prefix, bucket))
+        return [p for p in listing if p.startswith(prefix)]
+
+    monkeypatch.setattr(gm.gcs, "list_paths", list_paths)
+    published = gm.published_pubs()
+    assert published.plates == {"ugs-publications/GQ/GQ-1", "ugs-mining-district-files/MD/MD-5"}
+    assert published.collections == {"ugs-publications/GQ/GQ-1", "ugs-publications/GQ/GQ-2",
+                                     "ugs-external/BYU/BYU-1"}
+    assert seen == [(f"{pfx}/{g}/", "public-bucket") for g in identity.PUB_GROUPS]
+

@@ -71,6 +71,16 @@ gcloud storage buckets add-iam-policy-binding gs://ut-dnr-ugs-maps-prod-public \
 
 ## 2. Build + deploy (every release)
 
+Feature PRs merge to `develop`, which deploys the develop environment (`cloudbuild-dev.yaml`: `-dev`
+read-side services, no jobs, no data writes) and the dev viewer site. release-please keeps a release
+PR open on `develop`; merging it bumps the version. A PR from `develop` to `main`, merged with a
+merge commit, ships the release: the push to `main` runs `cloudbuild.yaml` and the live viewer deploy,
+and release-please tags it and publishes the GitHub release. A ruleset on `main` requires the
+`main source` check, so only `develop` merges there; an admin can bypass it for a hotfix, which then
+merges back into `develop`.
+
+The trigger runs this; by hand:
+
 ```bash
 gcloud builds submit --config cloudbuild.yaml --project=$DEPLOY_PROJECT \
   --substitutions=_REGION=$REGION,_AR_REPO=$AR_REPO,_RUNTIME_SA=$RUNTIME_SA,_SQL_INSTANCE=$SQL_INSTANCE,_SECRET=$SECRET
@@ -96,7 +106,12 @@ gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project
 ```
 
 Per-series instead of `--all`: override args at execute time —
-`... execute geolmap-harvest --args=M-283 ...`
+`... execute geolmap-harvest --args=-m,ugs_warehouse.pubs.harvest,M-283 ...` (`--args` replaces the job's whole argument list, so it repeats the module)
+
+Source rasters: a map with a raster at `gs://ut-dnr-ugs-maps-prod-public/geolmap/sources/30x60/<series id>.tif`
+takes its plate from that file, and its GIS zip supplies only the units. The folder is the one place
+a map's source raster lives; `index.csv` beside the rasters records where each came from. Each
+raster must already carry its CRS. `GEOLMAP_SOURCES_PREFIX` overrides the object prefix.
 
 ## 4. Pub/Sub event-driven ingest (dataELT #418)
 
@@ -153,6 +168,7 @@ The viewer deploys from **GitHub Actions**, not Cloud Build:
 | workflow | trigger | lands on |
 |---|---|---|
 | `.github/workflows/firebase-hosting-merge.yml` | push to `main` touching `viewer/**` | live site `data-geology-utah-gov` |
+| `.github/workflows/firebase-hosting-develop.yml` | push to `develop` touching `viewer/**` | dev site `dev-data-geology-utah-gov` |
 | `.github/workflows/firebase-hosting-pull-request.yml` | PR touching `viewer/**` | preview channel `pr-<n>`, public no-login URL, 7-day expiry |
 
 Both use `FirebaseExtended/action-hosting-deploy` with a service-account secret — the same pattern
@@ -180,8 +196,8 @@ The Hosting *site* is tofu-managed (`infra/firebase.tf`). Served at
 
 1. Add the repo secret `FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` — copy the value from
    `ugs-map-viewer`, which already holds a key for the same project.
-2. Optional repo variables `VITE_FEATURES_BASE` / `VITE_TILES_BASE`: the deployed OGC API Features
-   and tiles URLs. Cloud Build resolves these with `gcloud run services describe`; an Action has no
+2. Optional repo variables `VITE_FEATURES_BASE` / `VITE_GEOSERVICES_BASE`: the deployed OGC API
+   Features and FeatureServer URLs. Cloud Build resolves these with `gcloud run services describe`; an Action has no
    GCP credentials, so they are variables here. Left unset, the viewer hides those links rather
    than printing dead ones.
 
@@ -263,15 +279,19 @@ rotting because the script fails when the table is wrong. See `scripts/check_gra
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/firebasehosting.admin | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — granted out-of-band for #220 (2026-09-03). Missing this and both Firebase deploy workflows fail closed with no image published |
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseIapDeploy | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — the app stack applies AS this SA, which cannot manage its own privileged role. Without it the deploy cannot set IAP IAM/settings on review-api. Permission list lives in `infra/roles/warehouseIapDeploy.yaml` |
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudbuild.builds.editor | project | ut-dnr-ugs-backend-tools | **NOT Terraform-managed** — needed to manage Cloud Build triggers, which live in the build project, not `project_id`. |
+| warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseCdnInvalidate | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — the URL map is outside tofu. Without it the ingest, restyle and retire jobs cannot invalidate a changed layer's FeatureServer paths; the layers stay pending and the run fails. Permission list lives in `infra/roles/warehouseCdnInvalidate.yaml` |
+| 534590904912-compute@developer.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseCdnInvalidate | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed**, as above. Without it `deploy-geoservices` or `deploy-imageserver` fails after the rollout when a new release must clear the CDN cache |
 <!-- check-grants:end -->
 
 A custom role's *binding* is checked above; its *permission list* is not — a policy only records
-which role is bound, never what the role contains. `infra/roles/warehouseIapDeploy.yaml` holds that
-list, and re-applying it is one command:
+which role is bound, never what the role contains. `infra/roles/<role>.yaml` holds that list, and
+re-applying it is one command (`create` the first time):
 
 ```bash
 gcloud iam roles update warehouseIapDeploy \
   --project=ut-dnr-ugs-maps-prod --file=infra/roles/warehouseIapDeploy.yaml
+gcloud iam roles update warehouseCdnInvalidate \
+  --project=ut-dnr-ugs-maps-prod --file=infra/roles/warehouseCdnInvalidate.yaml
 ```
 
 `534590904912-compute@developer.gserviceaccount.com` is the project's default Compute SA — see
@@ -299,3 +319,137 @@ gcloud scheduler jobs create http warehouse-nightly \
   no HMAC). DuckLake writes via obstore-fsspec — same auth. No gcsfuse, no GCS extension.
 - **Service (Pub/Sub push)** — deployed by `cloudbuild.yaml` (`deploy-service`) and wired
   by the `wire-pubsub` step. See **§4** for the two IAM grants still needed (GCP perms).
+- **ImageServer** (`ugs-warehouse-imageserver`): `deploy-imageserver` creates it, then
+  `infra/imageserver.tf` imports it and adds the NEG and CDN backend; the maps-assets URL map routes
+  its paths (route rules in that file). `smoke-geoservices` fails until that route exists.
+- **CDN cache on deploy.** `scripts/deploy_geoservice.sh` sets `SERVED_BUILD` on each FeatureServer
+  and ImageServer revision: the release its Dockerfile pins plus a hash of that Dockerfile. When it
+  differs from the revision that takes the most traffic, the deploy clears the CDN cache of
+  `api.geology.utah.gov` (the FeatureServer `/*`, the ImageServer `/ugs/rest/services/*`); any
+  other deploy keeps it. If the clear fails, the step prints the command and fails. A rerun of the
+  build does not clear again, because the new revision already serves that build: run the printed
+  command.
+
+## Environment variables
+
+Every variable the Python code reads, by component. Defaults are what the code uses when the
+variable is unset. Prefix variables move where an artifact is written; change them only for a
+separate deploy such as review.
+
+### Shared (`core/config.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WAREHOUSE_BUCKET` | `ut-dnr-ugs-maps-prod-public` | Bucket every artifact is written to |
+| `WAREHOUSE_SOURCE_BUCKET` | `WAREHOUSE_BUCKET` | Bucket a producer reads existing COGs and footprints from when it writes elsewhere |
+| `WAREHOUSE_PUBLIC_BASE_URL` | `https://maps-assets.geology.utah.gov` | Base for public asset hrefs |
+| `WAREHOUSE_PUBLIC_CATALOG_URL` | prod `catalog.json` on the CDN | Prod catalog the review catalog links to |
+| `WAREHOUSE_STAC_PREFIX` | `warehouse/stac` | STAC root; a `review/` prefix marks the review catalog |
+| `WAREHOUSE_{ARCHIVE,PMTILES,THUMBS,FEATURES,OVERRIDES}_PREFIX` | `warehouse/{geoparquet,pmtiles,thumbs,featureserv,overrides}` | Per-artifact object prefixes |
+| `WAREHOUSE_CATALOG_ID`, `WAREHOUSE_CATALOG_TITLE` | `ugs-warehouse`, `Utah Geological Survey data warehouse` | Root catalog id and title |
+| `WAREHOUSE_EXTERNAL_CATALOGS` | USWB catalog | JSON list of `[url, title]` linked under the root |
+| `WAREHOUSE_LICENSE`, `WAREHOUSE_LICENSE_URL` | `CC-BY-4.0` and its URL | License stamped on collections |
+| `WAREHOUSE_STAGED_SOURCE_BUCKETS` | `stagedrasters` | Comma list of buckets a raster promote may copy from |
+| `PGF_BASE_URL` | the features service `run.app` URL | OGC API Features base advertised in the catalog |
+| `STYLES_CDN_BASE`, `STYLES_INDEX_URL`, `STYLES_INDEX_OBJECT` | `{PUBLIC_BASE_URL}/styles`, `{STYLES_CDN_BASE}/index.json`, `styles/index.json` | ugs-styles manifest location |
+
+### Database
+
+| Var | Default | Purpose |
+|---|---|---|
+| `POSTGRES_DSN` | `host=127.0.0.1 port=5433 dbname=seamlessgeolmap` | Source DB (libpq DSN) |
+| `DUCKLAKE_CATALOG_DSN` | `POSTGRES_DSN` | DuckLake catalog DB |
+| `PGPASSWORD` | none | Read by libpq when the DSN has no password |
+| `CLOUDSQL_INSTANCE`, `DB_NAME`, `DB_USER`, `DB_PASS` | none, `seamlessgeolmap`, `schema_owner` / `review_writer` | `scripts/cloudrun_entrypoint.sh` builds the DSNs from these; `comments.py` connects with them |
+| `RUN_MODULE` | `ugs_warehouse.vector.ingest` | Module the entrypoint runs |
+
+### Vector ingest and push handler
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WAREHOUSE_TABLE_SUFFIX` | `_current` | Table suffix discovery looks for (`_review` in review) |
+| `DUCKDB_MAX_MEMORY` | `128MB` | DuckDB memory cap for the source read and transform |
+| `DUCKDB_SORT_CHUNK_ROWS` | `50000` | Starting rows per transform pass; halved on OOM |
+| `INGEST_CHUNK_TARGET_BYTES` | `16777216` | Tables smaller than this many bytes are read in one scan |
+| `INGEST_PAGES_PER_CHUNK` | `2000` | Postgres heap pages per read chunk; `0` disables chunking |
+| `DUCKLAKE_DATA_PATH` | `gs://{WAREHOUSE_BUCKET}/warehouse/ducklake/` | DuckLake data files |
+| `DUCKLAKE_METADATA_SCHEMA` | `ducklake_catalog` | Postgres schema for DuckLake metadata |
+| `OVERRIDE_DATA_PATH` | `False` | `True` adds `OVERRIDE_DATA_PATH TRUE` to the ATTACH |
+| `TIPPECANOE_BIN`, `TIPPECANOE_OPTS` | `tippecanoe`, none | Tile builder binary and extra flags |
+| `INGEST_JOB`, `INGEST_JOB_REGION`, `INGEST_JOB_PROJECT` | `ugs-warehouse-ingest`, `us-central1`, none (required) | Job the push handler starts |
+| `INGEST_INLINE` | `0` | `1` ingests inside the handler (local dev, tests) |
+| `RETIRE_REQUESTED_BY` | none | Operator identity the ops console passes to a retire run |
+| `CDN_URL_MAP`, `CDN_PROJECT` | none | URL map whose CDN the ingest, restyle and retire jobs invalidate a changed layer's FeatureServer paths on (`core/cdn.py`); unset marks and invalidates nothing |
+| `CDN_HOST`, `CDN_SERVICES_PATH` | none, `/ugs/rest/services` | Host and path prefix of the invalidated paths: `/`, `{CDN_SERVICES_PATH}` and `{CDN_SERVICES_PATH}/` exactly (the layer list and services directory), and per item `{CDN_SERVICES_PATH}/{item id}` exactly plus `{CDN_SERVICES_PATH}/{item id}/*`. A path without a trailing `*` matches only itself, with any query string |
+| `CDN_INVALIDATE_DELAY_S` | `360` | Seconds to wait first, so the servers have reloaded the layer (`CACHE_TTL` 300 + 60) before the CDN refetches it |
+| `CDN_PENDING_PREFIX` | `_cdn/pending` | Where a job marks a layer pending, one object per item id, until its invalidation succeeds |
+
+### DuckLake maintenance (`vector/maintain.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `DUCKLAKE_KEEP_DAYS` | `7` | Snapshot retention |
+| `DUCKLAKE_TARGET_FILE_SIZE` | `256MB` | Compaction target file size |
+| `DUCKLAKE_MERGE_BUDGET_SECONDS` | `4800` | Time budget for the compaction loop |
+| `DUCKLAKE_JOB_TIMEOUT_SECONDS`, `DUCKLAKE_CLEANUP_RESERVE_SECONDS` | `7200`, `1200` | Task timeout, and the part held back for cleanup |
+| `DUCKLAKE_ORPHAN_GRACE_DAYS` | `7` | Age before an unreferenced file counts as an orphan |
+
+### Publications (`pubs/`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `PUBS_DB_URL` | none (required) | Publications DB, MySQL URL or Postgres DSN |
+| `PUBS_TABLE`, `PUBS_ATT_TABLE` | Postgres: `pubs.ugspubsdraft2`, `pubs.attached_data`; MySQL: `pubsdb`, `pubsattacheddata` | Feed tables |
+| `GEOLMAP_{COG,FOOTPRINTS,MOSAIC,UNITS,3D,VECTORS}_PREFIX` | `geolmap/{cogs,footprints,mosaics,units,3d,vectors}` | Pub artifact prefixes |
+| `GEOLMAP_SOURCES_PREFIX` | `geolmap/sources/30x60` | Placed 30x60 source rasters the harvest warps when present |
+| `PUB_{FILES,THUMB,CONTENTS,SEARCH,FULLTEXT,EMB}_PREFIX` | `pubs/{files,thumbs,contents,search,fulltext,embeddings}` | Pub sidecar prefixes. Ingest keeps its Crossref DOI snapshot beside `PUB_FILES_PREFIX` (`pubs/doi-registry.json`), so a sandbox ingest sets `PUB_FILES_PREFIX` too |
+| `PUB_GRAPH_PREFIX`, `PUB_FTS_OBJECT`, `PUB_VSS_OBJECT` | `graph`, `pubs/search/pubs-fts.duckdb`, `pubs/search/pubs-vss.duckdb` | Graph and search outputs |
+| `COG_COMPRESS`, `COG_QUALITY`, `COG_DPI`, `COG_ZOOM_STRATEGY` | `deflate`, `90`, `600`, `auto` | COG build settings |
+| `COLOR_SAT_FLOOR` | `8` | Color spread below which a raster counts as grayscale |
+| `MAX_ZIP_SIZE_MB`, `SKIP_EXISTING`, `THUMBS` | `0` (no cap), `1`, `1` | Harvest limits and switches |
+| `GEOLMAP_MANIFEST`, `HARVEST_REPORT`, `HARVEST_REPORT_GCS` | none, `harvest-report.json`, none | Harvest input manifest and run report |
+| `PUB_THUMB_PX`, `PUB_THUMB_MAX_PDF_MB` | `400`, `1000` | Cover thumbnail size and PDF download cap |
+| `MIRROR_WORKERS`, `MIRROR_MAX_MB` | `4`, `0` (no cap) | Source-file mirror concurrency and size cap |
+| `MOSAIC_MINZOOM`, `MOSAIC_WEBP_QUALITY`, `MOSAIC_COG_MAXZOOM`, `MOSAIC_WORK_DIR` | `4`, `90`, `15`, system temp | Raster mosaic build (PMTiles and WebP COG) |
+| `PUB_GRAPH_SIMILAR_K` | `5` | Neighbours per pub in the graph |
+| `EMBED_MODEL`, `EMBED_CHUNK_CHARS`, `FASTEMBED_CACHE` | `BAAI/bge-small-en-v1.5`, `1200`, none | Embedding job |
+| `POSTGREST_URL` | the seamless-units PostgREST URL | Units source when no DSN is set (`units_pmtiles.py`) |
+
+### Raster
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WAREHOUSE_RASTER_COG_PREFIX` | `cog` | Promoted COG prefix |
+
+### Review serving (`serve.py`, `comments.py`, `iap.py`, `review_catalog.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `REVIEW_API_ONLY` | unset | Serve only `/api/*`, not the review bucket (the public twin service) |
+| `REVIEW_STATIC_ONLY` | unset | Serve only the bucket, not the API (preview hosts) |
+| `REVIEW_VIEWER_PREFIX`, `REVIEW_APP_PREFIX` | `review/viewer`, `review/app` | SPA bundles in the review bucket |
+| `REVIEW_CORS_ORIGINS`, `REVIEW_CORS_ORIGIN_REGEX` | none | Allowed browser origins for the API |
+| `REVIEW_DB_DSN` | none | Comments DB URI; else the Cloud SQL socket vars above |
+| `REVIEW_EDITOR_EMAILS`, `REVIEW_EDITOR_DOMAINS` | none | Bearer-token writers allowed to comment; empty means IAP users only |
+| `FIREBASE_PROJECT_ID` | `ut-dnr-ugs-maps-prod` | Project that issues the review app's ID tokens |
+| `IAP_AUDIENCE` | derived from `K_SERVICE` | Expected IAP JWT audience |
+| `REVIEW_SIGNED_URL_TTL_MIN` | `60` | Signed asset URL lifetime |
+| `REVIEW_CATALOG_MAX_DOCS` | `1000` | Cap on the catalog crawl |
+
+### Topic thumbnails (`vector/thumbs.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `TOPIC_THUMB_W`, `TOPIC_THUMB_H`, `TOPIC_THUMB_TIMEOUT_MS` | `480`, `320`, `30000` | Render size and timeout |
+
+### Logging
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Root log level for the services and jobs that call `core.logs.setup()` |
+
+### Set by Cloud Run
+
+`PORT`, `K_SERVICE`, `CLOUD_RUN_JOB`, `CLOUD_RUN_TASK_INDEX`, `CLOUD_RUN_TASK_COUNT`. Harvest and 3D split
+work across tasks with the last two; `core/logs.py` writes JSON log lines when `K_SERVICE` or
+`CLOUD_RUN_JOB` is set.

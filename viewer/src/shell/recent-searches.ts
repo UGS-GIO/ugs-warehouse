@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import type { Bounds } from "@/map/place-locator";
 
 export type RecentPick =
-  | { kind: "place"; label: string; bounds: Bounds }
+  | { kind: "place"; label: string; bounds: Bounds; outline?: boolean }
   | { kind: "layer" | "publication"; label: string; href: string; bbox?: Bounds };
 
 const KEY = "ugs:recent-searches";
@@ -24,7 +24,7 @@ const isPick = (p: unknown): p is RecentPick => {
 
 const keyOf = (p: RecentPick) => (p.kind === "place" ? `place:${p.label}` : `item:${p.href}`);
 
-export function getRecent(): RecentPick[] {
+function getRecent(): RecentPick[] {
   let raw: string | null;
   try { raw = localStorage.getItem(KEY); } catch { return NONE; }
   if (raw !== cache.raw) {

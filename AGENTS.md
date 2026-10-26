@@ -10,6 +10,7 @@ Cloud-native warehouse for UGS. The vector producer forks at dataELT's published
 
 ```bash
 pip install -e ".[dev]"          # editable install + pytest/ruff
+uv lock                          # after any pyproject.toml dep change; images + CI install from uv.lock
 
 ruff check src service scripts    # lint (line-length 100)
 python -m pytest tests/ -q        # hermetic: in-memory GCS + fake manifests/DB, no network
@@ -33,12 +34,31 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 - **Source → transform contract.** `source.read()` returns a pyarrow Table where geom is `geom_wkb` BLOB (server-side `ST_AsBinary`) and each row carries `target_epsg` (the CRS the WKB is in) and `source_epsg` (upstream provenance only). `transform.run()` hydrates `geom_wkb` to DuckDB `GEOMETRY`, reprojects `target_epsg → 4326` only if needed, adds `h3_r9`, and sorts by `ST_Hilbert(centroid)` for row-group pruning. A new source backend MUST emit the same shape.
 - **Topics are not hard-coded.** `Topic` is `{schema, layer}` (`topics.py`); `discover()` scans `MART_SCHEMAS` at runtime. A new upstream `_current` needs zero config here.
 - **Sinks are isolated.** Each sink runs in its own try/except; one failure logs, sets `rc=1`, and never stops the others. The Cloud Run handler acks Pub/Sub even on `rc!=0` to avoid retry storms; the next publish recovers.
-- **The catalog derives from truth.** Sinks write items via `core.stac.write_item()`; `core.stac.refresh_catalog()` rebuilds root `catalog.json` + every `collection.json` from what's in GCS. Never hand-edit catalog JSON. Keep the pure builders in `core/stac.py` (`build_item`, `_group_items`, `_collection_doc`, `_root_doc`) side-effect free.
+- **The catalog derives from truth.** Sinks write items via `core.stac.write_item()`; `core.stac.refresh_catalog()` rebuilds root `catalog.json` + every group/series index from what's in GCS (pubs ingest writes each publication's `collection.json`). Never hand-edit catalog JSON. Keep the pure builders in `core/stac.py` (`build_item`, `build_collection`, `_group_items`, `_collection_doc`, `_subcatalog_doc`, `_root_doc`) side-effect free.
 - **DuckLake metadata is pinned** to `DUCKLAKE_METADATA_SCHEMA` (default `ducklake_catalog`) so it never lands in `public`. `sink_ducklake` does `CREATE OR REPLACE TABLE`; DuckLake snapshots keep prior versions readable.
 - **Do NOT add httpfs for GCS.** Org policy blocks the HMAC keys httpfs needs. File sinks write a local temp file and upload with **obstore** (ADC). `sink_ducklake` on a `gs://` data path registers **obstore via fsspec** instead. A GCS 403 is fixed by the fsspec registration, never by httpfs. No gcsfuse, no GCS extension, no HMAC.
 - **PMTiles** come from the `tippecanoe` binary in the Docker image (DuckDB writes GeoJSONSeq to a temp file).
 
+## Use existing tooling
+
+Do not write code that a dependency or a helper in this repo already provides. Before you add a helper, search `core/` and the libraries below. If none fits, say why in the PR.
+
+- STAC: `pystac` (dev only), `rustac` (items.parquet mirror), `rio-stac` (COG asset fields), `stactools`. The catalog builders in `core/stac.py` are the only place that builds catalog JSON.
+- GeoParquet: `geoparquet-io` (gpio) to write and check. pyarrow's `ParquetWriter` for the vector
+  archive, for the page index DuckDB's `COPY` cannot write (`vector/sink_archive.py`).
+- PMTiles: the tippecanoe step in `vector/sink_pmtiles.py` (`TILE_OPTS`). Do not add a second set of tippecanoe flags.
+- COGs: `rio-cogeo`, `rasterio`. GDAL CLIs read COGs in place over `/vsigs/`; do not download them first.
+- Object storage: `obstore` through `core/gcs.py`. One `obs.delete(store, paths)` call deletes a batch.
+- Stdlib first: `mimetypes`, `xml.etree`. For sizes, `pydantic.ByteSize` (already a dependency).
+- Viewer: react-query for data loading, minisearch, hyparquet, duckdb-wasm, `pmtiles`, `@turf/bbox`. Reuse the helpers in `viewer/src/stac.ts` (and `viewer/src/stac/`), `viewer/src/map/map-model.ts` and `viewer/src/data/columns.ts`.
+
+Check these projects before you build something new: [portolan-sdi](https://github.com/portolan-sdi), [developmentseed](https://github.com/developmentseed), [stac-utils](https://github.com/stac-utils), [geoparquet-io](https://github.com/geoparquet/geoparquet-io). Agent skills for Portolan: [portolan-skills](https://github.com/portolan-sdi/portolan-skills).
+
+Performance matters. Jobs run on Cloud Run, where `/tmp` is RAM. Do not hold two copies of a dataset, `del` a frame when you are done with it, and stream instead of collecting every item.
+
 ## Environment variables
+
+The main ones. Every variable, by component: [docs/DEPLOY.md](docs/DEPLOY.md#environment-variables).
 
 | Var | Used by | Notes |
 |---|---|---|
@@ -59,9 +79,11 @@ GCS auth is ADC: `gcloud auth application-default login` locally, the service ac
 
 ## Conventions
 
+- Branch from `develop` and open PRs against `develop`. `main` only takes release PRs from `develop`, and `main-source.yml` fails any other PR into `main`.
 - Python 3.11+, `from __future__ import annotations` at the top of each module.
 - Target geometry is **EPSG:4326**; `transform.TARGET_SRS` / `H3_RESOLUTION` are the single source of truth.
 - dbt convention: the geometry column is `geom`; `_current` is the table suffix.
 - A change touching the `_current` contract is coordinated with dataELT's owner; neighbor repos (`dataELT`, `ugs-ingest`, `ugs-map-viewer`) are read-only from here.
 - **Don't commit plans, specs, or handoff notes.** Design and progress go in the PR description or the Jira ticket; git history keeps them. Docs in `docs/` describe the system as it is and change in the same PR as the code they describe. A lasting decision gets a line in the relevant doc, not a new file.
+- A dependency bump that changes a deployed service (e.g. `FEATURESERVER_VERSION`) must use the `fix(deps):` prefix so release-please opens a release. `chore(deps)` does not trigger a release.
 - Querying the publications corpus with the `pubs-duckdb` MCP: `docs/QUERYING_PUBS.md`.

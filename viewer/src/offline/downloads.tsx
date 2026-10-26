@@ -1,12 +1,11 @@
 // The download queue as a list: what is saving, what is waiting, what failed and why.
-import { useOffline } from "./store";
+import { useJobs, useOffline } from "./store";
 import * as store from "./store";
-import { useJobs } from "./use-offline";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import { type Job, jobProgress } from "./queue";
 
-const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
+export const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
 
 export function Downloads() {
   const jobs = useJobs();
@@ -17,9 +16,14 @@ export function Downloads() {
   if (!jobs.length) return null;
   return (
     <section className="flex flex-col gap-1">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        Downloads · {jobs.length}
-      </h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Downloads · {jobs.length}
+        </h2>
+        {(jobs.length > 1 || jobs.some((j) => j.state === "running")) && (
+          <button type="button" className={BTN} onClick={() => void store.cancelAllJobs()}>Cancel all</button>
+        )}
+      </div>
       <p className="text-sm text-muted-foreground">
         One at a time, in order. If you close the page or lose signal, they carry on from where they
         stopped next time.
@@ -28,7 +32,7 @@ export function Downloads() {
         {jobs.map((j) => (
           <li key={j.id} className="flex items-center gap-2 px-3 py-2">
             <div className="min-w-0 flex-1">
-              <span className="block truncate">{j.label}</span>
+              <span className="block wrap-anywhere">{j.label}</span>
               <div className={`text-sm ${j.state === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
                 {j.state === "failed" ? j.error
                   : j.state === "running" ? `Saving ${jobProgress(j)}`

@@ -12,12 +12,13 @@ bbox/row_count come from the transformed view.
 from __future__ import annotations
 
 import datetime
+import json
 import sys
 
 import duckdb
 
-from ..core import config, gcs, stac
-from . import ducklake, introspect
+from ..core import cdn, config, gcs, stac
+from . import ducklake, introspect, sink_archive
 from .topics import Topic
 
 # The nesting catalog. A topic's own collection is its dbt mart schema, one level down — the
@@ -25,7 +26,6 @@ from .topics import Topic
 # title is that name prettified; nothing else is authored for it (see core.stac).
 CATALOG = stac.SERVING_TOPICS_CATALOG
 PARQUET_MIME = config.PARQUET_MIME
-PMTILES_MIME = config.PMTILES_MIME
 
 
 def collection_path(schema: str) -> str:
@@ -46,29 +46,9 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {view}").fetchone()[0])
 
 
-def _table_type(duck_type: str) -> str:
-    """DuckDB column type → STAC Table extension type string."""
-    t = duck_type.upper()
-    if t.startswith("GEOMETRY"):
-        return "geometry"
-    if "INT" in t or t == "HUGEINT":
-        return "integer"
-    if t in ("DOUBLE", "FLOAT", "REAL") or t.startswith("DECIMAL"):
-        return "number"
-    if t in ("BOOLEAN", "BOOL"):
-        return "boolean"
-    if t.startswith("TIMESTAMP"):
-        return "datetime"
-    if t == "DATE":
-        return "date"
-    if "CHAR" in t or t in ("VARCHAR", "TEXT", "STRING"):
-        return "string"
-    return duck_type.lower()
-
-
 def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
     """`table:columns` describing the GeoParquet — the real materialized columns + their types."""
-    return [{"name": r[0], "type": _table_type(str(r[1]))}
+    return [{"name": r[0], "type": stac.table_type(str(r[1]))}
             for r in con.execute(f"DESCRIBE {view}").fetchall()]
 
 
@@ -116,31 +96,26 @@ def _publication_datetime(con: duckdb.DuckDBPyConnection, view: str) -> str | No
     return stamp.astimezone(datetime.UTC).isoformat()
 
 
-def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
-          *, title: str | None = None, description: str | None = None,
-          metadata: dict | None = None, bbox: list[float] | None = None,
-          row_count: int | None = None, related: dict | None = None,
-          content_hash: str | None = None,
-          file_meta: dict[str, gcs.FileMeta] | None = None) -> None:
-    rel = related or {}
-    rel_assets = rel.get("assets") or {}
-    rel_links = rel.get("links") or []
-    rel_fks = rel.get("foreign_keys") or []
-    bb = bbox if bbox is not None else _bbox(con, view)
-    rc = row_count if row_count is not None else _row_count(con, view)
-    # The data's date when it has one; the clock only as a fallback (#65).
-    item_dt = _publication_datetime(con, view) or datetime.datetime.now(datetime.UTC).isoformat()
-    md = metadata or {}
+def _fill_title(item: dict, stem: str) -> None:
+    """Title an item that has no human one with its default render's title, else its id."""
+    props = stac.doc_fields(item)
+    if not props.get("title"):
+        render = (props.get("ugs:renders") or {}).get("default") or {}
+        props["title"] = stac.human_title(render.get("title")) or stac.prettify(stem)
+        print(f"[{stem}] WARNING no human title; using {props['title']!r}. "
+              "Set one in the admin console's metadata overrides.", file=sys.stderr)
 
-    archive_path = config.archive_path(topic.stem)
-    pmtiles_path = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
-    pmtiles_url = config.public_url(pmtiles_path)
 
+def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, md: dict,
+                title: str | None, description: str | None, rc: int,
+                content_hash: str | None) -> dict:
+    """The item's properties: identity, row count, registry metadata and overrides."""
     # Precedence for title/description: hand-authored override (ops console) > registry metadata >
-    # prior published value. So an operator's edit wins + survives reingest.
+    # prior published value. So an operator's edit wins + survives reingest. With no human title,
+    # `_fill_title` falls back to the style's title once the renders are attached.
     ov = stac.manual_override(topic.stem)
     props = {
-        "title": ov.get("title") or md.get("display_name") or title or stac.prettify(topic.stem),
+        "title": ov.get("title") or stac.human_title(md.get("display_name")) or stac.human_title(title),
         "ugs:dbt_schema": topic.schema,
         "ugs:layer": topic.layer,
         "ugs:row_count": rc,
@@ -154,7 +129,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # Content fingerprint (skip-unchanged ingest). Lets a later `--skip-unchanged` run detect that
     # nothing changed and skip the rebuild. Absent when the caller didn't compute one.
     if content_hash:
-        props["ugs:content_hash"] = content_hash
+        props[stac.CONTENT_HASH_PROP] = content_hash
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     # Preserve-on-empty: registry descriptions are often missing, so when this submit has none, keep
     # whatever the published item already had instead of blanking it (last-non-empty wins).
@@ -174,7 +149,27 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                           ("summary_fields", "ugs:summary_fields")):
         if md.get(src_key):
             props[prop] = md[src_key]
+    return props
 
+
+def published_overviews(topic: Topic) -> set[str]:
+    """Object paths of the overview levels the published item lists."""
+    listed = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    return {config.overview_path(topic.stem, n)
+            for n in range(1, len(sink_archive.OVERVIEW_TOLERANCES) + 1) if f"overview_{n}" in listed}
+
+
+def published_geojson(topic: Topic) -> bool:
+    """The published item lists the GeoJSON copy."""
+    return "geojson" in stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+
+
+def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmtiles_url: str,
+            rel: dict, file_meta: dict[str, gcs.FileMeta] | None) -> dict:
+    """The item's assets, each stamped with this run's or the published file fields."""
+    rel_assets = rel.get("assets") or {}
+    rel_fks = rel.get("foreign_keys") or []
+    archive_path = config.archive_path(topic.stem)
     # GeoParquet archive. `table:columns` is the standard STAC Table extension. `ugs:foreign_keys`
     # (this topic's outgoing FKs) is a UGS-prefixed custom field — the FK join detail has no STAC
     # extension, so it's namespaced per STAC best practice (full-spec-compliant: prefixed, not
@@ -188,14 +183,30 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
 
     assets = {
         "data": data_asset,
-        "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
-                    "roles": ["visual"], "title": "PMTiles vector tiles",
-                    "description": stac.USAGE_PMTILES},
+        "pmtiles": stac.pmtiles_asset(pmtiles_url),
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
         # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
+    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
+    # sink, the thumbnail another job renders) keeps what the published item already carries.
+    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    # Generalized copies of a heavy layer, one per drawing scale (vector/sink_archive.py). A run that
+    # rewrote the archive lists the levels it wrote; otherwise the published ones stand. Their own
+    # role keeps them out of downloads; the FeatureServer finds them by key prefix and tolerance.
+    rewritten = "data" in (file_meta or {})
+    for n, tolerance in enumerate(sink_archive.OVERVIEW_TOLERANCES, 1):
+        key, path = f"overview_{n}", config.overview_path(topic.stem, n)
+        if (key in file_meta) if rewritten else (key in carried and gcs.exists(path)):
+            assets[key] = {
+                "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:overview"],
+                "title": f"GeoParquet generalized to {tolerance} deg for small-scale display",
+                "ugs:simplify_tolerance": tolerance}
+    path = config.geojson_path(topic.stem)
+    if ("geojson" in file_meta) if rewritten else ("geojson" in carried and gcs.exists(path)):
+        assets["geojson"] = {"href": config.public_url(path), "type": sink_archive.GEOJSON_MIME,
+                             "roles": ["data"], "title": "GeoJSON (small layers only)"}
     # DuckLake table locator — REVIEW CATALOG ONLY. It's a gs:// table id, not a fetchable object:
     # a browser can't open gs://, the bucket is private (IAM-gated), and even with the parquet
     # chunks a consumer can't materialise the table without the private DuckLake catalog DSN. So the
@@ -206,26 +217,42 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         assets["ducklake"] = {"href": ducklake_uri, "type": "application/x-ducklake-table",
                               "roles": ["data"], "title": "DuckLake table (native geometry)",
                               "description": stac.USAGE_DUCKLAKE}
-    # Rendered preview PNG (styled PMTiles → image), written independently by the ugs-topics-thumbs
-    # job. Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the PNG exists,
+    # Rendered preview (styled PMTiles → WebP), written independently by the ugs-topics-thumbs job.
+    # Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the image exists,
     # so the catalog shows a real styled preview for topics that have one (sand placeholder otherwise).
-    thumb_path = f"{config.THUMBS_PREFIX}/{topic.stem}/{topic.stem}.png"
-    if gcs.exists(thumb_path):
-        assets["thumbnail"] = {"href": config.public_url(thumb_path), "type": "image/png",
-                               "roles": ["thumbnail"], "title": "Styled preview",
-                               "description": stac.USAGE_THUMBNAIL}
-    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
-    # sink, the thumbnail another job renders) keeps what the published item already carries.
-    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    # A topic whose image isn't rendered yet gets it from the thumbs run the ingest starts right after
+    # publishing (vector/ingest.py).
+    if gcs.exists(config.topic_thumbnail_path(topic.stem)):
+        assets["thumbnail"] = stac.topic_thumbnail_asset(topic.stem)
     for key, asset in assets.items():
         if "file:size" in asset:      # a related table stamps its own — it did the upload
             continue
         asset.update(stac.file_fields((file_meta or {}).get(key)) or carried.get(key, {}))
+    return assets
 
-    # Table extension is in play iff any asset describes its columns.
+
+def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
+          *, title: str | None = None, description: str | None = None,
+          metadata: dict | None = None, bbox: list[float] | None = None,
+          row_count: int | None = None, related: dict | None = None,
+          content_hash: str | None = None,
+          file_meta: dict[str, gcs.FileMeta] | None = None) -> bool:
+    """Write the topic's item; True when what the FeatureServer serves from it changed."""
+    rel = related or {}
+    rel_links = rel.get("links") or []
+    bb = bbox if bbox is not None else _bbox(con, view)
+    rc = row_count if row_count is not None else _row_count(con, view)
+    # The data's date when it has one; the clock only as a fallback (#65).
+    item_dt = _publication_datetime(con, view) or datetime.datetime.now(datetime.UTC).isoformat()
+    md = metadata or {}
+
+    pmtiles_path = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
+    pmtiles_url = config.public_url(pmtiles_path)
+
+    props = _properties(topic, con, view, md, title, description, rc, content_hash)
+    assets = _assets(topic, con, view, pmtiles_url, rel, file_meta)
+
     exts = [stac.WEB_MAP_LINKS_EXT]
-    if any("table:columns" in a for a in assets.values()):
-        exts.append(stac.TABLE_EXT)
 
     item = stac.build_item(
         item_id=topic.stem, collection=topic.schema,
@@ -247,7 +274,19 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
+    _fill_title(item, topic.stem)
     stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
-    stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
+    stac.stamp_file_meta(item)  # the style and thumbnail, which other jobs write
+    before = _published(topic)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")
+    return cdn.feature_fields(before) != cdn.feature_fields(json.loads(json.dumps(item)))
+
+
+def _published(topic: Topic) -> dict | None:
+    try:
+        return json.loads(gcs.get_bytes(stac.item_object_path(collection_path(topic.schema),
+                                                              topic.stem)))
+    except FileNotFoundError:
+        return None
+

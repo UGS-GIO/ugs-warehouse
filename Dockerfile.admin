@@ -13,9 +13,12 @@ WORKDIR /app
 # reuses its real pub-metadata + GCS reads (source / gcs / sink_stac.series_code) instead of
 # reimplementing them, so the harvest status can't drift from the harvester. Vendored pub CSVs ship
 # as package-data, so this needs no DB. Listing the COG bucket needs storage.objectViewer on the SA.
-COPY pyproject.toml ./warehouse/
+COPY --from=ghcr.io/astral-sh/uv:0.12.12@sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./warehouse/
+RUN uv export --frozen --no-emit-project --project warehouse -q -o /tmp/requirements.txt \
+    && pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
 COPY src ./warehouse/src/
-RUN pip install ./warehouse
+RUN pip install --no-deps ./warehouse
 
 # Admin app deps.
 COPY admin/requirements.txt ./

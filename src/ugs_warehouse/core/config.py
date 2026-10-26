@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 
 # GCS bucket all artifacts are written to (private; served publicly via the CDN).
 BUCKET = os.environ.get("WAREHOUSE_BUCKET", "ut-dnr-ugs-maps-prod-public")
@@ -70,17 +71,19 @@ EXTERNAL_CATALOGS: list[tuple[str, str]] = [
 # producer sets its own (e.g. geolmap/cogs) via its module config.
 ARCHIVE_PREFIX = os.environ.get("WAREHOUSE_ARCHIVE_PREFIX", "warehouse/geoparquet")
 PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
-# Rendered preview thumbnails for vector serving-topics (styled PMTiles → PNG). One per stem,
-# overwritten when its style changes (so CACHE_MUTABLE); a `.sha` sidecar holds the style hash
-# the PNG was rendered from, for content-addressed skip-existing.
+# Rendered preview thumbnails for vector serving-topics (styled PMTiles → WebP). One per stem,
+# overwritten when its data or style changes (so CACHE_MUTABLE); a `.sha` sidecar holds the
+# content hash the image was rendered from (renderer version, data fingerprint, drawn layers), for
+# content-addressed skip-existing.
 THUMBS_PREFIX = os.environ.get("WAREHOUSE_THUMBS_PREFIX", "warehouse/thumbs")
 # Hand-authored metadata overrides (description/title), one JSON per STAC item id, marked
 # source=manual. Ingest prefers these over source metadata + they survive reingest — for backfilling
 # fields the source doesn't carry reliably. Edited from the ops console.
 OVERRIDES_PREFIX = os.environ.get("WAREHOUSE_OVERRIDES_PREFIX", "warehouse/overrides")
 # The layer list the OGC API Features service (featureserv/) reads at startup, written by the
-# catalog refresh.
-FEATURES_PREFIX = os.environ.get("WAREHOUSE_FEATURES_PREFIX", "warehouse/featureserv")
+# catalog refresh. Next to the catalog it lists, so a sandbox refresh never replaces prod's.
+FEATURES_PREFIX = os.environ.get("WAREHOUSE_FEATURES_PREFIX",
+                                 posixpath.join(posixpath.dirname(posixpath.normpath(STAC_PREFIX)), "featureserv"))
 
 # Canonical media types for the cloud-native artifacts — one source of truth across all producers
 # (was redefined in ~8 sink/harvest modules).
@@ -122,6 +125,23 @@ def archive_path(stem: str) -> str:
     """The topic's latest GeoParquet pointer. Flat, so it resolves from the stem alone —
     unlike the item path, which also needs the target's mart schema."""
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}.parquet"
+
+
+def overview_path(stem: str, level: int) -> str:
+    """The topic's GeoParquet generalized for one drawing scale, level 1 the finest
+    (vector/sink_archive.py)."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}_overview_{level}.parquet"
+
+
+def geojson_path(stem: str) -> str:
+    """The topic's GeoJSON copy, written beside a small archive (vector/sink_archive.py)."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}.geojson"
+
+
+def topic_thumbnail_path(stem: str) -> str:
+    """The topic's styled preview (WEBP_MIME). The thumbs job writes it and the ingest stamps it, so
+    both take the path from here."""
+    return f"{THUMBS_PREFIX}/{stem}/{stem}.webp"
 
 
 # Styling source — the neighbor repo `ugs-styles` builds MapLibre GL JSON + an `index.json`

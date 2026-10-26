@@ -4,21 +4,15 @@
 // restores focus to the trigger. Ported from the reference StacJsonDialog onto the viewer's tokens.
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { StacDoc } from "@/stac";
-
-// The item's own STAC URL (rel=self) — an "open .json" target where the catalog carries one.
-const selfHrefOf = (item: StacDoc): string | undefined =>
-  item.links?.find((l) => l.rel === "self")?.href;
+import { CopyBtn } from "./endpoints-panel";
+import { selfHrefOf, type StacDoc } from "@/stac";
 
 export function StacJson({ item, title = "STAC item JSON" }: { item: StacDoc; title?: string }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const json = useMemo(() => JSON.stringify(item, null, 2), [item]);
   const self = selfHrefOf(item);
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
 
   useEffect(() => {
     if (!open) return;
@@ -45,13 +39,6 @@ export function StacJson({ item, title = "STAC item JSON" }: { item: StacDoc; ti
     };
   }, [open]);
 
-  const copy = () => {
-    navigator.clipboard?.writeText(json);
-    setCopied(true);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1200);
-  };
-
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
@@ -69,14 +56,11 @@ export function StacJson({ item, title = "STAC item JSON" }: { item: StacDoc; ti
         <div role="dialog" aria-modal="true" aria-label={title}
           className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div aria-hidden onClick={() => setOpen(false)} className="absolute inset-0 bg-black/50" />
-          <div ref={panelRef} className="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg border border-border bg-card shadow-xl">
+          <div ref={panelRef} className="relative z-10 flex max-h-modal w-full max-w-3xl flex-col rounded-lg border border-border bg-card shadow-xl">
             <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-card-foreground">{title}</h2>
               <div className="flex items-center gap-1.5">
-                <button type="button" onClick={copy}
-                  className="rounded border border-border bg-card px-2 py-1 text-xs text-foreground hover:border-primary">
-                  {copied ? "copied" : "copy"}
-                </button>
+                <CopyBtn text={json} className="px-2 py-1 text-xs" />
                 <button ref={closeRef} type="button" aria-label="Close" onClick={() => setOpen(false)}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"

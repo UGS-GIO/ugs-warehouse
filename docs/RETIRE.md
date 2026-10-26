@@ -36,9 +36,11 @@ retirements keep their own execution history and log stream in the console.
 2. **DuckLake.** `maintain.drop_table` reads the parquet the catalog references, drops the table,
    then deletes those files. Reading first is not optional: a dropped table cannot be listed.
 3. **Artifacts.** Every object under `<prefix>/<stem>/` for the archive parquet (latest plus every
-   dated copy), PMTiles, thumbnails, and the STAC item with its ISO sidecar.
+   dated copy), PMTiles, thumbnails, and the STAC item.
 4. **Catalog.** `refresh_catalog()` rebuilds `catalog.json`, the schema collection and the item
    index from what is left in the bucket.
+5. **CDN.** The topic is marked pending before the refresh and its FeatureServer paths are
+   invalidated after it (`core/cdn.py`), so the CDN stops serving the retired layer.
 
 ## What survives, and why
 

@@ -18,6 +18,10 @@ export type GateDir = "in" | "out";   // which way the user has to zoom to see t
 // MapLibre's ceiling — the effective maxzoom when a layer declares none.
 export const MAX_ZOOM = 24;
 
+// Scanned plates decode client-side, and zoomed out each one decodes an overview across the whole
+// viewport: 12 of them cost 1092MB of heap at z5, 61MB at z10. Unreadable that far out anyway.
+export const COG_GATE: Gate = { min: 8, max: MAX_ZOOM };
+
 const DRAW_TYPES = new Set(["fill", "line", "circle", "fill-extrusion", "heatmap"]);
 
 const drawsGeometry = (l: Record<string, unknown>): boolean => {
@@ -140,7 +144,7 @@ export function ZoomGateNotice({ gate, dir, subject, onZoom }: {
   gate: Gate; dir: GateDir; subject?: string; onZoom: () => void;
 }) {
   return (
-    <div className="flex max-w-[24rem] items-center gap-2 rounded-md border border-border bg-card/95 px-2.5 py-1.5 text-xs shadow backdrop-blur-sm">
+    <div className="flex max-w-sm items-center gap-2 rounded-md border border-border bg-card/95 px-2.5 py-1.5 text-xs shadow backdrop-blur-sm">
       <span className="text-foreground">
         {dir === "in" ? `Hidden below zoom ${Math.ceil(gate.min)}` : "Hidden at this zoom"}
         {subject && <span className="text-muted-foreground"> · {subject}</span>}

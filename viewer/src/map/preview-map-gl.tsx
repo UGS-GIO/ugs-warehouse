@@ -1,6 +1,7 @@
 // The maplibre half of the preview map, loaded on demand — the catalog, search and doc views never
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
+import turfBbox from "@turf/bbox";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { sameFeature } from "@/lib/same-feature";
@@ -14,9 +15,12 @@ import { ensureCogProtocol } from "./cog";
 import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
-import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
+import { type IdentifyResult, identifyAt } from "./identify";
+import { IdentifyLayer } from "./identify-layer";
+import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
+import { classificationEntries, defaultStyleUrl, pubOfEntry } from "@/stac";
+import { useLiveLegend, useStyleLayers } from "@/stac/styles";
+import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
 
@@ -24,16 +28,9 @@ ensurePmtilesProtocol();   // this module is lazy, so registration happens the f
 
 const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
-// Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
-// faux cartography. fill/line/circle all added so any geometry type shows.
-const NEUTRAL_LAYERS = [
-  { type: "fill", filter: GEOM_FILTER.fill,
-    paint: { "fill-color": "#6b7280", "fill-opacity": 0.15, "fill-outline-color": "#374151" } },
-  { type: "line", filter: GEOM_FILTER.line,
-    paint: { "line-color": "#374151", "line-width": 1.1 } },
-  { type: "circle", filter: GEOM_FILTER.point,
-    paint: { "circle-color": "#374151", "circle-radius": 3.5, "circle-opacity": 0.85 } },
-];
+// Neutral render used until (or without) a ugs-styles style: visible borders, not faux cartography.
+// The Map page's unstyled layers come from the same defaultVectorLayers (map-model).
+const NEUTRAL_LAYERS = previewDefaultLayers();
 
 // Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage. Idempotent.
 async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void> {
@@ -56,13 +53,14 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection, onIdentify }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
-  onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
+  onFeatureSelect?: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
   onClearSelection?: () => void;
+  onIdentify?: (r: IdentifyResult | null) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -86,7 +84,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   // ---- vector-specific state (`renders`/`sel` are owned by the provider) ----
   const renderKeys = Object.keys(renders);
   const active = renders[sel];
-  const styleUrl = isVector && item ? (active?.style_url ?? defaultStyleUrl(item)) : undefined;
+  const styleUrl = isVector && item ? (active?.generated ? undefined : active?.style_url ?? defaultStyleUrl(item)) : undefined;
   const sprite = active?.sprite;
   const styleLayers = useStyleLayers(styleUrl);  // null while loading/error → NEUTRAL_LAYERS
   // Icon renders bake their colours into the sprite, so the legend can't be derived from the paint.
@@ -140,12 +138,14 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
   }, [fitKey, mapLoaded, spec, showDem]);
 
-  // Fly to a picked feature (table row click). Keyed on focus.key so re-picking the same row re-flies.
+  // Fly to a picked feature (table row click, or Zoom to on the feature card). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
   const focusKey = focus?.key;
   useEffect(() => {
     if (!fb || !mapRef.current) return;
     mapRef.current.fitBounds([[fb[0], fb[1]], [fb[2], fb[3]]], { padding: 60, maxZoom: 14, duration: 800 });
+    // On a phone the map can be above the screen by now; bring it back so the fly is seen.
+    mapRef.current.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focusKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Move the stable container into the active slot (or the hidden holder when none), then resize —
@@ -216,14 +216,27 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     [itemId, focusKey, mapLoaded]);
 
   const onMapClick = (e: MapLayerMouseEvent) => {
+    if (spec?.kind === "cog" || spec?.kind === "rasterpm") {
+      const slug = spec.kind === "cog" ? "cog" : "raster-mosaic";
+      const pubTitle = pubOfEntry(spec.item)?.title;
+      // Only a geologic map answers a click: one with unit data, or a publication's plate.
+      if (spec.unitsHref || pubTitle) {
+        onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
+          [{ slug, hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle }]));
+      }
+      return;
+    }
     if (!isVector) return;
-    const f = e.features?.[0];
+    const f = pickFeature(e, layerIds);
     if (!f) { highlightFeature(null); onClearSelection?.(); return; }
     const props = (f.properties ?? {}) as Record<string, unknown>;
     const fid = f.id != null ? Number(f.id) : null;
     highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
-    onFeatureSelect?.(props, fid);
-    if (fid != null) onFeatureClick(fid, props);
+    // The tile's copy of the geometry, so a long line is cut at the tile edge; near enough to zoom to.
+    onFeatureSelect?.(props, fid, turfBbox(f.geometry) as FocusSel["bbox"]);
+    // The table only pages to the feature when tile ids are its feature_ids; otherwise the card
+    // above shows the tile's attributes and the table is left as it is.
+    if (fid != null && joinsRows(spec)) onFeatureClick(fid, props);
   };
 
   const cluster = (
@@ -235,9 +248,13 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
             items={renderKeys.map((k) => ({ value: k, label: String(renders[k].title ?? k) }))} />
         </div>
       )}
-      <div className="mt-2 h-96 w-full overflow-hidden rounded-md border border-border bg-muted">
+      {/* One card: the map, sized by its width, with its legend as the footer when it has one. */}
+      <div className="mt-2 overflow-hidden rounded-md border border-border">
+      <div className="aspect-4/3 max-h-preview w-full bg-muted sm:aspect-16/10 lg:max-h-preview-lg">
         <MapGL
           ref={mapRef}
+          // The page scrolls past the map; zooming takes Ctrl/⌘ + scroll, or two fingers on a phone.
+          cooperativeGestures
           mapLib={maplibregl}
           onLoad={() => setMapLoaded(true)}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
@@ -315,6 +332,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
               <Layer id="raster-mosaic-layer" type="raster" />
             </Source>
           )}
+          {spec?.kind === "rasterpm" && spec.unitsHref && <IdentifyLayer slug="raster-mosaic" href={spec.unitsHref} />}
 
           {/* COG raster (once the cog:// protocol is registered) */}
           {spec?.kind === "cog" && cogReady && (
@@ -322,6 +340,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
               <Layer id="cog-raster" type="raster" />
             </Source>
           )}
+          {spec?.kind === "cog" && cogReady && spec.unitsHref && <IdentifyLayer slug="cog" href={spec.unitsHref} />}
 
           {/* Footprint outline */}
           {spec?.kind === "footprint" && (
@@ -333,11 +352,12 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
       </div>
 
       {isVector && item && (
-        <Legend layers={styleLayers ?? undefined}
+        <Legend key={itemId} layers={styleLayers ?? undefined}
           entries={liveLegend?.entries ?? active?.legend ?? classificationEntries(item)}
-          title={liveLegend?.field ?? (active?.legend ? "box type" : undefined)}
-          name={String(item.properties?.title ?? item.id)} />
+          title={liveLegend?.field}
+          name={String(item.properties?.title ?? item.id)} attached />
       )}
+      </div>
     </>
   );
 

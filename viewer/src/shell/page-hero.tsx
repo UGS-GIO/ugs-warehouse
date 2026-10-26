@@ -1,4 +1,4 @@
-// Title band for the content pages (Architecture, Guide, the catalog landing), laid out like the
+// Title band for the content pages (Guide, the catalog landing), laid out like the
 // soil-water app's docs hero: eyebrow, title, lead, over a UGS photo with a vertical scrim.
 //
 // The scrim is what keeps the text readable: the type colour is fixed and the photo isn't, so a
@@ -26,7 +26,7 @@ export function PageHero({ eyebrow, title, lead, children }: {
           </p>
         )}
         <h1 className="font-display text-3xl tracking-tight drop-shadow-md sm:text-4xl">{title}</h1>
-        {lead && <p className="mt-3 max-w-[75ch] text-base drop-shadow-md">{lead}</p>}
+        {lead && <p className="mt-3 max-w-lead text-base drop-shadow-md">{lead}</p>}
         {children && <div className="mt-4">{children}</div>}
       </div>
     </header>

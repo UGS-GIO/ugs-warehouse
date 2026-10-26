@@ -1,4 +1,4 @@
-"""The GeoParquet COPY must bound its row group size.
+"""The archive GeoParquet must bound its row group size.
 
 A row group is the smallest unit a range-reading client can fetch, so it sets the floor on the
 viewer's first page. DuckDB's default (122,880 rows) put wetlands_riverine in two groups and made
@@ -10,29 +10,16 @@ from ugs_warehouse.vector import sink_archive
 
 
 class _FakeCon:
-    """Records the COPY, and answers the bytes-per-row sample with `per_row`."""
+    """Answers the bytes-per-row sample with `per_row`."""
 
-    def __init__(self, per_row: float = 2_000.0) -> None:
-        self.sql = ""
+    def __init__(self, per_row: float) -> None:
         self._per_row = per_row
 
     def execute(self, sql: str):
-        if sql.lstrip().upper().startswith("SELECT"):
-            return self
-        self.sql = sql
         return self
 
     def fetchone(self):
         return (self._per_row,)
-
-    def fetchall(self):
-        return [("MULTIPOLYGON", False)]
-
-
-def test_copy_bounds_the_row_group_size() -> None:
-    con = _FakeCon()
-    sink_archive._copy_geoparquet(con, "v", "/tmp/out.parquet")
-    assert "ROW_GROUP_SIZE " in con.sql
 
 
 def test_row_group_size_targets_bytes_not_rows() -> None:
@@ -49,11 +36,89 @@ def test_row_group_size_targets_bytes_not_rows() -> None:
     assert 147_506 / riverine > 20, f"{riverine} rows/group still leaves too few groups"
 
 
-def test_copy_still_writes_the_bbox_covering_columns() -> None:
-    con = _FakeCon()
-    sink_archive._copy_geoparquet(con, "v", "/tmp/out.parquet")
-    for col in ("bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"):
-        assert col in con.sql
+def _written(tmp_path, rows: int = 5000):
+    import duckdb
+    import pyarrow.parquet as pq
+
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    con.execute(f"CREATE VIEW v AS SELECT i AS id, 'unit ' || i AS name, "
+                f"ST_Buffer(ST_Point(i % 100, i // 100), 0.4) AS geom FROM range({rows}) s(i)")
+    path = str(tmp_path / "out.parquet")
+    sink_archive._copy_geoparquet(con, "v", path)
+    return sink_archive._row_group_size(con, "v"), pq.ParquetFile(path)
+
+
+def test_copy_bounds_the_row_group_size(tmp_path) -> None:
+    rows_per_group, f = _written(tmp_path)
+    groups = [f.metadata.row_group(i).num_rows for i in range(f.metadata.num_row_groups)]
+    assert max(groups) <= rows_per_group and sum(groups) == 5000
+
+
+def test_copy_still_writes_the_bbox_covering_columns(tmp_path) -> None:
+    _, f = _written(tmp_path)
+    for col in ("bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax", "bbox"):
+        assert col in f.schema_arrow.names
+
+
+def test_copy_writes_a_page_index_and_no_geometry_dictionary(tmp_path) -> None:
+    """What lets a reader fetch only the pages a bbox touches inside a row group."""
+    _, f = _written(tmp_path)
+    geom = f.metadata.row_group(0).column(f.schema_arrow.names.index("geom"))
+    assert geom.has_offset_index and geom.has_column_index
+    assert not geom.has_dictionary_page
+    assert b"geo" in f.schema_arrow.metadata
+
+
+def _page_rows(path: str, column: str) -> list[int]:
+    """Rows in each data page of `column`, read from the Thrift compact page headers."""
+    import pyarrow.parquet as pq
+
+    meta = pq.ParquetFile(path).metadata
+    leaf = [meta.schema.column(i).path for i in range(meta.num_columns)].index(column)
+    with open(path, "rb") as f:
+        data = f.read()
+
+    def varint(i):
+        n = shift = 0
+        while data[i] & 0x80:
+            n |= (data[i] & 0x7F) << shift
+            shift, i = shift + 7, i + 1
+        return n | data[i] << shift, i + 1
+
+    def struct(i):  # {field id: value}, for the field types a page header holds
+        out, fid = {}, 0
+        while data[i]:
+            delta, kind = data[i] >> 4, data[i] & 0x0F
+            fid, i = (fid + delta, i + 1) if delta else varint(i + 1)
+            if kind == 12:
+                out[fid], i = struct(i)
+            elif kind in (5, 6):
+                v, i = varint(i)
+                out[fid] = (v >> 1) ^ -(v & 1)
+            elif kind == 8:
+                n, i = varint(i)
+                i += n
+        return out, i + 1
+
+    rows = []
+    for g in range(meta.num_row_groups):
+        chunk = meta.row_group(g).column(leaf)
+        assert chunk.has_offset_index and chunk.has_column_index
+        i = chunk.data_page_offset
+        while i < chunk.data_page_offset + chunk.total_compressed_size:
+            header, i = struct(i)
+            rows.append(header[5][1])
+            i += header[3]
+    return rows
+
+
+def test_bbox_pages_are_short_enough_to_prune(tmp_path) -> None:
+    """64 KiB pages of bbox doubles held 8192 rows; a z13 tile then read a page per row group."""
+    _written(tmp_path)
+    for col in ("bbox_xmin", "bbox_ymax", "bbox.xmin", "bbox.ymax"):
+        rows = _page_rows(str(tmp_path / "out.parquet"), col)
+        assert sum(rows) == 5000 and max(rows) <= sink_archive.PAGE_ROWS, (col, rows)
 
 
 # A row group is the floor on what a clipped export downloads, so it has to be bounded in BYTES.
@@ -136,3 +201,25 @@ def test_is_current_accepts_only_the_format_write_makes(tmp_path) -> None:
         with open(path, "rb") as f:
             gcs.put_bytes(f.read(), config.archive_path(topic.stem), content_type="application/x")
         assert sink_archive.is_current(topic) is current, path
+
+
+def test_archive_signature_follows_the_writer_settings(monkeypatch) -> None:
+    """A writer setting change makes every topic's fingerprint differ, so skip-unchanged rebuilds
+    it with the new pages and overview levels."""
+    before = sink_archive.archive_signature()
+    monkeypatch.setattr(sink_archive, "PAGE_ROWS", sink_archive.PAGE_ROWS * 2)
+    assert sink_archive.archive_signature() != before
+    monkeypatch.undo()
+    monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001,))
+    assert sink_archive.archive_signature() != before
+
+
+def test_thumbnail_hash_ignores_the_archive_signature() -> None:
+    """An archive writer change rebuilds the data but draws the same map, so no thumbnail re-renders."""
+    from ugs_warehouse.vector import thumbs
+
+    item = lambda h: {"properties": {"ugs:content_hash": h}}  # noqa: E731
+    base = "3:42:v1|ugskey=0|-zg"
+    same = thumbs._thumb_hash(item(base), [])
+    assert thumbs._thumb_hash(item(f"{base}:{sink_archive.archive_signature()}"), []) == same
+    assert thumbs._thumb_hash(item("3:43:v1|ugskey=0|-zg"), []) != same

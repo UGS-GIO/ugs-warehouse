@@ -10,19 +10,20 @@ dependencies = [
   "google-cloud-run>=0.10",  # service/main.py starts the ingest job instead of ingesting in-request
   "google-cloud-storage>=2.18",  # core/gcs.py copy_from_uri only — server-side rewrite for
                                  # cross-bucket copies (obstore's copy() is single-store only).
-                                 # Already transitive via firebase-admin; declared explicitly
-                                 # since it's now a direct import, not just incidentally installed.
   "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)
   "fastapi>=0.115",
+  "pydantic>=2",         # imported directly (comments.py, maintain.py), not only through fastapi
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
-  "firebase-admin>=6.5",  # verify Firebase/Entra ID tokens from the hazards-review app (non-IAP review path)
-  "google-auth>=2.40",   # iap.py verifies IAP JWTs
+  "google-auth>=2.40",   # verifies IAP JWTs (iap.py) and Firebase ID tokens (comments.py)
+  "requests>=2.31",      # iap.py fetches the signing keys with it
   "cryptography>=42",   # ...which are ES256, and google-auth only verifies EC keys with it
+  "CacheControl>=0.14",  # caches the signing keys (iap.py)
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
   "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
-  # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB
-  # (no Python materialization). They live in the [pubs] extra (geopandas/pyogrio need them).
+  "pyarrow>=23",         # writes the archive GeoParquet with a page index (vector/sink_archive.py)
+  # NB: no shapely — the vector ingest streams Postgres→DuckDB→CDN in DuckDB; pyarrow only writes
+  # DuckDB's Arrow batches out. shapely lives in the [pubs] extra (geopandas/pyogrio need it).
 ]
 
 [project.optional-dependencies]
@@ -30,8 +31,7 @@ dependencies = [
 # and pre-commit enforce; an unpinned floor let a fresh install drift to a newer
 # ruff and turn CI red. Keep this in lockstep with the ruff-pre-commit `rev` in
 # .pre-commit-config.yaml (bump both together, e.g. via Renovate).
-# httpx: starlette's TestClient is built on it — needed by tests/test_tiles_esri.py, which is the
-# only automated check that sees the tiles service's Esri path contract.
+# httpx: starlette's TestClient is built on it.
 # rashid: the Portolan validator, run by tests/test_portolan_conformance.py against a catalog the
 # real builders write. It pulls the raster stack (rasterio, pyarrow, pyproj), which the base
 # install deliberately avoids — the cost is ~400MB in CI and nothing in the runtime images. The
@@ -40,17 +40,24 @@ dependencies = [
 # rio-stac: test_stac_validation.py reads a real COG's asset fields with it (rashid brings rasterio).
 # geoparquet-io: test_archive_gpio.py runs `gpio check` on the archive writer's output. It pins
 # duckdb below 1.6, so CI tests a 1.5 duckdb until gpio moves.
-dev = ["pytest>=8", "ruff==0.16.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
-       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0", "rio-stac>=0.12", "geoparquet-io>=1.6"]
+# pyyaml: tests/test_thumbs_trigger.py parses cloudbuild.yaml to pin the thumbs job's deploy args
+# to what core/jobs.py sends; declared, not left to pre-commit's dependency, so it can't vanish.
+dev = ["pytest>=8", "ruff==0.17.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
+       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0", "rio-stac>=0.12", "geoparquet-io>=1.6",
+       "pyyaml>=6"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
 # GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [
   "rasterio>=1.3",
   "rio-cogeo>=5",
   "rio-stac>=0.12",      # COG asset bands/projection from the header — pubs/sink_stac.py
+  "pmtiles>=3.8",        # writes the raster mosaic archives — pubs/geolmap_mosaics.py
   "geopandas>=1.0",
   "pyogrio>=0.9",
   "pyarrow>=17",         # geopandas parquet IO (base ingest no longer needs it)
+  "pandas>=2.1",         # typed tables from sheets and CSV (DataFrame.map needs 2.1) - pubs/sheets.py
+  "openpyxl>=3.1",       # .xlsx attachments, read-only - pubs/sheets.py
+  "xlrd>=2.0.1",         # legacy .xls attachments (xlrd 2 reads only .xls) - pubs/sheets.py
   "shapely>=2.0",        # geopandas geometry
   "pygltflib>=1.16",     # 3D fence glTF export — pubs/threed.py
   "mapbox-earcut>=1.0",  # polygon triangulation for the glTF mesh — pubs/threed.py
@@ -59,11 +66,12 @@ pubs = [
   "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
   "geoparquet-io>=1.6",  # GeoParquet writes (pubs/geoparquet.py); pins duckdb >=1.5.5,<1.6
 ]
-# topics-thumbnail job — headless MapLibre render of styled PMTiles → PNG (vector/thumbs.py).
+# topics-thumbnail job — headless MapLibre render of styled PMTiles → WebP (vector/thumbs.py).
 # Installed in Dockerfile.topics-thumbs, which also runs `playwright install --with-deps chromium`.
+# playwright 1.62 (2026-07-31) is the first release whose screenshot() writes WebP.
 # requests: pulled in transitively by pubs.harvest's logging helpers (hlog) that this job reuses.
 thumbs = [
-  "playwright>=1.40",
+  "playwright>=1.62",
   "requests>=2.31",
 ]
 
@@ -94,5 +102,9 @@ target-version = "py311"
 #   E4/E7/E9 = pycodestyle (imports, statements, syntax)
 #   F        = pyflakes (real errors: undefined names, unused imports)
 #   I        = import sorting (auto-fixable)
+#   C901     = mccabe complexity
 # Grow this set deliberately, ideally org-wide, not by accident.
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12

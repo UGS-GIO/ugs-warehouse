@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { sameFeature } from "@/lib/same-feature";
 import { qk } from "@/query-keys";
-import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
+import { type ColumnDef, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebounced } from "@/lib/use-debounced";
@@ -10,7 +10,8 @@ import { usePerItem } from "@/lib/use-per-item";
 import { CommentsPanel } from "@/review/comments-panel";
 import { buildFilters } from "./build-filters";
 import type { ColFilter } from "./download";
-import { PAGE_SIZES } from "./paging";
+import { PAGE_SIZE_ITEMS, PAGE_SIZES } from "./paging";
+import { HeaderCells, RowCells } from "./table";
 import type { FocusSel, MapPick } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
 import { C } from "@/ui/ui";
@@ -22,6 +23,7 @@ import { Unavailable } from "@/offline/offline-notice";
 import { isNetworkError, useOnline } from "@/offline/online";
 import { TableOffline } from "@/offline/table-offline";
 import { useOffline } from "@/offline/store";
+import { Chevron } from "@/ui/chevron";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -155,7 +157,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
       cell: (info) => {
         const v = info.getValue();
         const s = v == null ? "" : String(v);
-        return <span className="block max-w-[280px] truncate" title={s}>{s}</span>;
+        return <span className="block max-w-70 truncate" title={s}>{s}</span>;
       },
     })),
     [page?.columns],
@@ -252,10 +254,10 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
       {/* One header line that says what this is and how big it is — the row count used to float
           mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
-        <button className="inline-flex items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+        <button className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
           title={collapsed ? "Show the data" : "Hide the data"} aria-expanded={!collapsed}
           onClick={() => setCollapsed((v) => !v)}>
-          <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+          <Chevron open={!collapsed} />
           Data
           <span className="font-normal">
             · {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
@@ -343,15 +345,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
                       })} />
                   </th>
                 )}
-                {hg.headers.map((h) => {
-                  const s = h.column.getIsSorted();
-                  return (
-                    <th key={h.id} className={C.th} onClick={h.column.getToggleSortingHandler()}>
-                      {flexRender(h.column.columnDef.header, h.getContext())}
-                      {s === "asc" ? " ▲" : s === "desc" ? " ▼" : ""}
-                    </th>
-                  );
-                })}
+                <HeaderCells group={hg} />
               </tr>
             ))}
             {/* Per-column filter row: numeric → min/max range, text → substring. */}
@@ -411,9 +405,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
                       ) : null}
                     </td>
                   )}
-                  {r.getVisibleCells().map((c) => (
-                    <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
-                  ))}
+                  <RowCells row={r} />
                 </tr>
               );
             })}
@@ -439,8 +431,7 @@ export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, review
               if (v === "all") setShowAll(true);
               else { setShowAll(false); setPageSize(Number(v)); }
             }}
-            items={[...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })),
-                    { value: "all", label: "All" }]} />
+            items={PAGE_SIZE_ITEMS} />
         </label>
         <label className="flex items-center gap-1 text-muted-foreground">
           Go to

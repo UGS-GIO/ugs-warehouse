@@ -1,0 +1,153 @@
+{
+ "layers": [
+  {
+   "label": "geology_poly",
+   "spatial": true,
+   "rows": 1074,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "M-210",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "GEOLOGY_",
+     "type": "integer"
+    },
+    {
+     "name": "GEOLOGY_ID",
+     "type": "integer"
+    },
+    {
+     "name": "UNITSYMBOL",
+     "type": "string"
+    },
+    {
+     "name": "UNITNAME",
+     "type": "string"
+    },
+    {
+     "name": "AGE",
+     "type": "string"
+    },
+    {
+     "name": "NOTES",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "foldsymarcs_poly",
+   "spatial": true,
+   "rows": 2,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "symbols",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "FOLDSYMARC",
+     "type": "integer"
+    },
+    {
+     "name": "FOLDSYMA_1",
+     "type": "integer"
+    },
+    {
+     "name": "FILLED",
+     "type": "integer"
+    },
+    {
+     "name": "TYPE",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "lnsymarcs_poly",
+   "spatial": true,
+   "rows": 108,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "symbols",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "LNSYMARCS_",
+     "type": "integer"
+    },
+    {
+     "name": "LNSYMARCS1",
+     "type": "integer"
+    },
+    {
+     "name": "FILLED",
+     "type": "integer"
+    },
+    {
+     "name": "TYPE",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "label": "ptsymarcs_poly",
+   "spatial": true,
+   "rows": 124,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "symbols",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "PTSYMARCS_",
+     "type": "integer"
+    },
+    {
+     "name": "PTSYMARCS1",
+     "type": "integer"
+    },
+    {
+     "name": "FILLED",
+     "type": "integer"
+    },
+    {
+     "name": "TYPE",
+     "type": "string"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

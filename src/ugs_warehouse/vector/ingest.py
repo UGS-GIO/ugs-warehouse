@@ -7,6 +7,8 @@ For each topic:
   4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
   5. Build PMTiles via tippecanoe (`sink_pmtiles`)
   6. Write STAC item (`sink_stac`)
+  7. Mark the layer pending on the CDN when what the FeatureServer serves changed (`core.cdn`);
+     the run invalidates every pending layer after its catalog refresh
 
 Each sink is independent: failure in one does not corrupt the others.
 
@@ -16,11 +18,11 @@ and `--topic schema.layer_current` ingests one explicitly.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-import traceback
 from types import ModuleType
 
-from ..core import gcs, stac
+from ..core import cdn, gcs, jobs, logs, stac
 from . import (
     fingerprint,
     related,
@@ -31,6 +33,12 @@ from . import (
     topics,
 )
 from .topics import Topic
+
+log = logging.getLogger("ugs-warehouse.ingest")
+
+# The ingest job's --task-timeout is 3600s, so a lease older than that belongs to a dead run.
+LOCK_TTL_S = 3600
+LOCK_WAIT_S = 2700
 
 
 def _backend() -> ModuleType:
@@ -47,28 +55,19 @@ def _related(topic: Topic) -> dict:
     try:
         return related.resolve(topic)
     except Exception as e:  # noqa: BLE001 — relationships never block the parent ingest
-        print(f"[{topic.fqn}] relationships FAILED: {e}", file=sys.stderr)
+        log.warning("[%s] relationships FAILED: %s", topic.fqn, e, extra={"topic": topic.fqn})
         return {}
 
 
-def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
-               skip_unchanged: bool = True) -> int:
-    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
-    transformed table → catalog refresh.
-
-    `skip_unchanged` (default on; `--force` turns it off) compares a content fingerprint of the
-    transformed view to the published STAC item; an exact match (with the PMTiles still present)
-    skips the DATA sinks — the expensive tippecanoe rebuild would produce byte-identical output.
-    The STAC sink still runs, since curated registry metadata changes without the data changing
-    (#54); rewriting an item + ISO sidecar is two small object writes, never what the skip
-    protected."""
+def _preflight(topic: Topic, con, view: str, dry_run: bool) -> int | None:
+    """Geometry check + dry-run report: an rc to stop with, or None to run the sinks."""
     count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
     non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
     if non_null == 0:
         cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
-        print(f"[{topic.fqn}] SKIP: 0/{count} rows have geometry "
-              f"(non-spatial table, or geom not readable by this backend)", file=sys.stderr)
-        print(f"  columns : {cols}", file=sys.stderr)
+        log.warning("[%s] SKIP: 0/%s rows have geometry "
+                    "(non-spatial table, or geom not readable by this backend); columns: %s",
+                    topic.fqn, count, cols, extra={"topic": topic.fqn})
         return 1
 
     if dry_run:
@@ -83,18 +82,108 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         print(f"  columns              : {cols}")
         print(f"  sample row (no geom) : {sample}")
         return 0
+    return None
+
+
+def _data_sinks(topic: Topic, con, view: str, written: dict[str, gcs.FileMeta]) -> list:
+    """The fingerprint-gated sinks as (name, fn); each records its write in `written`."""
+    def _archive() -> None:
+        written["data"] = sink_archive.write(topic, con, view)
+
+    def _overview() -> None:
+        # Only beside an archive written this run; when the archive failed the old set stays.
+        if "data" in written:
+            sink_archive.write_overviews(topic, con, view, written,
+                                         sink_stac.published_overviews(topic))
+
+    def _geojson() -> None:
+        if "data" in written:
+            sink_archive.write_geojson(topic, con, view, written,
+                                       sink_stac.published_geojson(topic))
+
+    def _pmtiles() -> None:
+        written["pmtiles"] = sink_pmtiles.build(topic, con, view)
+
+    return [
+        ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
+        ("archive",  _archive),
+        ("overview", _overview),
+        ("geojson",  _geojson),
+        ("pmtiles",  _pmtiles),
+    ]
+
+
+def _run_sink(topic: Topic, name: str, fn) -> bool:
+    """Run one sink in isolation: a failure is logged and reported, never raised."""
+    try:
+        fn()
+        return True
+    except Exception:  # per-sink isolation: log + continue, never silent fail
+        log.exception("[%s] sink %s FAILED", topic.fqn, name,
+                      extra={"topic": topic.fqn, "sink": name})
+        return False
+
+
+def _refresh_catalog(topic: Topic) -> list[str] | None:
+    """Rebuild the catalog; the problems it reported, or None (logged) on failure."""
+    try:
+        return stac.refresh_catalog()
+    except Exception:
+        log.exception("[%s] stac catalog refresh FAILED", topic.fqn, extra={"topic": topic.fqn})
+        return None
+
+
+def _mark_pending(topic: Topic) -> bool:
+    """Mark the topic pending on the CDN; False (logged) on failure."""
+    try:
+        cdn.mark([topic.stem])
+        return True
+    except Exception:
+        log.exception("[%s] CDN mark FAILED", topic.fqn, extra={"topic": topic.fqn})
+        return False
+
+
+def _flush_cdn(problems: list[str] | None) -> int:
+    """Invalidate the pending layers on the CDN after a refresh that reported `problems`; 1 (logged)
+    on failure. Without a refresh (None) the servers would reload the old catalog, so the layers
+    stay pending for the next run."""
+    if problems is None:
+        log.warning("catalog not refreshed; CDN invalidations stay pending")
+        return 0
+    try:
+        cdn.flush(problems)
+        return 0
+    except Exception:
+        log.exception("CDN invalidation FAILED; the layers stay pending")
+        return 1
+
+
+def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
+               skip_unchanged: bool = True) -> int:
+    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
+    transformed table → catalog refresh.
+
+    `skip_unchanged` (default on; `--force` turns it off) compares a content fingerprint of the
+    transformed view to the published STAC item; an exact match (with the PMTiles still present)
+    skips the DATA sinks — the expensive tippecanoe rebuild would produce byte-identical output.
+    The STAC sink still runs, since curated registry metadata changes without the data changing
+    (#54); rewriting an item + ISO sidecar is two small object writes, never what the skip
+    protected."""
+    rc = _preflight(topic, con, view, dry_run)
+    if rc is not None:
+        return rc
 
     # Content fingerprint — always computed (so every run records a fresh `ugs:content_hash`, even a
     # forced one, keeping future skips correct). Only acted on when --skip-unchanged is set.
     fp = fingerprint.compute(con, view)
     unchanged = skip_unchanged and fingerprint.is_unchanged(topic, fp)
     if unchanged:
-        print(f"[{topic.fqn}] UNCHANGED: content + tiling identical to the published item — "
-              f"skipping the data sinks (no tile rebuild), rewriting STAC + ISO")
+        log.info("[%s] UNCHANGED: content + tiling identical to the published item — "
+                 "skipping the data sinks (no tile rebuild), rewriting STAC + ISO",
+                 topic.fqn, extra={"topic": topic.fqn})
 
     meta = backend.read_metadata(topic)
     related_info = _related(topic)
-    rc = 0
     # The data sinks are what the fingerprint gates. The STAC sink always runs: its inputs include
     # curated registry metadata, which an editor changes without touching a single row (#54). It
     # reads the view and derives its asset hrefs from config, so it does not depend on the skipped
@@ -105,43 +194,31 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     # the published item already says.
     written: dict[str, gcs.FileMeta] = {}
 
-    def _archive() -> None:
-        written["data"] = sink_archive.write(topic, con, view)
-
-    def _pmtiles() -> None:
-        written["pmtiles"] = sink_pmtiles.build(topic, con, view)
-
-    data_sinks = [] if unchanged else [
-        ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
-        ("archive",  _archive),
-        ("pmtiles",  _pmtiles),
-    ]
+    data_sinks = [] if unchanged else _data_sinks(topic, con, view, written)
+    rc = 0
     data_failed = False
+    for name, fn in data_sinks:
+        if not _run_sink(topic, name, fn):
+            rc = 1
+            data_failed = True
+
+    item_changed = False
 
     def _stac() -> None:
+        nonlocal item_changed
         # The hash vouches for the published artifacts, so it only moves when they were all
         # rewritten. Stamping it after a failed data sink would make the next --skip-unchanged run
-        # skip the rebuild, and hand the tiles service a new version for the old archive.
+        # skip the rebuild.
         content_hash = fingerprint.published_hash(topic) if data_failed else fp
-        sink_stac.write(topic, con, view, metadata=meta, related=related_info,
-                        content_hash=content_hash, file_meta=written)
+        item_changed = sink_stac.write(topic, con, view, metadata=meta, related=related_info,
+                                       content_hash=content_hash, file_meta=written)
 
-    for name, fn in [*data_sinks, ("stac", _stac)]:
-        try:
-            fn()
-        except Exception as e:  # per-sink isolation: log + continue, never silent fail
-            print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
-            traceback.print_exc()
-            rc = 1
-            data_failed = data_failed or name != "stac"
-
-    if not skip_refresh:
-        try:
-            stac.refresh_catalog()
-        except Exception as e:
-            print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
-            traceback.print_exc()
-            rc = 1
+    if not _run_sink(topic, "stac", _stac):
+        rc = 1
+    if (data_sinks or item_changed) and not _mark_pending(topic):
+        rc = 1
+    if not skip_refresh and _refresh_catalog(topic) is None:
+        rc = 1
     return rc
 
 
@@ -150,7 +227,8 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
     backend = _backend()
     # One DuckDB connection streams Postgres scan → transform → materialize (no pyarrow, no
     # Python-held rows; DuckDB spills under its memory cap). The sinks read the materialized table.
-    print(f"[{topic.fqn}] reading from Postgres (streaming, single DuckDB)")
+    log.info("[%s] reading from Postgres (streaming, single DuckDB)", topic.fqn,
+             extra={"topic": topic.fqn})
     con, view = backend.stream_transformed(topic)
     # The sinks read `view` through `con`, so the close waits until they're done. Without it the
     # Cloud Run handler leaks a connection — ATTACHed Postgres + materialized table — per push.
@@ -167,16 +245,21 @@ def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False
     `skip_unchanged` defaults on — an unchanged topic (fingerprint matches the published item) is
     skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild."""
     try:
-        return _ingest(topic, dry_run=dry_run, skip_refresh=skip_refresh,
-                       skip_unchanged=skip_unchanged)
+        if dry_run:
+            return _ingest(topic, dry_run=True, skip_refresh=skip_refresh,
+                           skip_unchanged=skip_unchanged)
+        # Two publishes for one topic would both rewrite its artifacts. The second waits, then
+        # runs; the fingerprint skip makes it cheap when nothing changed.
+        with gcs.lease(f"_locks/ingest/{topic.fqn}", ttl_s=LOCK_TTL_S, wait_s=LOCK_WAIT_S):
+            return _ingest(topic, skip_refresh=skip_refresh, skip_unchanged=skip_unchanged)
     except Exception as e:
         # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
         # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)
         if "no GEOMETRY column found" in str(e):
-            print(f"[{topic.fqn}] SKIP: non-spatial table (no GEOMETRY column)", file=sys.stderr)
+            log.warning("[%s] SKIP: non-spatial table (no GEOMETRY column)", topic.fqn,
+                        extra={"topic": topic.fqn})
             return 0
-        print(f"[{topic.fqn}] FATAL: {e}", file=sys.stderr)
-        traceback.print_exc()
+        log.exception("[%s] FATAL", topic.fqn, extra={"topic": topic.fqn})
         return 1
 
 
@@ -223,12 +306,13 @@ def main() -> int:
              "still rebuilds everything since no published item carries a fingerprint yet",
     )
     args = ap.parse_args()
+    logs.setup()
     skip_unchanged = not args.force
 
     if args.all:
         backend = _backend()
         discovered = backend.discover()
-        print(f"discovered {len(discovered)} topics in {topics.MART_SCHEMAS}")
+        log.info("discovered %s topics in %s", len(discovered), topics.MART_SCHEMAS)
         rc = 0
 
         # Skip individual refreshes when running all topics to avoid redundant catalog listings/writes.
@@ -237,7 +321,7 @@ def main() -> int:
 
         if args.parallel:
             from concurrent.futures import ThreadPoolExecutor
-            print(f"running ingestion in parallel with {args.workers} workers...")
+            log.info("running ingestion in parallel with %s workers...", args.workers)
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 def run_one(t: Topic) -> int:
                     return ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
@@ -249,19 +333,35 @@ def main() -> int:
                 rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
                                    skip_unchanged=skip_unchanged)
 
+        problems = None
         if not args.skip_refresh:
             try:
-                print("running final STAC catalog refresh...")
-                stac.refresh_catalog()
-            except Exception as e:
-                print(f"final stac catalog refresh FAILED: {e}", file=sys.stderr)
-                traceback.print_exc()
+                log.info("running final STAC catalog refresh...")
+                problems = stac.refresh_catalog()
+            except Exception:
+                log.exception("final stac catalog refresh FAILED")
                 rc = 1
+        if not args.dry_run:
+            jobs.start_topic_thumbs()
+            rc |= _flush_cdn(problems)
         return rc
 
     topic = Topic.parse(args.topic)
-    return ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
-                        skip_unchanged=skip_unchanged)
+    # The refresh runs here rather than in ingest_topic, so the CDN flush knows whether it did.
+    rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=True,
+                      skip_unchanged=skip_unchanged)
+    problems = None
+    if not args.dry_run and not args.skip_refresh:
+        problems = _refresh_catalog(topic)
+        if problems is None:
+            rc = 1
+    # Previews in minutes rather than at the nightly thumbnail run, which stays the backstop. Started
+    # even after a failed sink, since the layer may still have been republished; the thumbnail job
+    # works out whether anything it draws changed.
+    if not args.dry_run:
+        jobs.start_topic_thumbs([topic.stem])
+        rc |= _flush_cdn(problems)
+    return rc
 
 
 if __name__ == "__main__":

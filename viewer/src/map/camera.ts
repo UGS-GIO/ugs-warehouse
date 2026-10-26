@@ -35,8 +35,9 @@ export function takeFocus(): Bounds | null {
   return b;
 }
 
-// The pin a place pick leaves on the map, so the spot the map flew to stays marked.
-export type Pin = { lng: number; lat: number; label: string };
+// The pin a place pick leaves on the map, so the spot the map flew to stays marked. A quad pick
+// also outlines the quad.
+export type Pin = { lng: number; lat: number; label: string; outline?: Bounds };
 let pin: Pin | null = null;
 const pinListeners = new Set<() => void>();
 

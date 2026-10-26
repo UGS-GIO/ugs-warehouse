@@ -69,11 +69,11 @@ export function RangeFacet({ label, summary, min, max, value, bins, onCommit, to
             // Arrow keys commit every step; those replace the history entry instead of piling up.
             onValueCommitted={([a, b], reason) => onCommit(a, b, reason === "keyboard")} />
           {ends && (
-            <div className="flex justify-between text-[11px] text-muted-foreground"><span>{ends[0]}</span><span>{ends[1]}</span></div>
+            <div className="flex justify-between text-2xs text-muted-foreground"><span>{ends[0]}</span><span>{ends[1]}</span></div>
           )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             {([0, 1] as const).map((i) => (
-              <label key={i} className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+              <label key={i} className="flex flex-col gap-0.5 text-2xs text-muted-foreground">
                 {i === 0 ? "From" : "To"}
                 <span className="flex items-center rounded-md border border-input bg-card px-2 focus-within:border-primary">
                   {prefix && shown(i) !== "" && <span className="text-sm text-muted-foreground">{prefix}</span>}
@@ -86,7 +86,7 @@ export function RangeFacet({ label, summary, min, max, value, bins, onCommit, to
               </label>
             ))}
           </div>
-          {note && <p className="mt-1.5 text-[11px] text-muted-foreground">{note}</p>}
+          {note && <p className="mt-1.5 text-2xs text-muted-foreground">{note}</p>}
         </div>
       )}
     </section>

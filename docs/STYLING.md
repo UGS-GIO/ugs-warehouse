@@ -47,6 +47,11 @@ machine identity is the declared `itemId`.
 | `pmtiles` (vector) | `vector` | `style_url` → GL fragment; paint on `source-layer` | MapLibre (client) |
 | `cog` single-band (e.g. gravity) | `raster` | `colormap_name` / `rescale` / `nodata` | titiler (future) |
 | `cog` RGB geologic plate (pubs) | — | nothing — the plate **is** the cartography | served as-is |
+| Zarr datacube collection (federated, e.g. UBM) | `raster` | bound by `collectionId`, not `itemId`: its own catalog attaches it as the collection's `renders` | the viewer (`rescale` = default stretch) |
+
+Collection-bound entries are skipped by the warehouse join (`core.styles._parse`): it mints no such
+items, so they would only read as orphans. The viewer reads a datacube's stretch from the item's
+`renders` / `ugs:renders`, then its collection's, and samples one only when neither has it.
 
 **Why `ugs:renders`, not the STAC render extension?** That extension is raster/titiler-oriented (it
 has no field for a vector GL `style_url`), and its v2.0.0 schema *requires* a `rel:"render"` image
@@ -62,9 +67,7 @@ layers asking for `Arial`, a font no open glyph server can serve (#116). ugs-sty
 the fontstacks it uses (`Noto Sans Regular/Bold/Italic`, next to the styles and sprites) and fails
 its build on any other name, so a style can only ask for type we host.
 
-Label renders carry `glyphs` in `ugs:renders` alongside `sprite`; the tiles service passes it into
-`/styles/{topic}.json`, and re-points it at `…/VectorTileServer/resources/fonts/…` for Esri, which
-reads fonts from under the service. The viewer's base styles (Protomaps Streets/Light, satellite)
+Label renders carry `glyphs` in `ugs:renders` alongside `sprite`. The viewer's base styles (Protomaps Streets/Light, satellite)
 name the same URL.
 
 ## Legend
@@ -100,3 +103,12 @@ A style binds only when **both** hold (use `--report` to diagnose):
 
 The default scope is `ugs-serving-topics` only (pubs skipped unless `--collection all`). Intended to
 fire from the `ugs-styles` publish (after the CDN rsync) so a style edit reaches the viewers hands-free.
+
+**Generated publication-layer styles.** A publication layer with no ugs-styles style binds the file
+the vectors job generated for it, the viewer's default look (`ugs:generated_style` on the Item,
+bound as the same `ugs:renders` default and `style` asset, the render marked `generated` so the
+viewer keeps its per-layer colour); an ugs-styles style for the same id always wins, and replaces
+the generated one on the next restyle. A single-file publication carries its one layer on the
+Collection, so `--collection all` also rebinds Collections that name a generated style.
+
+Unit polygons are not coloured from the DMU's `AreaFillRGB`: the source data carries no colours.

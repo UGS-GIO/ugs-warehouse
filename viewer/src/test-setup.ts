@@ -11,6 +11,12 @@ if (typeof window !== "undefined" && !window.matchMedia) {
   }) as MediaQueryList;
 }
 
+if (typeof document !== "undefined") {
+  // CI runs every test file at once on a few CPUs; 1s for a findBy is too short there.
+  const { configure } = await import("@testing-library/react");
+  configure({ asyncUtilTimeout: 5000 });
+}
+
 afterEach(async () => {
   if (typeof document === "undefined") return;
   const { cleanup } = await import("@testing-library/react");

@@ -1,4 +1,6 @@
+import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -22,6 +24,25 @@ def _in_memory_gcs(monkeypatch):
     monkeypatch.setattr(gcs, "_cached_stores", {})
     monkeypatch.setattr(gcs, "GCSStore", lambda bucket=None, **_k: MemoryStore())
     monkeypatch.setattr(gcs, "_gcs_client", _no_client)
+    # MemoryStore keeps no custom metadata, so the listing builders stamp from is empty by default.
+    monkeypatch.setattr(gcs, "list_file_meta", lambda _prefix: {})
+    monkeypatch.setattr(gcs, "get_file_meta", lambda _path: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_cdn_ids_from_other_tests(monkeypatch):
+    """core.cdn remembers the ids this process marked; each test starts with none."""
+    from ugs_warehouse.core import cdn
+    monkeypatch.setattr(cdn, "_own", set())
+
+
+@pytest.fixture(autouse=True)
+def _crossref_registry(monkeypatch):
+    """Serve a fixed DOI registry, so an ingest never reaches Crossref. A test of pubs.dois
+    restores the real `_fetch` and stubs the HTTP call itself."""
+    from ugs_warehouse.pubs import dois
+
+    monkeypatch.setattr(dois, "_fetch", lambda: frozenset({"10.34191/ofr-784dm"}))
 
 
 class FakeIap:
@@ -45,7 +66,9 @@ class FakeIap:
         return jwt.encode(self._signer, claims).decode()
 
     def install(self, monkeypatch, module):
-        monkeypatch.setattr(module, "_iap_certs", lambda refresh=False: self.certs)
+        body = json.dumps(self.certs).encode()
+        fetch = lambda url, method="GET", **kw: SimpleNamespace(status=200, headers={}, data=body)  # noqa: E731
+        monkeypatch.setattr(module, "cached_request", fetch)
         monkeypatch.setattr(module, "_audience", lambda: self.audience)
 
 

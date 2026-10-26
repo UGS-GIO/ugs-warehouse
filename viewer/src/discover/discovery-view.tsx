@@ -31,13 +31,15 @@ import { catalogIndex, type Hit, idMatch, searchCatalog } from "./search-index";
 import { locate, suggest } from "@/map/place-locator";
 import { flyTo } from "@/map/camera";
 import { LiveSearchBar } from "@/shell/map-search";
-import type { StacDoc } from "@/stac";
-import { ItemDetail } from "@/catalog/item-detail";
+import { hasFootprint, idOf, type StacDoc } from "@/stac";
+import type { Crumb } from "@/catalog/breadcrumb";
+import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
 import { useIsDesktop, useIsWide } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
+import { Chevron } from "@/ui/chevron";
 
 // maplibre is ~1.5MB — lazy so the rail + cards paint immediately and the map streams in behind them
 // (App already code-splits ./map, so this shares that chunk).
@@ -59,21 +61,25 @@ const fmtDenom = (d: number) => d.toLocaleString("en-US");
 const DRAWER_KEY = "ugsw.discoverDrawerW";
 const DRAWER = { initial: 560, min: 360, max: 1100 };
 
-const idOf = (href: string) => href.split("/").slice(-2)[0];
 // Escape a value for a [data-href="…"] selector (scroll a map-hovered card into view).
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, searchItems, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError,
+  selectedMissing, selectedPartOf, selectedCollectionId, selectedCrumbs, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
+  searchItems?: ItemRef[];             // the set the shared search index covers (a superset of items)
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
   onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
   onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
   selectedItemError?: unknown;         // that doc's request error (e.g. offline and never cached)
+  selectedPartOf?: PartOf;             // the publication the selected Item belongs to
+  selectedMissing?: string;            // the selected id when this catalog has no such item
   selectedCollectionId?: string;
+  selectedCrumbs?: Crumb[];            // the selected item's trail; a crumb never closes the drawer
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
@@ -149,8 +155,10 @@ export function DiscoveryView({
   // items array is rebuilt every render, so rebuilding the index each keystroke would re-index
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The shared index is built over `searchItems` (the header search's set) so both keep one index
+  // under one key; hits outside `items` drop out below.
   const { index, docs: itemDocs } = useMemo(
-    () => catalogIndex(itemsKey, withData),
+    () => catalogIndex(itemsKey, searchItems ? searchItems.filter((it) => it.data) : withData),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // Survey Notes articles, in a SECOND index, built in a worker. Not merged into the item index: an
@@ -191,7 +199,7 @@ export function DiscoveryView({
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
     const m = new Map<string, number[] | undefined>();
-    for (const it of withData) m.set(it.href, it.data?.bbox);
+    for (const it of withData) if (hasFootprint(it.data)) m.set(it.href, it.data?.bbox);
     return m;
   }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -283,6 +291,7 @@ export function DiscoveryView({
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
   const footprints = useMemo<Footprint[]>(() => results
+    .filter((it) => hasFootprint(it.data))
     .map((it) => ({ href: it.href, id: idOf(it.href), title: discoveryTitle(it), bbox: it.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4), [results]);
   const drawn = useMemo(() => drawable(footprints, area), [footprints, areaK]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -415,7 +424,7 @@ export function DiscoveryView({
       </p>
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        <LiveSearchBar value={text} className="min-w-[12rem] flex-1 sm:max-w-md"
+        <LiveSearchBar value={text} className="min-w-48 flex-1 sm:max-w-md"
           placeholder="Search titles, series IDs, authors and places"
           onChange={(v) => { setText(v); sendQ(v); }} onEnter={submit}
           onClear={() => { setText(""); sendQ("", true); }} />
@@ -529,7 +538,7 @@ export function DiscoveryView({
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">
         {/* LEFT — facet rail (grouped, sectioned, collapsible, with counts). */}
-        <aside className="hidden w-[264px] shrink-0 flex-col overflow-y-auto border-r border-border bg-background md:flex">
+        <aside className="hidden w-66 shrink-0 flex-col overflow-y-auto border-r border-border bg-background md:flex">
           <div className="flex items-center justify-between px-3 pb-1 pt-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Filters</h2>
             {activeFilters > 0 && (
@@ -537,7 +546,7 @@ export function DiscoveryView({
             )}
           </div>
           {filterSections(false)}
-          <div className="px-3 py-4 text-[11px] leading-snug text-muted-foreground">
+          <div className="px-3 py-4 text-2xs leading-snug text-muted-foreground">
             Filters narrow the cards and the map together. Hover a card to find it on the map.
           </div>
         </aside>
@@ -693,8 +702,8 @@ export function DiscoveryView({
         setFiltersOpen(open);
       }}>
         <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 z-[3100] bg-black/40" />
-          <Dialog.Popup aria-modal="true" className="fixed inset-0 z-[3101] flex flex-col bg-background">
+          <Dialog.Backdrop className="fixed inset-0 z-3100 bg-black/40" />
+          <Dialog.Popup aria-modal="true" className="fixed inset-0 z-3101 flex flex-col bg-background">
             <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
               <Dialog.Title className="flex-1 text-base font-semibold">Filters</Dialog.Title>
               {activeFilters > 0 && (
@@ -736,7 +745,7 @@ export function DiscoveryView({
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} layout="drawer"
+              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} missing={selectedMissing} partOf={selectedPartOf} crumbs={selectedCrumbs} layout="drawer"
                 onBack={onCloseItem} onMap={onViewOnMap} onExplore={onExplore} />
             </div>
           </aside>
@@ -776,7 +785,7 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
         className="flex w-full items-center justify-between px-1 py-0.5 text-left">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-        <span aria-hidden className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
+        <Chevron open={open} className="text-muted-foreground" />
       </button>
       {open && (
         <ul className="mt-1 space-y-0.5">
@@ -787,7 +796,7 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
                 <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
-                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-[10px] leading-none ${on
+                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
                   <span className="min-w-0 flex-1 truncate" title={f.label}>{f.label}</span>
                   <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>
@@ -821,7 +830,7 @@ function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
         className="flex w-full items-center justify-between px-1 py-0.5 text-left">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Geometry</span>
-        <span aria-hidden className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
+        <Chevron open={open} className="text-muted-foreground" />
       </button>
       {open && (
         <ul className="mt-1 space-y-0.5" role="radiogroup" aria-label="Geometry">
@@ -833,7 +842,7 @@ function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
                   onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
                     ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
-                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[10px] leading-none ${on
+                  <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>
                   <span className="min-w-0 flex-1 truncate">{f.label}</span>
                   <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{f.n}</span>

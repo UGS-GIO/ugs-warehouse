@@ -71,6 +71,27 @@ def _object_path(href: str, parent_path: str) -> str | None:
     return joined.lstrip("/")
 
 
+def _index_items(coll_path: str) -> tuple[list[dict], str] | None:
+    """(items, path) of the compact `items.json` next to a collection, or None if it has none."""
+    idx_path = posixpath.join(posixpath.dirname(coll_path), "items.json")
+    idx = _read_json(idx_path)
+    if idx and isinstance(idx.get("items"), list):
+        return [it for it in idx["items"] if isinstance(it, dict)], idx_path
+    return None
+
+
+def _link_targets(doc: dict, path: str, items: bool):
+    """(rel, object_path) of each in-bucket child link, and item link too when `items`, in order."""
+    for link in doc.get("links", []):
+        if not isinstance(link, dict):
+            continue
+        rel, href = link.get("rel"), link.get("href")
+        if href and (rel == "child" or (rel == "item" and items)):
+            op = _object_path(href, path)
+            if op:
+                yield rel, op
+
+
 def _collect_items() -> list[tuple[dict, str]]:
     """Every STAC Item in the review catalog, as (item_doc, its_object_path). Walks catalog/collection
     child links, preferring each collection's compact `items.json` index over per-item reads."""
@@ -101,32 +122,16 @@ def _collect_items() -> list[tuple[dict, str]]:
             continue
 
         # Catalog or Collection: prefer the compact items.json index next to a collection.
-        used_index = False
-        if typ == "Collection":
-            idx_path = posixpath.join(posixpath.dirname(path), "items.json")
-            idx = _read_json(idx_path)
-            if idx and isinstance(idx.get("items"), list):
-                used_index = True
-                for it in idx["items"]:
-                    if isinstance(it, dict):
-                        _add(it, idx_path)
+        index = _index_items(path) if typ == "Collection" else None
+        if index:
+            for it in index[0]:
+                _add(it, index[1])
 
-        for link in doc.get("links", []):
-            if not isinstance(link, dict):
-                continue
-            rel, href = link.get("rel"), link.get("href")
-            if not href:
-                continue
+        for rel, op in _link_targets(doc, path, items=not index):
             if rel == "child":
-                cp = _object_path(href, path)
-                if cp:
-                    stack.append(cp)
-            elif rel == "item" and not used_index:
-                ip = _object_path(href, path)
-                if ip:
-                    it = _read_json(ip)
-                    if it:
-                        _add(it, ip)
+                stack.append(op)
+            elif it := _read_json(op):
+                _add(it, op)
 
     return out
 

@@ -2,7 +2,7 @@
 
 Links each map's `series_id` to its predecessor/successor by (quad, tier) so an older map gets
 `deprecated` + a `successor-version` link, and its replacement gets a `predecessor-version` link
-back — the STAC Versioning Indicators fields `core.stac.build_item` / `sink_stac.build_item`
+back, the STAC Versioning Indicators fields `core.stac.build_item` / `sink_stac.build_publication`
 already stamp when handed an `edition` dict (Task 2).
 
 Authoritative quad<->series source (SME-confirmed — supersedes the original AGOL-confirmation
@@ -29,7 +29,7 @@ Conservative by design (never mislabel a published record):
     entry's position ambiguous -> excluded from the graph and warned for human review, while any
     cleanly-ordered siblings in the same group still link normally.
 An entry absent from the returned graph carries no edition information at all: `ingest.py` looks
-it up with `graph.get(series_id)`, gets `None`, and passes `edition=None` — `sink_stac.build_item`
+it up with `graph.get(series_id)`, gets `None`, and passes `edition=None`, `sink_stac.build_publication`
 then stamps no `version`/`deprecated`/predecessor/successor/latest for it.
 
 Import-cheap on purpose: this module (and `geolmap_mosaics`, and `sink_stac`, imported lazily
@@ -46,18 +46,13 @@ from .scale import mosaic_tier_of, tier_of
 
 
 def _item_href(p: dict) -> str:
-    """Public STAC item URL for an edition member. Resolved through its REAL top-level collection
-    group (`sink_stac.collection_group`) — a quad map isn't always in `ugs-publications`: MD-series
-    pubs route to `ugs-mining-district-files` and foreign-publisher pubs (BYU/AAPG/USU/UU, …) route
-    to `ugs-external`, independent of edition grouping (which only looks at quad+tier). Hardcoding
-    `ugs-publications` here would build a dead 404 href for those — this mirrors how
-    `sink_stac.build_item` builds its own collection_path (group + series_code), so the two
-    can never disagree."""
-    from .sink_stac import collection_group, item_id_for, series_code  # lazy: raster-dep-free
+    """Public URL of an edition member's publication Collection. The path comes from
+    `sink_stac.pub_collection_path`, the same function `build_publication` uses, so the link follows
+    the member's real group (MD-series and foreign-publisher pubs are not in `ugs-publications`)
+    and cannot disagree with where the Collection is written."""
+    from .sink_stac import pub_collection_path  # lazy: raster-dep-free
 
-    sid = (p.get("series_id") or "").strip()
-    collection_path = f"{collection_group(p)}/{series_code(sid)}"
-    return config.public_url(stac.item_object_path(collection_path, item_id_for(sid)))
+    return config.public_url(stac.collection_object_path(pub_collection_path(p)))
 
 
 def _year_key(raw: str | None) -> str | None:
@@ -176,7 +171,7 @@ def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None,
                   tier_by_sid: dict[str, str] | None = None) -> dict[str, dict]:
     """{series_id -> edition dict} for every quad map placed unambiguously in a (quad, tier)
     group — `{"version", "deprecated", "predecessor_href", "successor_href", "latest_href"}`, the
-    shape `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
+    shape `sink_stac.build_publication(..., edition=...)` consumes. A pub not covered by any rule below is
     simply absent from the result (see the module docstring).
 
     `quad_by_sid` (`{UPPER series_id: quad_name}`) is the footprints-sourced quad map; defaults to

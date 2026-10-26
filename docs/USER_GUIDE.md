@@ -20,6 +20,7 @@ to convert the data.
 | **COG** | Cloud Optimized GeoTIFF of a scanned geologic map | QGIS, ArcGIS Pro, rasterio | `…/geolmap/cogs/{series}.cog.tif` |
 | **STAC** | The catalog of all layers and maps (JSON) | Finding data, scripts | `…/warehouse/stac/catalog.json` |
 | **OGC API Features** | A feature service that you can query | ArcGIS Pro, QGIS, ArcGIS Online | `…/collections/{id}/items` on the service below |
+| **ArcGIS feature layer** | The layer with UGS symbology, popups and a table | ArcGIS Online, ArcGIS Pro, Experience Builder, StoryMaps | `…/ugs/rest/services/{id}/{symbology}/FeatureServer/0` on the service below |
 
 All file URLs start with **`https://maps-assets.geology.utah.gov`**.
 
@@ -31,6 +32,9 @@ filter on these columns, tools such as DuckDB read only the rows in your area.
 > The OGC API Features service is at
 > `https://ugs-warehouse-features-xedvkyurga-uc.a.run.app`. The collection id is the same as the
 > layer id.
+>
+> The ArcGIS feature layers are at
+> `https://api.geology.utah.gov`.
 
 ---
 
@@ -38,11 +42,11 @@ filter on these columns, tools such as DuckDB read only the rows in your area.
 
 1. Open <https://data.geology.utah.gov/> and click **Catalog**, or use the search box.
 2. Open a layer or a geologic map. The page shows a map preview, the fields and the metadata.
-3. Under **Downloads** and **Services**, copy the URL for the format that your tool uses. Each URL
-   has a **copy** button.
+3. Under **Assets** and **Links**, copy the URL for the format that your tool uses. Each URL has a
+   **copy** button. Under **Export**, the viewer converts the GeoParquet to another file format.
 
 The layer id, for example `hazards_qfaults`, is the last part of the GeoParquet and PMTiles URLs.
-For a scanned geologic map, the COG URL is under **Services** on the map's page.
+For a scanned geologic map, the COG URL is under **Assets** on the map's page.
 
 ---
 
@@ -50,9 +54,8 @@ For a scanned geologic map, the COG URL is under **Services** on the map's page.
 
 ### Metadata and fields
 
-Each layer page in the viewer shows the layer's description and other metadata. **Data schema**
-lists each field and its data type. Under **Downloads**, each layer has an ISO 19139 metadata file
-(XML) that you can load into ArcGIS Pro or a metadata catalog.
+Each layer page in the viewer shows the layer's description and other metadata. **Fields**
+lists each field and its data type.
 
 ### Citation
 
@@ -81,11 +84,23 @@ updated. Cite a dated copy when other people must get the same data.
 Open <https://data.geology.utah.gov/>.
 
 - Browse and search the catalog, and filter layers by attribute.
+- Search the map for a place, a quadrangle name, a PLSS township and section (`T3S R2E sec 12`),
+  latitude and longitude or UTM coordinates, or a geologic unit name. Click the empty search box
+  to see an example of each.
 - Open a layer to see it on a map and in a data table. You can sort and filter the table.
 - Select a feature on the map to highlight its row in the table, and the reverse.
+- Long-press the map (right-click on a computer) to see what is at that place: the map unit or
+  feature under it, from every layer, and the published maps that cover it. The geologic unit and
+  the most detailed geologic map are at the top. Tap a row to turn that layer on or off. To see
+  what is at your own location, tap the **What's under me** button on the map.
 - Export a layer, or the part in your map view, to Shapefile, GeoPackage, File Geodatabase,
   FlatGeobuf, GeoJSON or CSV. You can choose the coordinate system, for example NAD83 / UTM zone 12N
   (EPSG:26912). The export runs in your browser.
+
+On a publication's page, **Download all data (GeoPackage)** gives every layer and table of the
+publication in one file, each layer in its own coordinate system. A table of the publication's
+relationships (`ugs_relationships`) is included. Publications with very large data (over 1 GiB of
+GeoParquet) do not have this file; download their layers one at a time.
 
 Use the viewer to look at data, download a layer once, or share a link. For work that you repeat,
 or for large data, use one of the tools below.
@@ -140,15 +155,16 @@ with no visit.
 
 1. Open the menu and tap **Offline data**.
 2. Under **Offline basemap**, tap **All of Utah** to save the full basemap.
-3. To save a layer, go to **Map**, open **Layers**, and turn the layer on. Under **On the map**,
-   tap the download button beside the layer.
+3. To save a layer, tap **Save offline** on the layer's page. Or go to **Map**, open **Layers**, and
+   turn the layer on. Under **On the map**, tap the download button beside the layer.
 
 ![Step 1: Menu with Offline data](img/offline/menu.png){ width="320" }
 ![Step 2: Offline data page](img/offline/offline-page.png){ width="320" }
 ![Step 3: Download button beside a layer](img/offline/layer-download.png){ width="320" }
 
 To save only part of the state, zoom in on the map and tap **Save this area** under
-**Offline basemap**.
+**Offline basemap**. Or long-press the map and tap **Save this quadrangle offline** to save the 7.5'
+quadrangle at that place.
 
 Downloads run one at a time. If you close the app or lose signal, the download continues from
 where it stopped the next time you open the app. The **Offline data** page shows what is saved,
@@ -168,16 +184,25 @@ ArcGIS Pro 3.2 or later is recommended.
 3. Expand the connection and drag a collection, for example `hazards_qfaults`, onto the map. Pro
    queries the service as you pan and zoom. It does not download the full layer.
 
-### Vector tiles with UGS symbology
+### Feature layers with UGS symbology
 
-Each layer that has a published style is also an ArcGIS vector tile service. The tiles draw with
-the UGS symbology. You cannot query or edit the features.
+Each vector layer is also an ArcGIS feature layer. It draws with the UGS symbology when the layer
+has a published style, and has popups and an attribute table. This also works in ArcGIS Online Map
+Viewer, Experience Builder and StoryMaps.
 
-1. Click **Add Data** > **Data From Path**.
-2. Paste the service URL, for example
-   `https://ugs-warehouse-tiles-xedvkyurga-uc.a.run.app/rest/services/hazards_qfaults/VectorTileServer`.
+1. Click **Add Data** > **Data From Path**. In Map Viewer, click **Add layer** > **Add layer from
+   URL**.
+2. Paste the layer URL, for example
+   `https://api.geology.utah.gov/ugs/rest/services/hazards_qfaults/default/FeatureServer/0`.
 
-You can copy this URL from **Services** > **ArcGIS vector tiles** on the layer page in the viewer.
+You can copy this URL from **Links** > **ArcGIS feature layer** on the layer page in the viewer.
+
+Some layers have more than one symbology, for example wells by purpose or by box type. Each
+symbology has its own URL. Select one in the dropdown next to **ArcGIS feature layer**, then copy
+the URL. Use `default` for the standard symbology.
+
+Large layers draw a simplified shape when you zoom out to the full state, and the full detail when
+you zoom in. The first request after the service is idle can take a few seconds.
 
 ### Geologic map rasters (COG)
 
@@ -193,9 +218,9 @@ Pro's STAC connection needs a STAC API that you can search. This catalog is a se
 so Pro cannot connect to it. Find a layer or map in the [web viewer](#find-a-layer), then add its
 URL as shown above.
 
-> Pro support for Parquet files depends on the Pro version. For vector layers, use the OGC API
-> connection. To get a file geodatabase, export from the [web viewer](#web-viewer) or use
-> [ogr2ogr](#gdal-and-ogr2ogr).
+> Pro support for Parquet files depends on the Pro version. For vector layers, use the
+> [feature layer](#feature-layers-with-ugs-symbology) or the OGC API connection. To get a file
+> geodatabase, export from the [web viewer](#web-viewer) or use [ogr2ogr](#gdal-and-ogr2ogr).
 
 ---
 
@@ -396,7 +421,9 @@ You can use DuckDB to filter rows, select columns or drop the geometry before yo
   ```
 - The layer id, for example `hazards_qfaults` or `enmin_oilgasfields_ogm`, goes in each URL
   pattern above. It is also the OGC API collection id and the STAC item id.
-- The catalog root's `items.json` lists every item, layers and publications, in one file:
+- The catalog root's `items.json` lists one entry per publication (self link to its
+  `collection.json`), each of that publication's layers and tables (tagged `ugs:in_publication` and
+  `ugs:publication_title`), and every non-publication item, in one file:
   `https://maps-assets.geology.utah.gov/warehouse/stac/items.json`
 - Each collection also has `items.parquet`, its items as stac-geoparquet, which DuckDB and
   GeoPandas can filter by bbox or date without reading the whole file.

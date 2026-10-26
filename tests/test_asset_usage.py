@@ -31,7 +31,6 @@ def _capture(monkeypatch, *, review: bool = False, thumb: bool = False) -> dict:
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
-    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
     if review:
         monkeypatch.setattr(sink_stac.config, "IS_REVIEW_CATALOG", True)
@@ -75,18 +74,6 @@ def test_ogc_features_link_names_the_query_purpose(monkeypatch):
 
 
 # ---------------------------------------------------------------- attached assets (core/stac)
-
-def test_iso_metadata_asset_has_the_iso_role_and_a_description(monkeypatch):
-    monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: None)
-    monkeypatch.setattr(stac.iso, "stac_to_iso19139", lambda item: "<x/>")
-    item = {"id": "hazards_qfaults", "collection": "hazards",
-            "_collection_path": "ugs-serving-topics/hazards",
-            "properties": {"ugs:topic_category": "geoscientificInformation"}, "assets": {}}
-    stac.attach_iso(item)
-    md = item["assets"]["metadata"]
-    assert "iso-19115" in md["roles"]   # STAC + Portolan standard role for an ISO metadata file
-    assert md["description"]
-
 
 def test_style_asset_gets_a_description(monkeypatch):
     style_asset = {"href": "https://x/s.json", "type": "application/json",
@@ -132,14 +119,13 @@ def _store(monkeypatch) -> dict:
     monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
     monkeypatch.setattr(stac.gcs, "exists", lambda p: p in store)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
-    monkeypatch.setattr(stac, "attach_iso", lambda item: "")
     monkeypatch.setattr(stac, "attach_renders", lambda item: None)
     monkeypatch.setattr(stac.styles, "warm", lambda: None)
     return store
 
 
 def test_refresh_wires_the_query_endpoint_note_to_served_collections_only(monkeypatch):
-    """End-to-end: a serving-topic collection's AGENTS.md names OGC API Features; a pubs one
+    """End-to-end: a serving-topic collection's AGENTS.md names OGC API Features; a static-only one
     (static-only, no featureserv) must not — the `service` flag has to reach agents() correctly."""
     store = _store(monkeypatch)
     stac.write_item(stac.build_item(
@@ -150,7 +136,7 @@ def test_refresh_wires_the_query_endpoint_note_to_served_collections_only(monkey
         assets={"data": {"href": "https://x/q.parquet", "type": config.PARQUET_MIME,
                          "roles": ["data"]}}))
     stac.write_item(stac.build_item(
-        item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+        item_id="DS-8", collection="DS", collection_path="ugs-rasters/DS",
         geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
         datetime_iso="2026-01-01T00:00:00Z", properties={"title": "A publication"},
         assets={"data": {"href": "https://x/a.parquet", "type": config.PARQUET_MIME,
@@ -158,6 +144,6 @@ def test_refresh_wires_the_query_endpoint_note_to_served_collections_only(monkey
     stac.refresh_catalog()
     p = config.STAC_PREFIX
     serving = store[f"{p}/ugs-serving-topics/hazards/AGENTS.md"].decode().lower()
-    pubs = store[f"{p}/ugs-publications/DS/AGENTS.md"].decode().lower()
+    pubs = store[f"{p}/ugs-rasters/DS/AGENTS.md"].decode().lower()
     assert "ogc api features" in serving
     assert "ogc api features" not in pubs

@@ -11,8 +11,8 @@
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { Compression, EtagMismatch, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
-import { type AreaMeta, areaDir, markStored, parseAreaMeta, tileName, writeFile } from "./area-store";
-import { folderSize, namesIn, prune, readJson, versionKey } from "./guards";
+import { type AreaMeta, areaDir, markStored, parseAreaMeta, tileName } from "./area-store";
+import { folderSize, namesIn, prune, readJson, versionKey, writeFile } from "./guards";
 import { FileChangedError, live } from "./opfs-name";
 import type { Bbox } from "./guards";
 
@@ -110,7 +110,7 @@ async function planWith(p: PMTiles, url: string, bbox: Bbox): Promise<AreaPlan> 
  * with tiles but no meta is never served, so an interrupted save cannot half-work.
  */
 export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: number) => void,
-  source?: PMTiles): Promise<void> {
+  signal?: AbortSignal, source?: PMTiles): Promise<void> {
   return (async () => {
     const parent = await areaDir(plan.url, true);
     if (!parent) throw new Error("This browser cannot store data offline.");
@@ -124,8 +124,9 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
     const stored = await namesIn(dir);
     for (const t of plan.tiles) {
       const name = tileName(t.z, t.x, t.y);
+      signal?.throwIfAborted();
       if (!stored.has(name)) {
-        const got = await p.source.getBytes(t.offset, t.length);
+        const got = await p.source.getBytes(t.offset, t.length, signal);
         // Offsets come from the directory of the version planned; another version's bytes there
         // are not this tile.
         if (plan.meta.version && got.etag && got.etag !== plan.meta.version) {

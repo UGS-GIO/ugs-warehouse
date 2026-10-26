@@ -3,8 +3,10 @@
 // so these tests guard the parts we CAN check deterministically).
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
+import type { CubeStep } from "@/stac/datacube";
 import type { StacDoc } from "@/stac";
 import { to2d } from "@/lib/bbox";
+import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component
@@ -20,11 +22,6 @@ export function mapKindOf(f: MapKindFlags): MapKind {
   if (f.cog) return "cog";
   if (f.footprint) return "footprint";
   return "none";
-}
-
-// The footprint flag for mapKindOf: an item is footprint-drawable if it has geometry or a real bbox.
-export function hasFootprint(item: StacDoc | undefined): boolean {
-  return Boolean(item && (item.geometry || (Array.isArray(item.bbox) && item.bbox.length >= 4)));
 }
 
 // A [w,s,e,n] lon/lat bbox, or undefined if the item's bbox is missing/malformed. Handles the STAC
@@ -59,18 +56,6 @@ export function nextPick(prev: MapPick | null, id: number, props?: Record<string
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
 export const DETENTS = [0.06, 0.55, 0.92] as const;
 
-// Which detent a drag ended nearest. Ties go to the lower one — releasing mid-way biases toward
-// showing more map, which is the thing the sheet is covering. The epsilon is what makes that true:
-// an exact midpoint is rarely exact in binary floating point, so a hair either way would otherwise
-// decide it (0.305 between 0.06 and 0.55 lands 2e-17 nearer the upper one).
-export function nearestDetent(frac: number): number {
-  let best = 0;
-  for (let i = 1; i < DETENTS.length; i++) {
-    if (Math.abs(DETENTS[i] - frac) < Math.abs(DETENTS[best] - frac) - 1e-9) best = i;
-  }
-  return best;
-}
-
 // The phone sheet in the URL (`sheet`): its tab, then how far up it is. `layers` is Layers at half,
 // `info-full` is Info at full, `info-peek` is Info lowered. Absent, or anything unknown, is a
 // Layers peek, so the default map URL stays bare.
@@ -85,22 +70,6 @@ export function parseSheet(v: string | undefined): SheetState {
 export function sheetParam({ tab, detent }: SheetState): string | undefined {
   if (tab === "layers" && detent === 0) return undefined;
   return [tab, SHEET_AT[detent]].filter(Boolean).join("-");
-}
-
-// Where a released drag settles. A flick (speed in sheet-heights per second, + is up) goes one
-// detent past where the sheet is, in the flick's direction, however short the drag was.
-export const FLICK_SPEED = 0.8;
-export function releaseDetent(frac: number, speed: number): number {
-  if (speed > FLICK_SPEED) return Math.min(DETENTS.filter((d) => d <= frac + 1e-9).length, DETENTS.length - 1);
-  if (speed < -FLICK_SPEED) return Math.max(DETENTS.filter((d) => d < frac - 1e-9).length - 1, 0);
-  return nearestDetent(frac);
-}
-
-// Whether a swipe on the sheet's content moves the sheet instead of scrolling it, from its first
-// move (dy + is down): down only from the top, up only while the sheet can still grow.
-export function contentTakesDrag(dx: number, dy: number, atTop: boolean, detent: number): boolean {
-  if (Math.abs(dy) <= Math.abs(dx)) return false;
-  return dy > 0 ? atTop : detent < DETENTS.length - 1;
 }
 
 // Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
@@ -128,9 +97,20 @@ export type ActiveLayer = {
   tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
+  unitsHref?: string;   // a plate or mosaic's `units` PMTiles, loaded as an invisible identify layer
+  pubTitle?: string;    // the publication a plate belongs to, for the scan-only notice
+  opacity?: number;     // 0–1 from the URL (layer-opacity.ts); unset is fully opaque
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
   // pin. Resolved from STAC once, so the layer list and the map agree on what is drawn.
-  zarr?: { href: string; variable: string; pinDims: string[] };
+  // `variable`/`selection` = what is drawn (the URL's pick, else the defaults); `variables` and
+  // `stepDims` = what the layer row's pickers offer.
+  zarr?: {
+    href: string; variable: string; variables: string[];
+    stepDims: Record<string, CubeStep[]>; selection: Record<string, number>;
+    rescale?: [number | undefined, number | undefined];   // the user's Min/Max, if set
+    stacRescale?: [number, number];   // the item's STAC render stretch for this variable, if any
+    collectionHref?: string;          // where the collection's render stretch is looked up otherwise
+  };
 };
 
 // Geometry gates for the unstyled fallback render — without them its circle layer puts a dot on
@@ -141,6 +121,27 @@ export const GEOM_FILTER: Record<"fill" | "line" | "point", GeomFilter> = {
   line: ["match", ["geometry-type"], ["LineString", "MultiLineString", "Polygon", "MultiPolygon"], true, false],
   point: ["match", ["geometry-type"], ["Point", "MultiPoint"], true, false],
 };
+
+// How a vector layer draws when it has no bound ugs-styles render (a publication layer, or a topic
+// whose style has not loaded): one layer per geometry type, so whatever it holds shows. Polygons get
+// a translucent fill and an outline (the line layer's filter takes polygons too), lines a line, points
+// a circle. The preview passes a neutral colour; the Map page the layer's swatch colour.
+export const defaultVectorLayers = (color: string) => [
+  { kind: "fill" as const, type: "fill" as const, filter: GEOM_FILTER.fill,
+    paint: { "fill-color": color, "fill-opacity": 0.15, "fill-outline-color": color } },
+  { kind: "line" as const, type: "line" as const, filter: GEOM_FILTER.line,
+    paint: { "line-color": color, "line-width": 1.2 } },
+  { kind: "circle" as const, type: "circle" as const, filter: GEOM_FILTER.point,
+    paint: { "circle-color": color, "circle-radius": 3.5, "circle-opacity": 0.85,
+             "circle-stroke-color": "#ffffff", "circle-stroke-width": 0.5 } },
+];
+
+// The two unstyled renders, both from defaultVectorLayers so they cannot drift: the preview's in a
+// neutral colour, the Map page's in the layer's swatch colour (the tray and legend show the same).
+export const NEUTRAL_VECTOR_COLOR = "#374151";
+export const previewDefaultLayers = () =>
+  defaultVectorLayers(NEUTRAL_VECTOR_COLOR).map(({ type, filter, paint }) => ({ type, filter, paint }));
+export const mapDefaultLayers = (layerId: string) => defaultVectorLayers(colorForId(layerId));
 
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
@@ -193,9 +194,13 @@ export const reorderLayers = (ids: string[], from: number, to: number): string[]
 // the map render and the reorder reconcile so their ids can't drift.
 export const slugOf = (id: string): string => id.replace(/[^a-zA-Z0-9_]/g, "_");
 
+// Source and layer ids of a raster's identify layer, keyed by the raster's slug.
+export const identifyIds = (slug: string) => ({ source: `idn-${slug}`, layer: `idn-${slug}-fill` });
+
 // The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
 // a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
-// protocol is ready); a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
+// protocol is ready); either with a `units` asset also its `idn-<slug>-fill` identify layer; a
+// vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
 // the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
 // it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
 // can walk the list and moveLayer each. Pure so it's unit-tested against the render.
@@ -206,8 +211,10 @@ export function orderedSublayerIds(
   return layers.flatMap((l) => {
     const s = slugOf(l.id);
     if (l.zarr) return [];
-    if (l.rasterPmHref) return [`rpm-${s}-raster`];
-    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`] : [];
+    // The identify layer sits just above its raster, so it leaves with it and orders with it.
+    const idn = l.unitsHref ? [identifyIds(s).layer] : [];
+    if (l.rasterPmHref) return [`rpm-${s}-raster`, ...idn];
+    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`, ...idn] : [];
     const n = opts.styledCount(l.id);
     // map.tsx renders `styleLayers ? styleLayers.map(...) : fallback` — a resolved-but-empty style
     // ([]) is truthy there and draws nothing, so mirror it with `n != null` (0 → no ids), not `n > 0`.
@@ -215,4 +222,13 @@ export function orderedSublayerIds(
       ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
       : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
   });
+}
+
+// A fingertip is wider than a 1 px fault line, so a tap with nothing right under it looks in a box
+// around the point. The feature under the point still wins.
+export function pickFeature(e: MapLayerMouseEvent, layers: string[]) {
+  if (e.features?.length || !layers.length) return e.features?.[0];
+  const r = matchMedia("(pointer: coarse)").matches ? 12 : 3;
+  const { x, y } = e.point;
+  return e.target.queryRenderedFeatures([[x - r, y - r], [x + r, y + r]], { layers })[0];
 }

@@ -1,19 +1,26 @@
-"""Build per-scale seamless RASTER mosaics of the published geologic maps as raster PMTiles.
+"""Build per-scale seamless RASTER mosaics of the published geologic maps as raster PMTiles + COG.
 
 The static-CDN equivalent of the old geolMapPortal ArcGIS Mosaic Datasets (MD_500K / MD_250K /
 MD_24K ImageServers): the per-map COGs (geolmap/cogs/<series_id>.cog.tif, from pubs/harvest.py) are
 grouped by their publication scale into three tiers and stitched into one raster PMTiles per tier —
-geolmap/mosaics/geologic-maps-{tier}.pmtiles. The viewer toggles them like the old portal.
+geolmap/mosaics/geologic-maps-{tier}.pmtiles — and one Web Mercator WebP COG beside it,
+geologic-maps-{tier}.cog.tif, which the ImageServer serves. The viewer toggles them like the old portal.
 
 Pipeline per tier (GDAL, COGs read in place over /vsigs):
   gdalbuildvrt (-resolution highest, over /vsigs/<bucket>/...)  ->  `gdal raster tile`
   (multithreaded WebP tiles; GDAL owns adjacent-quad overlap via VRT last-wins + alpha-collar
-  fallthrough)  ->  pack the tile tree into MBTiles  ->  `pmtiles convert`  ->  upload
+  fallthrough)  ->  write the tile tree into PMTiles  ->  upload
+  ->  `gdal_translate -of COG` (GoogleMapsCompatible, WebP, internal overviews)  ->  upload
+
+A tier capped below its native zoom is tiled from a second VRT built ON the cap zoom's grid
+(`-tr -tap -r average`): the sources downsample through their own overviews, ~3x faster than warping
+the native VRT, and its pixels then copy through `nearest`. The COG is built the same way at
+min(MOSAIC_COG_MAXZOOM, the PMTiles max zoom); warping the native z17 VRT to a COG was too slow.
 
 `gdal raster tile` (GDAL 3.11+) replaces the old serial `gdal_translate -of MBTILES` + `gdaladdo`,
 which read every COG per tile from one thread and timed out statewide. The base renders with
 `-r nearest` when the target zoom is at/above the COGs' native zoom (the tile-grid-aligned masters
-copy through pixel-exact); a tier capped BELOW native downsamples with `-r average`. Overviews
+copy through pixel-exact); a tier capped BELOW native tiles its grid VRT (above). Overviews
 always resample. NOTE: the unified `gdal` CLI is provisional (GDAL may rename flags between
 releases) — the mosaics image pins a GDAL tag; bump it deliberately and re-check the flags.
 
@@ -44,46 +51,50 @@ import json
 import math
 import os
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import xml.etree.ElementTree as ET
+from array import array
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import NamedTuple
 
-from ..core import config, gcs, stac
+from pmtiles.convert import mbtiles_to_header_json
+from pmtiles.tile import tileid_to_zxy, zxy_to_tileid
+from pmtiles.writer import Writer
+
+from ..core import cdn, config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
+
+GEOJSON = "application/geo+json"
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-# Max web-mercator zoom per tier for a STATEWIDE build. `gdal raster tile --max-zoom` enforces this
-# directly (the old bake passed -co ZOOM_LEVEL, which the MBTiles driver silently ignored, then
-# worked around it by resampling the VRT). The 24k tier is the flagship and its TARGET is z17 (the
-# 600 DPI COGs' native detail), BUT a statewide z17 build produces ~tens of GB of tiles, which does
-# not fit the RAM-backed /tmp of the current job — so the default stays at a RAM-safe cap until the
-# disk-backed / tile-sharded statewide build lands (the ALL-5993 scale follow-up). Run a higher zoom
-# explicitly with --maxzoom (and MOSAIC_WORK_DIR on a real disk) once that is in place. A scoped
-# --quads build renders at native zoom (full detail on a few maps).
-TIER_MAXZOOM = {"24k": 14, "100k": 12, "250k": 12, "500k": 12}
+# Max zoom per tier for a STATEWIDE build. 24k and 100k bake on Cloud Batch, where
+# submit_mosaics_batch.sh passes z17 and z15; a --quads build without --maxzoom renders native.
+TIER_MAXZOOM = {"24k": 14, "100k": 15, "250k": 12, "500k": 12}
 # Lowest zoom to build overviews down to (off the base tiles). A statewide extent is ~1 tile at low
 # zoom, so a full pyramid to MOSAIC_MINZOOM is cheap and lets the layer draw when zoomed out.
 MOSAIC_MINZOOM = max(0, int(os.environ.get("MOSAIC_MINZOOM", "4")))
 # WebP tile quality, clamped to WebP's valid 1-100 (out-of-range crashes the GDAL WebP driver).
 TILE_QUALITY = max(1, min(100, int(os.environ.get("MOSAIC_WEBP_QUALITY", "90"))))
-# Work dir for the (large) intermediate tile tree + MBTiles. Unset -> the system temp (/tmp, which is
+# The COG's max zoom: z15 kept a 23-map 100k benchmark to 709 s and 1.33 GB.
+MOSAIC_COG_MAXZOOM = int(os.environ.get("MOSAIC_COG_MAXZOOM", "15"))
+# Work dir for the (large) intermediate tile tree + PMTiles. Unset -> the system temp (/tmp, which is
 # RAM on Cloud Run — fine for the small tiers, NOT for statewide z17). Point it at a mounted disk for
 # the big builds; None lets tempfile use the default.
 MOSAIC_WORK_DIR = os.environ.get("MOSAIC_WORK_DIR") or None
 
 
-def mosaic_object(tier: str, *, suffix: str = "") -> str:
-    return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}{suffix}.pmtiles"
+def mosaic_object(tier: str, *, suffix: str = "", ext: str = "pmtiles") -> str:
+    return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}{suffix}.{ext}"
 
 
 def _cog_sids() -> set[str]:
@@ -173,14 +184,18 @@ def _vsigs(sid: str) -> str:
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
-    """`sids` ordered ascending by `pub_year` (newest last). `gdalbuildvrt` gives the LAST source
-    priority on overlap, so this makes the newest edition draw on top for free — matters for
-    `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable/missing year
-    sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    """`sids` with reissues first (see `_is_reissue`), then by `pub_year`, missing years lowest and ties
+    by sid. `gdalbuildvrt` draws the LAST source on top, so the newest original map wins an overlap."""
     def _yr(s: str) -> int:
         y = (by_sid.get(s, {}).get("pub_year") or "").strip()
         return int(y) if len(y) == 4 and y.isdigit() else 0
-    return sorted(sids, key=lambda s: (_yr(s), s))
+    return sorted(sids, key=lambda s: (not _is_reissue(by_sid.get(s, {})), _yr(s), s))
+
+
+def _is_reissue(pub: dict) -> bool:
+    """A GIS reproduction of an older map. Its pub_year is the reissue's, not the mapping's, so it
+    draws beneath every original map and shows only where no other map covers the ground."""
+    return "gis reproduction" in (pub.get("pub_name") or "").casefold()
 
 
 _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)
@@ -205,7 +220,7 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
     the finest member COG's m/px; the nearest zoom is the mosaic's native max zoom, but only a source
     ON that zoom's pixel grid copies through pixel-exact under `nearest` (a 0.9 m/px COG rounds to z17
     yet has to be downsampled). The WGS84 extent is the mosaic's REAL footprint, so the packed
-    MBTiles/PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
+    PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
     # stdout only: stderr streams to the job log, so a failed /vsigs read shows GDAL's real reason.
     info = json.loads(subprocess.run(["gdalinfo", "-json", "-nofl", vrt], env=env,
                                      stdout=subprocess.PIPE, text=True, check=True).stdout)
@@ -248,63 +263,48 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
     return zoom, aligned, bounds
 
 
-def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], name: str,
-                           tile_format: str = "webp") -> tuple[int, int, int]:
-    """Pack a `gdal raster tile` XYZ tree ({z}/{x}/{y}.{ext}) into an MBTiles so `pmtiles convert` can
-    read it (go-pmtiles takes MBTiles, not a tile directory). Tiles are copied VERBATIM — no re-encode,
-    zero added loss. MBTiles rows are TMS (y flipped from the XYZ tree). Returns (n_tiles, minz, maxz)."""
+def _write_pmtiles(tile_dir: str, out: str, *, bounds: list[float], name: str) -> tuple[int, int, int]:
+    """Write a `gdal raster tile` XYZ tree ({z}/{x}/{y}.webp) into a PMTiles archive. Tiles are copied
+    verbatim, in tile-id order so the archive is clustered. Returns (n_tiles, minz, maxz).
+
+    Not `pmtiles.convert.disk_to_pmtiles`: it reads a `6.webp.aux.xml` sidecar as tile 6 and writes the
+    XML over the real tile, and it keeps every tile file until the end, so the tree, the writer's
+    tempfile and the archive are all on disk at once. Here each tile file is deleted once copied."""
     if not os.path.isdir(tile_dir):
         raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
-    zdirs = sorted(int(d) for d in os.listdir(tile_dir)
-                   if d.isdigit() and os.path.isdir(os.path.join(tile_dir, d)))
-    if not zdirs:
-        raise RuntimeError(f"gdal raster tile produced no tiles under {tile_dir}")
-    minz, maxz = zdirs[0], zdirs[-1]
-    con = sqlite3.connect(mbtiles)
-    try:
-        # A throwaway temp file: skip the rollback journal and fsyncs; a crash just reruns the bake.
-        con.execute("PRAGMA journal_mode = OFF")
-        con.execute("PRAGMA synchronous = OFF")
-        cur = con.cursor()
-        cur.execute("CREATE TABLE metadata (name text NOT NULL UNIQUE, value text)")
-        cur.execute("CREATE TABLE tiles (zoom_level int, tile_column int, tile_row int, tile_data blob)")
-        cur.execute("CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row)")
-        counted = [0]
-
-        def rows():
-            # A generator, not a list: a statewide tree is millions of tiles.
-            for z in zdirs:
-                zdir = os.path.join(tile_dir, str(z))
-                for xd in os.listdir(zdir):
-                    xpath = os.path.join(zdir, xd)
-                    if not (xd.isdigit() and os.path.isdir(xpath)):
-                        continue
-                    for yf in os.listdir(xpath):
-                        ystr, ext = os.path.splitext(yf)
-                        if not ystr.isdigit() or not ext:
-                            continue                    # skip sidecars (.aux.xml etc.)
-                        if ext.lower() != f".{tile_format}":
-                            raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .{tile_format}")
-                        with open(os.path.join(xpath, yf), "rb") as fh:
-                            blob = fh.read()
-                        counted[0] += 1
-                        yield z, int(xd), (1 << z) - 1 - int(ystr), blob   # XYZ (top) -> TMS (bottom)
-
-        # Plain INSERT, not OR REPLACE: the unique index makes any duplicate z/x/y fail loud.
-        cur.executemany("INSERT INTO tiles VALUES (?,?,?,?)", rows())
-        n = counted[0]
-        if n == 0:
-            raise RuntimeError(f"no tile files under {tile_dir} (zoom dirs {zdirs} were empty)")
-        w, s, e, nth = bounds
-        cur.executemany("INSERT INTO metadata VALUES (?,?)", (
-            ("name", name), ("format", tile_format), ("type", "overlay"),
-            ("minzoom", str(minz)), ("maxzoom", str(maxz)),
-            ("bounds", f"{w},{s},{e},{nth}"),
-            ("center", f"{(w + e) / 2},{(s + nth) / 2},{minz}")))
-        con.commit()
-    finally:
-        con.close()
-    return n, minz, maxz
+    # Tile ids only, 8 bytes each: a statewide z17 tree is millions of tiles. The path is rebuilt
+    # from the id when the tile is copied.
+    tiles = array("Q")
+    for zd in os.listdir(tile_dir):
+        if not (zd.isdigit() and os.path.isdir(zpath := os.path.join(tile_dir, zd))):
+            continue
+        for xd in os.listdir(zpath):
+            if not (xd.isdigit() and os.path.isdir(xpath := os.path.join(zpath, xd))):
+                continue
+            for yf in os.listdir(xpath):
+                ystr, ext = os.path.splitext(yf)
+                if not ystr.isdigit() or not ext:
+                    continue                    # skip sidecars (.aux.xml etc.)
+                if ext.lower() != ".webp":
+                    raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .webp")
+                tiles.append(zxy_to_tileid(int(zd), int(xd), int(ystr)))
+    if not tiles:
+        raise RuntimeError(f"no tile files under {tile_dir}")
+    tiles = array("Q", sorted(tiles))
+    minz, maxz = tileid_to_zxy(tiles[0])[0], tileid_to_zxy(tiles[-1])[0]
+    # The library's own MBTiles-metadata mapper; with no `center` it opens at the coarsest zoom.
+    header, metadata = mbtiles_to_header_json({
+        "name": name, "type": "overlay", "format": "webp", "minzoom": minz, "maxzoom": maxz,
+        "bounds": ",".join(str(v) for v in bounds)})
+    with open(out, "wb") as f:
+        writer = Writer(f)
+        for tid in tiles:
+            path = os.path.join(tile_dir, "{}/{}/{}.webp".format(*tileid_to_zxy(tid)))
+            with open(path, "rb") as fh:
+                writer.write_tile(tid, fh.read())
+            os.remove(path)
+        writer.finalize(header, metadata)
+    return len(tiles), minz, maxz
 
 
 def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
@@ -318,18 +318,82 @@ def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
         return dict(zip(sids, ex.map(one, sids)))
 
 
-def _byte_members(tier: str, sids: list[str], env: dict) -> list[str]:
+def _byte_members(tier: str, sids: list[str], env: dict,
+                  types: dict[str, list[str]] | None = None) -> list[str]:
     """`sids` minus any COG whose bands aren't all Byte, order kept. gdalbuildvrt keeps only sources
     matching the FIRST source's data type and just warns about the rest, so one 16-bit COG in the
     list would silently drop maps (or, listed first, nearly the whole tier). Excluded COGs are named
-    on stderr so the gap is visible."""
-    types = _band_types(sids, env)
+    on stderr so the gap is visible. `types` are the COGs' band types when the caller already has
+    them (the identify layers cache them); otherwise each header is read."""
+    types = _band_types(sids, env) if types is None else types
     bad = {s: t for s, t in types.items() if not t or any(bt != "Byte" for bt in t)}
     if bad:
         detail = ", ".join(f"{s} ({'/'.join(sorted(set(t)))})" for s, t in bad.items())
         print(f"[mosaics] WARNING {tier}: excluding {len(bad)} non-8-bit COG(s) that gdalbuildvrt "
               f"would silently drop or let displace the tier: {detail}", file=sys.stderr)
     return [s for s in sids if s not in bad]
+
+
+def tier_members(tier: str, sids: list[str], by_sid: dict[str, dict], env: dict,
+                 types: dict[str, list[str]] | None = None) -> list[str]:
+    """The maps a tier's mosaic is stitched from, in draw order: `sids` minus the non-8-bit COGs
+    (`_byte_members`), then `_vrt_order`. The bake and the identify layers both take their members
+    from here."""
+    return _vrt_order(_byte_members(tier, sids, env, types), by_sid)
+
+
+def gdal_env() -> dict:
+    """The GDAL environment for reading the COGs in place over /vsigs, tuned for speed."""
+    env = os.environ.copy()
+    env.update({
+        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
+        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
+        "VSI_CACHE": "TRUE",
+        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
+        "GDAL_HTTP_MAX_RETRY": "10",
+        "GDAL_HTTP_RETRY_DELAY": "1",
+    })
+    env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
+    return env
+
+
+def _build_vrt(listfile: str, vrt: str, members: list[str], env: dict, zoom: int | None = None) -> str:
+    """The tier VRT, at the finest member's m/px or on `zoom`'s tile grid (sources averaged down).
+    `-addalpha` gives transparent gaps where no map covers, and is what lets GDAL's VRT drop an upper
+    COG's nodata collar through to the map beneath at a quad seam (last-wins + mask fallthrough)."""
+    res = ["-resolution", "highest"]
+    if zoom is not None:
+        r = str(_WEBMERC_Z0_MPP / 2 ** zoom)
+        res = ["-tr", r, r, "-tap", "-r", "average"]
+    subprocess.run(["gdalbuildvrt", "-q", *res, "-addalpha", "-input_file_list", listfile, vrt],
+                   env=env, check=True)
+    _check_vrt_sources(vrt, members)
+    return vrt
+
+
+def _write_cog(vrt: str, out: str, zoom: int, env: dict) -> None:
+    """A Web Mercator WebP COG with internal overviews, from a VRT on `zoom`'s grid."""
+    subprocess.run(
+        ["gdal_translate", "-q", vrt, out, "-of", "COG", "-co", "TILING_SCHEME=GoogleMapsCompatible",
+         "-co", f"ZOOM_LEVEL={zoom}", "-co", "COMPRESS=WEBP", "-co", f"QUALITY={TILE_QUALITY}",
+         "-co", "WARP_RESAMPLING=nearest", "-co", "OVERVIEW_RESAMPLING=average",
+         "-co", "BIGTIFF=YES",
+         "-co", "NUM_THREADS=ALL_CPUS"], env=env, check=True)
+
+
+def _cog_asset(path: str, obj: str, meta: gcs.FileMeta, label: str) -> dict:
+    """The COG's STAC asset, projection and bands from its header (rio-stac). The ImageServer lists
+    an item by a GeoTIFF asset keyed `visual`, `cog` or `data`; `_write_item` keys it `visual`."""
+    import rasterio
+
+    from .sink_stac import cog_asset_fields
+
+    with rasterio.open(path) as ds:
+        fields = cog_asset_fields(ds)
+    return {"href": config.public_url(obj), "type": config.COG_MIME, "roles": ["visual"],
+            "title": f"Cloud-Optimized GeoTIFF ({label}, Web Mercator)", **fields,
+            **stac.file_fields(meta)}
 
 
 def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
@@ -345,55 +409,49 @@ def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
 
 
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
-                *, suffix: str = "", write_stac_item: bool = True) -> bool:
+                *, suffix: str = "", write_stac_item: bool = True,
+                published: PublishedPubs | None = None) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
     empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
-    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`."""
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item, see `build()`.
+    `published` (see `published_pubs`) is read from the catalog when not given."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
-    # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
-    gdal_env = os.environ.copy()
-    gdal_env.update({
-        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
-        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
-        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
-        "VSI_CACHE": "TRUE",
-        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
-        "GDAL_HTTP_MAX_RETRY": "10",
-        "GDAL_HTTP_RETRY_DELAY": "1",
-    })
-    gdal_env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
-    sids = _byte_members(tier, sids, gdal_env)
+    env = gdal_env()
+    sids = tier_members(tier, sids, by_sid, env)
     if not sids:
         print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)
         return False
     with tempfile.TemporaryDirectory(dir=MOSAIC_WORK_DIR) as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
-        members = [_vsigs(s) for s in _vrt_order(sids, by_sid)]
+        members = [_vsigs(s) for s in sids]
         with open(listfile, "w") as fh:
             fh.write("\n".join(members) + "\n")
-        vrt = os.path.join(tmp, f"{tier}.vrt")
         tiledir = os.path.join(tmp, f"{tier}-tiles")
-        mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")
 
         # `-resolution highest` keeps the VRT at the finest member COG's m/px, so at the mosaic's
-        # native zoom the tile-grid-aligned masters tile 1:1. `-addalpha` gives transparent gaps where
-        # no map covers, and is what lets GDAL's VRT drop an upper COG's nodata collar through to the
-        # map beneath at a quad seam (last-wins + mask fallthrough — no custom compositing needed).
+        # native zoom the tile-grid-aligned masters tile 1:1.
         print(f"[mosaics] {tier}: VRT over {len(sids)} COGs")
-        subprocess.run(["gdalbuildvrt", "-q", "-resolution", "highest", "-addalpha",
-                        "-input_file_list", listfile, vrt], env=gdal_env, check=True)
-        _check_vrt_sources(vrt, members)
+        vrt = _build_vrt(listfile, os.path.join(tmp, f"{tier}.vrt"), members, env)
+        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, env)
+        base_maxz = maxz if maxz is not None else native
+        grid_vrts = {native: vrt} if aligned else {}    # VRTs on a zoom's tile grid, by zoom
+
+        def grid_vrt(zoom: int) -> str:
+            if zoom not in grid_vrts:
+                print(f"[mosaics] {tier}: VRT on the z{zoom} grid")
+                grid_vrts[zoom] = _build_vrt(listfile, os.path.join(tmp, f"{tier}-z{zoom}.vrt"),
+                                             members, env, zoom)
+            return grid_vrts[zoom]
 
         # `gdal raster tile` (GDAL 3.11+) tiles the VRT multithreaded and builds the overview pyramid in
-        # one pass. nearest is a pixel-exact copy only when the source sits on the native zoom's grid
-        # and the tier isn't capped below it; anything else is resampled with average.
-        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, gdal_env)
-        base_maxz = maxz if maxz is not None else native
-        base_resampling = "nearest" if aligned and base_maxz >= native else "average"
+        # one pass. At or above native it tiles the native VRT, a pixel-exact `nearest` copy only when
+        # that VRT is on the grid; a cap below native tiles the cap's grid VRT, which copies through.
+        tile_vrt = vrt if base_maxz >= native else grid_vrt(base_maxz)
+        base_resampling = "nearest" if aligned or tile_vrt != vrt else "average"
         minz_arg = min(MOSAIC_MINZOOM, base_maxz)      # never emit --min-zoom > --max-zoom
         zdesc = f"z{minz_arg}-{base_maxz}" + ("" if maxz is not None else " (native)")
         print(f"[mosaics] {tier}: gdal raster tile -> {zdesc}, WebP q{TILE_QUALITY}, "
@@ -401,62 +459,116 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         subprocess.run(
             ["gdal", "raster", "tile", "--resampling", base_resampling,
              "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
-             "--skip-blank", "--convention", "xyz",
+             "--skip-blank", "--convention", "xyz", "--webviewer", "none",
              "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
-             vrt, tiledir], env=gdal_env, check=True)
+             tile_vrt, tiledir], env=env, check=True)
 
-        # go-pmtiles converts an MBTiles (not a tile tree), so pack the XYZ tree first (verbatim copy).
-        # Free each stage as it's consumed: the work dir defaults to the RAM-backed /tmp, so keeping the
-        # tile tree + MBTiles + PMTiles all alive at once would triple peak usage for no reason.
-        print(f"[mosaics] {tier}: packing tiles -> MBTiles")
-        n_tiles, minz, maxz_built = _pack_tiles_to_mbtiles(
-            tiledir, mbtiles, bounds=bounds, name=f"geologic-maps-{tier}")
+        print(f"[mosaics] {tier}: writing tiles -> PMTiles")
+        n_tiles, minz, maxz_built = _write_pmtiles(
+            tiledir, pmtiles, bounds=bounds, name=f"geologic-maps-{tier}")
         shutil.rmtree(tiledir)
-        print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built}) -> PMTiles")
-        subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)
-        os.remove(mbtiles)
+        print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built})")
 
         obj = mosaic_object(tier, suffix=suffix)
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
+        os.remove(pmtiles)
+
+        cog_zoom = min(MOSAIC_COG_MAXZOOM, base_maxz, native)
+        cog = os.path.join(tmp, f"{tier}.cog.tif")
+        cog_obj = mosaic_object(tier, suffix=suffix, ext="cog.tif")
+        print(f"[mosaics] {tier}: WebP COG -> z{cog_zoom}")
+        _write_cog(grid_vrt(cog_zoom), cog, cog_zoom, env)
+        print(f"[mosaics] {tier}: uploading {os.path.getsize(cog) // 1024 // 1024} MB -> {cog_obj}")
+        meta = gcs.upload(cog, cog_obj, content_type=config.COG_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            _write_item(tier, sids, obj, by_sid, bounds=bounds)
+            _write_item(tier, sids, obj, by_sid, bounds=bounds,
+                        published=published if published is not None else published_pubs(),
+                        cog=_cog_asset(cog, cog_obj, meta, TIER_LABEL.get(tier, tier)))
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
-        print(f"[mosaics] {tier}: done -> {config.public_url(obj)}")
+        print(f"[mosaics] {tier}: done -> {config.public_url(obj)}, {config.public_url(cog_obj)}")
         return True
 
 
-def _public_item_href(collection_path: str, item_id: str) -> str:
-    """A member map's item in the PUBLIC catalog. Pub items live only there, so a mosaic baked into
-    the review catalog still links its members to the public CDN rather than to review paths that
-    don't exist."""
-    rel = stac.item_object_path(collection_path, item_id).removeprefix(config.STAC_PREFIX).lstrip("/")
+def _public_href(object_path: str) -> str:
+    """A STAC document's href in the PUBLIC catalog. Pub documents live only there, so a mosaic baked
+    into the review catalog still links its members to the public CDN rather than to review paths
+    that don't exist."""
+    rel = object_path.removeprefix(config.STAC_PREFIX).lstrip("/")
     return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
 
 
+class PublishedPubs(NamedTuple):
+    """Publication layout paths (`<group>/<SERIES>/<SID>`) in the published catalog."""
+    plates: frozenset[str]       # with a `<SID>_plate/` Item directory
+    collections: frozenset[str]  # with a collection.json
+
+
+def _public_stac_prefix() -> str:
+    """The public catalog's object prefix in the source bucket (the CDN preserves object paths)."""
+    return urllib.parse.urlparse(config.PUBLIC_CATALOG_URL).path.strip("/").rpartition("/")[0]
+
+
+def published_pubs() -> PublishedPubs:
+    """What the public catalog holds for each publication, from one listing of each publication
+    group in the source bucket, so a review bake reads the published catalog too."""
+    plates: set[str] = set()
+    collections: set[str] = set()
+    base = _public_stac_prefix()
+    strip = f"{base}/" if base else ""
+    for group in identity.PUB_GROUPS:
+        for path in gcs.list_paths(f"{strip}{group}/", bucket=config.SOURCE_BUCKET):
+            layout = stac.pub_layout_of(path.removeprefix(strip))
+            if not layout:
+                continue
+            _, series, sid, rest = layout
+            if rest == "collection.json" and sid:
+                collections.add(f"{group}/{series}/{sid}")
+            elif sid and rest.split("/")[0] == f"{sid}{stac.PLATE_SUFFIX}" and rest.count("/") == 1:
+                plates.add(f"{group}/{series}/{sid}")
+    return PublishedPubs(frozenset(plates), frozenset(collections))
+
+
+def _member_doc(p: dict, published: PublishedPubs) -> tuple[str, str]:
+    """(object path, media type) of the published document a member's mosaic link points at: its
+    plate Item, its Collection when the plate is its only data file (no plate Item), or, for a
+    publication not yet in the collection layout, its `<SID>/<SID>.json` Item."""
+    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
+
+    coll = sink_stac.pub_collection_path(p)
+    if coll in published.plates:
+        return stac.item_object_path(coll, stac.plate_item_id(p.get("series_id") or "")), GEOJSON
+    if coll in published.collections:
+        return stac.collection_object_path(coll), "application/json"
+    series, _, pub_id = coll.rpartition("/")
+    return stac.item_object_path(series, pub_id), GEOJSON
+
+
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
-                bounds: list[float]) -> None:
+                bounds: list[float], published: PublishedPubs, cog: dict | None = None) -> None:
     """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
     raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
-    that's how the viewer tells a raster mosaic from vector tiles.
+    that's how the viewer tells a raster mosaic from vector tiles. `cog` is the WebP COG's asset.
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
-    input data in the creation of this Entity") — to its real published item, routed through
-    `sink_stac.collection_group` rather than hardcoded to `ugs-publications` (a member can be
+    input data in the creation of this Entity"), to the document `_member_doc` finds for it in
+    the published catalog, routed through
+    `sink_stac.pub_collection_path` rather than hardcoded to `ugs-publications` (a member can be
     foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
     hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
     but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
     map→mosaic direction is a generic `rel:"related"` on the pub side (sink_stac) — STAC defines no
     reverse of `derived_from`."""
-    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
+    from . import identify  # function-level: it imports vectors
 
     label = TIER_LABEL.get(tier, tier)
     n_maps = len(sids)
     w, s, e, n = bounds
+    units = identify.mosaic_asset(tier)
     derived_from: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
@@ -464,11 +576,11 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
             print(f"[mosaics] {tier}: COG {sid} has no pub record — stitched into the raster but not linked (orphan)", file=sys.stderr)
             continue                      # COG present but no pub record -> no STAC item exists to link
         real_sid = (p.get("series_id") or "").strip()
-        coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"
+        doc, media = _member_doc(p, published)
         derived_from.append({
             "rel": "derived_from",
-            "href": _public_item_href(coll, sink_stac.item_id_for(real_sid)),
-            "type": "application/geo+json",
+            "href": _public_href(doc),
+            "type": media,
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 
     item = stac.build_item(
@@ -482,7 +594,9 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
                     "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
-                          "title": f"Raster PMTiles ({label})"}},
+                          "title": f"Raster PMTiles ({label})"},
+                **({"visual": cog} if cog else {}),
+                **({"units": units} if units else {})},
         extra_links=derived_from,
         proj_epsg=4326,
     )
@@ -502,26 +616,34 @@ def build(scales: list[str], maxz: int | None = None,
     if quads:
         print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
               f"writing '*{suffix}' items only, real tiers untouched")
-    built = 0
+    built, rebaked = 0, []
+    published = published_pubs() if write_stac_item else None
     for tier in scales:
         # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
         # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
         tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
-                      suffix=suffix, write_stac_item=write_stac_item):
+                      suffix=suffix, write_stac_item=write_stac_item, published=published):
             built += 1
+            rebaked.append(f"geologic-maps-{tier}")
     if built and not quads:
+        # The COG is rewritten at the same URL, so the ImageServer's cached answers must go.
+        cdn.mark(rebaked)
         print("[mosaics] refreshing STAC catalog")
-        stac.refresh_catalog()
+        problems = stac.refresh_catalog()
+        try:
+            cdn.flush(problems)
+        except Exception as e:  # noqa: BLE001 - the mosaics are written; the ids stay pending
+            print(f"[mosaics] CDN invalidation FAILED, {rebaked} stay pending: {e}", file=sys.stderr)
     print(f"[mosaics] complete: {built}/{len(scales)} tiers built")
     return built
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Build per-scale raster PMTiles mosaics of geologic maps")
+    ap = argparse.ArgumentParser(description="Build per-scale raster PMTiles + COG mosaics of geologic maps")
     ap.add_argument("--scale", choices=(*TIERS, "all"), action="append",
-                    help="Scale tier to build; repeat for several (default all). The statewide 24k tier "
-                         "at z17 runs on Cloud Batch (scripts/submit_mosaics_batch.sh).")
+                    help="Scale tier to build; repeat for several (default all). The statewide 24k and "
+                         "100k tiers run on Cloud Batch (scripts/submit_mosaics_batch.sh).")
     ap.add_argument("--maxzoom", type=int, default=None,
                     help="Cap the base (native) zoom level; default lets GDAL pick from resolution.")
     ap.add_argument("--editions", choices=("current", "all"), default="current",
@@ -533,6 +655,8 @@ def main() -> int:
                          "*-test-current or *-test-all pmtiles (matching --editions), no STAC "
                          "item, and never touches the real tier — inspect via the printed URL.")
     args = ap.parse_args()
+    # The PMTiles writer stages tile data in a tempfile; keep it on the work disk with the rest.
+    tempfile.tempdir = MOSAIC_WORK_DIR
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")
     picked = args.scale or ["all"]

@@ -65,9 +65,18 @@ def test_get_harvest_status():
 
 
 @pytest.mark.skipif(not HAS_DJANGO, reason="Django not installed in this environment")
-def test_console_cannot_rebuild_the_24k_mosaic_on_cloud_run():
-    """24k runs on Cloud Batch at z17; a Cloud Run rebuild would overwrite it with a z14 mosaic."""
+@pytest.mark.parametrize("tier", ["24k", "100k"])
+def test_console_cannot_rebuild_batch_mosaics_on_cloud_run(tier):
+    """24k (z17) and 100k (z15) run on Cloud Batch; a Cloud Run rebuild would replace them at a lower zoom."""
     from ops import jobs
-    assert {t for t, _ in jobs.JOBS["mosaics"].tiers} == {"100k", "500k"}
-    res = jobs.rebuild_mosaic("24k")
+    assert {t for t, _ in jobs.JOBS["mosaics"].tiers} == {"500k"}
+    res = jobs.rebuild_mosaic(tier)
     assert res["ok"] is False and "unknown mosaic tier" in res["message"]
+
+
+@pytest.mark.skipif(not HAS_DJANGO, reason="Django not installed in this environment")
+def test_the_vectors_job_says_it_runs_as_five_tasks_each_with_its_own_summary():
+    from ops import jobs
+
+    text = jobs.JOBS["vectors"].description
+    assert "5 parallel tasks" in text and "every task reports 0 pending" in text

@@ -1,3 +1,5 @@
+import { GitHubIcon } from "./icons";
+
 // The state's required links as one line. Replaces the Design System's own footer, which is 269px
 // of stacked links — most of a phone's map (index.css hides it). Desktop only: on a phone the same
 // links live in the app menu (nav-menu.tsx), so no screen space goes to them.
@@ -7,6 +9,10 @@ export const LEGAL_LINKS = [
   { href: "https://www.utah.gov/support/privacypolicy.html", label: "Privacy Policy" },
   { href: "https://dts.utah.gov/accessibility", label: "Accessibility" },
 ];
+
+export const REPO_URL = "https://github.com/UGS-GIO/ugs-warehouse";
+
+export const BUILD_URL = __BUILD_SHA__ ? `${REPO_URL}/tree/${__BUILD_SHA__}` : REPO_URL;
 
 export function LegalFooter({ className = "", catalogUrl }: { className?: string; catalogUrl?: string }) {
   return (
@@ -23,9 +29,11 @@ export function LegalFooter({ className = "", catalogUrl }: { className?: string
           STAC catalog
         </a>
       )}
-      {/* Hash inline, not just in the tooltip: on a per-PR preview it's how you tell which bundle
-          you're actually looking at. */}
-      <span title={`viewer build ${__BUILD_HASH__}`}>build {__BUILD_DATE__} · {__BUILD_HASH__}</span>
+      <a href={BUILD_URL} target="_blank" rel="noreferrer" title={`viewer build ${__BUILD_HASH__} on GitHub`}
+         className="inline-flex items-center gap-1 hover:text-foreground hover:underline">
+        <GitHubIcon size={12} />
+        v{__APP_VERSION__}
+      </a>
       <a href="https://geology.utah.gov" target="_blank" rel="noreferrer" className="ml-auto hover:text-foreground hover:underline">
         Utah Geological Survey
       </a>

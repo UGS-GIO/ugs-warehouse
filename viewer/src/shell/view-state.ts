@@ -18,6 +18,7 @@ import {
 import { useIndexes } from "@/stac/items-index";
 import { useStyleLayersFor } from "@/stac/styles";
 import { parseCubeParam } from "@/zarr/cube-picks";
+import { parseOpacityParam } from "@/map/layer-opacity";
 
 export function useViewState() {
   const { sp, view, collectionUrl, itemUrl, urlLayerIds, seriesSel, go, openDiscoverSearch } = useNav();
@@ -211,8 +212,10 @@ export function useViewState() {
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
   const cubePicks = parseCubeParam(sp.cube);
+  const opacities = parseOpacityParam(sp.op);
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id), cubePicks[id]))
-    .filter((l): l is ActiveLayer => l !== null);
+    .filter((l): l is ActiveLayer => l !== null)
+    .map((l) => (l.id in opacities ? { ...l, opacity: opacities[l.id] } : l));
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
   // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset

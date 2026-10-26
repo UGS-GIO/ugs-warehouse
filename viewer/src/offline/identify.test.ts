@@ -5,7 +5,7 @@ import Pbf from "pbf";
 import { FileSource, PMTiles } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { describe, expect, it } from "vitest";
-import { hitLabel, hits, identifyAt, inRings, toSegment } from "./identify";
+import { hitLabel, hits, identifyAt, identifyPoints, inRings, tileAt, toSegment } from "./identify";
 
 describe("geometry", () => {
   const square = [[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }]];
@@ -36,12 +36,19 @@ describe("hitLabel", () => {
     expect(hitLabel({ objectid: 7, unitname: "Lake Bonneville deposits", age: "Q" })).toBe("Lake Bonneville deposits");
   });
   it("skips identifiers, which read as noise", () => {
-    expect(hitLabel({ id: "groundshaking_current.fid-23e49f4e_1a07e84e73d_-1143", pga: "0.4g" })).toBe("0.4g");
+    expect(hitLabel({ id: "groundshaking_current.fid-23e49f4e_1a07e84e73d_-1143", pga: "Very strong" })).toBe("Very strong");
     expect(hitLabel({ globalid: "0b1f8c2e-1234-4d5e-9abc-001122334455" })).toBeNull();
   });
 
-  it("falls back to the first short text", () => {
+  it("prefers a name over a class or code that comes first", () => {
+    expect(hitLabel({ class: "First", countynbr: "18", name: "SALT LAKE" })).toBe("SALT LAKE");
+    expect(hitLabel({ cbsafp2: "41620", classfp: "H1", name20: "Salt Lake" })).toBe("Salt Lake");
+  });
+
+  it("falls back to text that reads as words, never a code, number or bookkeeping", () => {
     expect(hitLabel({ objectid: 7, hazard: "High" })).toBe("High");
+    expect(hitLabel({ egshazardunit: "VSSegs", acc: "0.4" })).toBeNull();
+    expect(hitLabel({ table_type: "dimension", _publication_date: "2026-09-22" })).toBeNull();
     expect(hitLabel({ objectid: 7 })).toBeNull();
   });
 });
@@ -83,5 +90,31 @@ describe("identifyAt (real PMTiles)", () => {
     expect(got.some((g) => g.layer === layer)).toBe(true);
 
     expect(await identifyAt("fixture", -100, 30, 15, archive())).toEqual([]);   // Texas: not in this quad
+  });
+
+  it("answers the other points when one tile fails to load", async () => {
+    const p = archive();
+    const h = await p.getHeader();
+    const real = p.getZxy.bind(p);
+    let calls = 0;
+    p.getZxy = (...a: Parameters<PMTiles["getZxy"]>) => (calls++ === 0 ? Promise.reject(new Error("network")) : real(...a));
+    const mid: [number, number] = [(h.minLon + h.maxLon) / 2, (h.minLat + h.maxLat) / 2];
+    const got = await identifyPoints("fixture", [[-100, 30], mid], 15, p);
+    expect(got[0]).toEqual([]);
+    expect(Array.isArray(got[1])).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("rejects when aborted", async () => {
+    const ac = new AbortController();
+    ac.abort(new Error("timed out"));
+    await expect(identifyAt("fixture", -100, 30, 15, archive(), ac.signal)).rejects.toThrow("timed out");
+  });
+
+  it("has a tile where the archive covers, and none outside it", async () => {
+    const h = await archive().getHeader();
+    const mid = [(h.minLon + h.maxLon) / 2, (h.minLat + h.maxLat) / 2] as const;
+    expect(await tileAt("fixture", mid[0], mid[1], archive())).toBe(true);
+    expect(await tileAt("fixture", -100, 30, archive())).toBe(false);
   });
 });

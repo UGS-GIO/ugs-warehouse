@@ -16,9 +16,14 @@ export function Downloads() {
   if (!jobs.length) return null;
   return (
     <section className="flex flex-col gap-1">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        Downloads · {jobs.length}
-      </h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Downloads · {jobs.length}
+        </h2>
+        {(jobs.length > 1 || jobs.some((j) => j.state === "running")) && (
+          <button type="button" className={BTN} onClick={() => void store.cancelAllJobs()}>Cancel all</button>
+        )}
+      </div>
       <p className="text-sm text-muted-foreground">
         One at a time, in order. If you close the page or lose signal, they carry on from where they
         stopped next time.

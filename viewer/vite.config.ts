@@ -23,8 +23,6 @@ const BUILD_SHA = sh("git rev-parse HEAD", "");
 const APP_VERSION: string = JSON.parse(
   readFileSync(new URL("../.release-please-manifest.json", import.meta.url), "utf8"),
 )["."];
-// HEAD commit date; if git is absent (tarball build), use the build date.
-const BUILD_DATE = sh("git log -1 --format=%cd --date=short", new Date().toISOString().slice(0, 10));
 
 // base has to be an ABSOLUTE mount path, not "./": path routes mean the document's own directory
 // varies with the route (/map vs /discover/x), so a relative asset URL resolves differently per
@@ -80,7 +78,6 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   define: {
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),
-    __BUILD_DATE__: JSON.stringify(BUILD_DATE),
     __BUILD_SHA__: JSON.stringify(BUILD_SHA),
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },

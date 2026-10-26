@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
 import type { Bbox } from "./guards";
-import { quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
+import {
+  caveatOf, mostDetailed, otherUnit, probeOf, quadsFor, ringAround, saveBbox, scaleOf, type Target, toleranceM, unitOf,
+  whatsHere,
+} from "./whats-here";
 
 const STATE = [-114.05, 37, -109.04, 42];
 const layers: ActiveLayer[] = [
@@ -13,9 +16,9 @@ const layers: ActiveLayer[] = [
   { id: "nobox", title: "Aspatial table", pmHref: "https://cdn/x.pmtiles" },
 ];
 
-describe("whatsHere", () => {
-  const slc = { kind: "point" as const, lon: -111.9, lat: 40.78 };
+const slc = { kind: "point" as const, lon: -111.9, lat: 40.78 };
 
+describe("whatsHere", () => {
   it("lists what covers a point, data layers first", () => {
     expect(whatsHere(layers, slc).map((h) => h.id)).toEqual(["faults", "mosaic", "plate", "cube"]);   // layers, then maps by title
   });
@@ -47,6 +50,15 @@ describe("whatsHere", () => {
   });
 });
 
+describe("probeOf", () => {
+  // A long press lists only what is really there, so each row is checked the cheapest true way.
+  it("asks vectors for features, mosaics for a tile, plates by bbox, and leaves out cubes", () => {
+    const withTable = [{ ...layers[0], tableHref: "https://cdn/faults.parquet" }, ...layers.slice(1)];
+    const by = Object.fromEntries(whatsHere(withTable, slc).map((h) => [h.id, probeOf(h)]));
+    expect(by).toEqual({ faults: "identify", "faults#table": null, mosaic: "tile", plate: "bbox", cube: null });
+  });
+});
+
 describe("saveBbox / quadsFor", () => {
   // A long press saves the 7.5' quad under the finger, the unit field staff already work in.
   it("turns a point into the quad under it", () => {
@@ -57,5 +69,46 @@ describe("saveBbox / quadsFor", () => {
   it("keeps an area's own bounds", () => {
     const bbox: Bbox = [-112, 40.7, -111.8, 40.8];
     expect(saveBbox({ kind: "area", bbox })).toEqual(bbox);
+  });
+});
+
+describe("geology", () => {
+  it("reads a scale in the forms the catalog uses", () => {
+    expect([scaleOf("1:24,000"), scaleOf("100k"), scaleOf("500000"), scaleOf("unk")]).toEqual([24000, 100000, 500000, undefined]);
+  });
+
+  it("names a unit from each unit layer's own fields, and nothing from other layers", () => {
+    expect(unitOf("geolmap_geolunits_500k", { unitname: "intrusive rocks-Tertiary", unitsymbol: "Ti", age: "Tertiary" }))
+      .toEqual({ name: "intrusive rocks-Tertiary", symbol: "Ti", age: "Tertiary", scale: 500000 });
+    expect(unitOf("geolmap_geolunits_gems", { mapunit: "Qal", scale: "24000" })).toMatchObject({ symbol: "Qal", scale: 24000 });
+    expect(unitOf("enmin_ut_counties", { name: "SALT LAKE" })).toBeNull();
+    expect(unitOf("constructor", {})).toBeNull();
+  });
+
+  it("prefers the most detailed scale, unknown scales last", () => {
+    expect(mostDetailed([{ id: "a", scale: 500000 }, { id: "b" }, { id: "c", scale: 24000 }])?.id).toBe("c");
+    expect(mostDetailed([])).toBeUndefined();
+  });
+
+  it("warns by scale: nothing at 1:24,000, ±50 m at 1:100,000, generalized at 1:500,000", () => {
+    expect(caveatOf(24000)).toBeNull();
+    expect(caveatOf(undefined)).toBeNull();
+    expect(caveatOf(100000)).toBe("Boundaries approximate (about ±50 m).");
+    expect(caveatOf(500000)).toMatch(/^Generalized statewide map; boundaries can be off by several hundred meters/);
+  });
+
+  it("looks a map's tolerance away for another unit", () => {
+    expect(toleranceM(500000)).toBe(250);
+    const ring = ringAround(-111.7, 40.5594, 250);
+    expect(ring).toHaveLength(8);
+    expect(ring[2][1] - 40.5594).toBeCloseTo(250 / 111_320, 6);   // due north, 250 m
+    const ti = { symbol: "Ti" };
+    expect(otherUnit(ti, [ti, null, { symbol: "Qal", name: "alluvium" }])?.name).toBe("alluvium");
+    expect(otherUnit(ti, [ti, undefined])).toBeUndefined();
+  });
+
+  it("carries a plate's units archive through", () => {
+    const plate = { ...layers[1], unitsHref: "https://cdn/slc-units.pmtiles" };
+    expect(whatsHere([plate], slc)[0].unitsHref).toBe("https://cdn/slc-units.pmtiles");
   });
 });

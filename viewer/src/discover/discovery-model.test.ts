@@ -273,37 +273,19 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
 });
 
 describe("scaleBucket", () => {
-  const bucket = (raw?: string) => scaleBucket(item("p", "x", raw === undefined ? {} : { "ugs:scale": raw }));
-  const cases: [string, string][] = [
-    ["1:24,000", "24k"], ["1:24000", "24k"], ["1 : 24,000", "24k"], ["1:24 000", "24k"],
-    ["1 inch = 2,000 feet", "24k"],
-    ["1:62,500", "62k"], ["1:62500", "62k"], ["1:62.500", "62k"],
-    ["1:100,000", "100k"], ["100k", "100k"],
-    ["1 inch = 200 feet", "lt24k"], ["1\" = 20'", "lt24k"], ["1:2,400", "lt24k"], ["1:720", "lt24k"],
-    ["1:42,240", "mid"], ["1:50,000", "mid"], ["1:24,001", "mid"], ["1 inch = 1 mile", "mid"],
-    ["2 inches = 1 mile", "mid"], ["1:63,360", "mid"], ["1 inch = 8,000 feet", "mid"],
-    ["1:125,000", "100k-250k"], ["1 inch = 2 miles", "100k-250k"],
-    ["1:250,000", "250k"], ["1:500,000", "250k"], ["500k", "250k"], ["1:2,950,000", "250k"],
-    ["1 inch = 20 miles", "250k"],
+  // The ingest's number; pubs/scale.py's tests cover reading the text.
+  const at = (d: number) => scaleBucket(item("p", "x", { "ugs:scale": "x", "ugs:scale_denominator": d }));
+  const cases: [number, string][] = [
+    [720, "lt24k"], [2400, "lt24k"], [24000, "24k"], [24001, "mid"], [50000, "mid"], [63360, "mid"],
+    [62500, "62k"], [100000, "100k"], [125000, "100k-250k"], [250000, "250k"], [2950000, "250k"],
   ];
-  it.each(cases)("buckets %s as %s", (raw, key) => expect(bucket(raw)).toBe(key));
+  it.each(cases)("buckets 1:%i as %s", (d, key) => expect(at(d)).toBe(key));
 
-  it("reads 10,000+ feet to the inch as a mistyped ratio (these maps are 7.5' and 15' quadrangles)", () => {
-    expect(bucket("1 inch = 24,000 feet")).toBe("24k");
-    expect(bucket("1 inch = 62,500 feet")).toBe("62k");
-    expect(bucket("1 inch = 500,000 feet")).toBe("250k");
-  });
-
-  it("takes the largest scale when a map lists two", () => {
-    expect(bucket("1:24,000 & 1:48,000")).toBe("24k");
-    expect(bucket("1: 48,000 and 1:24,000")).toBe("24k");
-  });
-
-  it("puts unreadable values in Other and leaves a missing scale out", () => {
-    for (const raw of ["0.180555556", "0.25", "2 inch = 250,00 feet", "1/4 inch = 1 foot"])
-      expect(bucket(raw)).toBe("other");
-    expect(bucket(undefined)).toBeUndefined();
-    expect(bucket("  ")).toBeUndefined();
+  it("reads the text until the catalog carries the number", () => {
+    const text = (raw?: string) => scaleBucket(item("p", "x", raw === undefined ? {} : { "ugs:scale": raw }));
+    expect([text("1:24,000"), text("100k"), text("1 inch = 2,000 feet")]).toEqual(["24k", "100k", "24k"]);
+    expect([text("0.180555556"), text("1/4 inch = 1 foot")]).toEqual(["other", "other"]);
+    expect([text(undefined), text("  ")]).toEqual([undefined, undefined]);
   });
 
   it("lists the facet large scale to small and filters on it", () => {

@@ -39,12 +39,12 @@ export function useNav() {
       replace: !push,
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s, sheet, terrain,
-          q, collections, category, types, formats, scale, geometry, sort, layout, density, area,
+          q, collections, category, types, formats, scale, geometry, sort, layout, density, area, place, years,
           ...rest } = prev;  // keep override params (rest); Discover keys re-added only when staying
         // Preview is only ever reached from Discover, so carry the filter state through it → Back
         // restores the filtered result set the user came from.
         const discover = next.view === "discover" || next.view === "preview"
-          ? { q, collections, category, types, formats, scale, geometry, sort, layout, density, area }
+          ? { q, collections, category, types, formats, scale, geometry, sort, layout, density, area, place, years }
           : {};
         return {
           ...rest,
@@ -67,6 +67,7 @@ export function useNav() {
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s,
           q: _q, collections: _co, category: _ca, types: _ty, formats: _fo, scale: _sc, geometry: _ge,
+          place: _pl, years: _ye,
           sort: _so, layout: _la, density: _de, area: _ar, sheet: _sh, ...rest } = prev;
         return { ...rest, q: opts.q || undefined, category: opts.category || undefined };
       },

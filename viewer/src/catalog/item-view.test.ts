@@ -335,16 +335,13 @@ describe("seriesLabel", () => {
 });
 
 describe("parseScale / scaleDenominator", () => {
-  it("reads the forms pubs/scale.py reads", () => {
-    expect(parseScale("1:24,000")).toBe(24000);
-    expect(parseScale("1:24000")).toBe(24000);
-    expect(parseScale("1:24 000")).toBe(24000);
-    expect(parseScale("1 inch = 200 feet")).toBe(2400);
-    expect(parseScale("1 inch = 1 mile")).toBe(63360);
-    expect([parseScale("100k"), parseScale("500000"), parseScale("unk"), parseScale("0.25"),
-      parseScale("0.180555556"), parseScale("")]).toEqual([100000, 500000, undefined, undefined, undefined, undefined]);
+  it("reads the plain forms a unit layer or an old catalog carries", () => {
+    expect([parseScale("1:24,000"), parseScale("1 : 24 000"), parseScale("24000"), parseScale("100k"),
+      parseScale("1 inch = 200 feet")]).toEqual([24000, 24000, 24000, 100000, 2400]);
+    expect([parseScale("unk"), parseScale("0.25"), parseScale(""), parseScale(undefined)])
+      .toEqual([undefined, undefined, undefined, undefined]);
   });
-  it("prefers the producer's number over the raw text", () => {
+  it("prefers the ingest's number over the raw text", () => {
     expect(scaleDenominator(item("ugs-publications/M", "M-1", { "ugs:scale": "1:24,000", "ugs:scale_denominator": 100000 })))
       .toBe(100000);
     expect(scaleDenominator(item("ugs-publications/M", "M-2", { "ugs:scale": "1:62,500" }))).toBe(62500);

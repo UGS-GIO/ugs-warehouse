@@ -178,8 +178,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   coverageDefault?: boolean;
 }) {
   const mapRef = useRef<MapRef>(null);
-  // Register for outside camera moves on mount: load waits for every tile, long after the map can move.
-  useEffect(() => setMapTarget(mapRef), []);
   const pin = usePin();
   const shownPin = showPin ? pin : null;
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -420,7 +418,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       if (e.target instanceof Element && e.target.closest(".maplibregl-ctrl-geolocate")) void askHeading();
     }}>
     <MapGL
-      ref={mapRef}
+      // Registered for outside camera moves as soon as the map exists: load waits for every tile.
+      ref={(m) => { mapRef.current = m; if (m) setMapTarget(mapRef); }}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
       mapStyle={basemapStyle.data ?? BLANK_STYLE}

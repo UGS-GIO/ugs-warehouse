@@ -188,6 +188,14 @@ def test_a_fence_diagram_keyed_on_map_units_validates():
     _validate(_drop_private(fence))
 
 
+def test_mixed_class_values_renumber_without_repeating():
+    from ugs_warehouse.pubs.threed import stac_classes
+
+    out = stac_classes([{"value": 1, "name": "a"}, {"value": "Zuw", "name": "b"}, {"value": 0, "name": "c"}])
+    assert [c["value"] for c in out] == [0, 1, 2]
+    assert [c["ugs:map_unit"] for c in out] == ["1", "Zuw", "0"]
+
+
 def test_a_publication_with_a_table_and_no_footprint_validates():
     """A companion table carries the Utah placeholder as geometry and bbox; a Collection on the Utah placeholder keeps
     its required extent and flags it with `ugs:footprint_source`."""

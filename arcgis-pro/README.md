@@ -1,0 +1,113 @@
+# UGS Warehouse toolbox for ArcGIS Pro
+
+Adds warehouse layers to the active map: vector layers drawn with the same UGS symbology as the
+FeatureServer, and geologic map rasters.
+
+## Install
+
+1. Put `UGSWarehouse.pyt` and `ugs_catalog.py` in the same folder.
+2. In Pro: **Catalog pane → Toolboxes → right-click → Add Toolbox**, and pick `UGSWarehouse.pyt`.
+
+Nothing else to install; the toolbox uses only Pro's own Python (including its `pyarrow`).
+
+## Use
+
+Open **UGS Warehouse → Add Warehouse Layer**:
+
+- **Theme** narrows the list (`emp`, `hazards`, `mapping`, `wetlands`, and
+  `geologic maps (raster)`: the 870 map scans and rasters with a COG on the CDN).
+- **Search** narrows it further: every word must appear in the layer's title, id or keywords.
+- **Layers**: pick one or more.
+- **Source**:
+  - **Open online** (Pro 3.5 or later): the layer reads the current file from the warehouse
+    bucket, with your Google sign-in, through a cloud storage connection the tool creates in the
+    working folder. Nothing is downloaded by hand. A very large layer (a GB or more) takes a long
+    time to open the first time while Pro builds its local cache.
+  - **Copy to a file geodatabase**: any Pro version. Downloads the GeoParquet (checked against the
+    catalog's size and checksum) and writes a feature class to `UGS Warehouse.gdb` in the working
+    folder, for offline work or editing.
+- **Use UGS map colors**: the layer's Esri renderer from ugs-styles, the one its FeatureServer
+  draws with. A layer with no renderer, or without the field the renderer reads, keeps Pro's
+  default symbol.
+
+A raster (a COG) opens through the bucket with your sign-in, then through Esri's generic HTTP
+connection to the CDN; Pro reads only the part in view. A copy writes each layer in the CRS its
+GeoParquet metadata names (WGS84 when it names none; a CRS with no EPSG code gets an unknown one
+and a warning), a Parquet with no geometry as a table, and a GeoJSON through Esri's JSONToFeatures,
+one geometry type per layer. Every layer gets the
+catalog's title, summary, description, tags, credits and license in its metadata (a geodatabase
+copy's feature class gets it when Pro keeps the layer's own metadata read-only).
+
+If opening online does not work on a machine, or Pro is older than 3.5, the tool copies the layer
+instead and says so in its messages, so a run always ends with the layer on the map.
+
+## Sign in (to open layers online)
+
+The data sits in a private Google Cloud Storage bucket. Opening a layer online reads the bucket
+with your own Google sign-in:
+
+1. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
+2. Run **UGS Warehouse → Sign In to UGS Storage** and sign in with your utah.gov account.
+
+Your account needs read access to the bucket (ask the warehouse admins). Without a sign-in, or
+without access, a vector layer is downloaded instead and a map image falls back to the CDN; the
+messages say why.
+
+## Update
+
+Run **UGS Warehouse → Update Toolbox**. It downloads both files from GitHub, replaces them only if
+both arrived whole (keeping `.bak` copies), and says what changed. **Branch** is `main` for
+released versions; enter a pull request's branch to test it, and the toolbox remembers it.
+Afterwards, right-click the toolbox and choose **Refresh**: Pro reads a `.pyt` once.
+
+When GitHub has a newer version, **Add Warehouse Layer** says so at the top of its dialog. It
+checks once per Pro session and stays quiet when GitHub cannot be reached.
+
+## How styling works
+
+The toolbox and the FeatureServer read one renderer: the ugs-styles file at the render's
+`esri_url`, a web map `drawingInfo`. The toolbox passes it to `Layer.updateLayerFromJSON`, so Pro
+converts it to its own renderer the way it does for a printed web map, CIM symbols and Arcade
+expressions included. Nothing is converted in this toolbox.
+
+## How streaming works
+
+ArcGIS Pro opens Parquet only through a cloud storage connection (Amazon S3, Azure, Google), not
+from a web address, and Esri's generic HTTP provider (`WEB`) opens rasters only. So every layer
+opened online goes through a Google connection to the bucket itself; a raster can also use a
+`WEB` connection to the CDN.
+
+Two details make GeoParquet open. The layer is made with `MakeFeatureLayer` and then added to
+the map: `Map.addDataFromPath` fails on Parquet in cloud storage ("Possible credentials issue")
+for any connection, even an anonymous public bucket. And the connection's options are written
+the way Esri's docs write them, one string with True/False values
+(`GOOGLE_APPLICATION_CREDENTIALS <path>; GS_NO_SIGN_REQUEST False`); the sign-in file's path uses
+forward slashes, since Pro reads backslashes in it as escapes. With both, the `gcloud` sign-in
+file opens GeoParquet as well as rasters.
+
+Pro caches a Parquet layer locally and rebuilds the cache when the file changes, so a layer stays
+current; the first open of a very large file is slow while that cache is built.
+
+An S3 connection with the CDN as its endpoint does not work: Pro sends its requests to Amazon
+instead of the endpoint (or, as MinIO, puts the bucket name in the host name). An `s3://` or
+`gs://` href opens anonymously on that provider's own endpoint.
+
+## What it reads from the catalog
+
+A catalog change to any of these can break the toolbox; check here first.
+
+| Where | What |
+|---|---|
+| `warehouse/stac/ugs-serving-topics/items.json` | `items[].id`; `properties.title`, `ugs:dbt_schema`, `keywords` |
+| `warehouse/stac/items.json` (root) | `items[].id`; `assets.cog.href` on the CDN; `properties.title`, `ugs:series_id`, `ugs:author`, `ugs:scale`, `keywords` |
+| Item `ugs-serving-topics/<schema>/<id>/<id>.json` | `assets.data.href`, `file:size`, `file:checksum`; `properties.title`, `description`, `keywords`, `ugs:point_of_contact`, `ugs:renders.default.esri_url` (else the first render's) |
+| `ugs-serving-topics/<schema>/collection.json` | `license`, the `rel: license` link, `providers[].name` |
+| The GeoParquet | the `geo` metadata's `primary_column` and `geometry_types`; WKB geometry |
+| The Esri renderer | a `drawingInfo` object: `renderer`, and its `field1`..`field3` |
+| Layout | data under `https://maps-assets.geology.utah.gov/warehouse/`, COGs under `/geolmap/` |
+
+## Code
+
+`ugs_catalog.py` reads the STAC catalog and the layer's Esri renderer and converts types;
+`UGSWarehouse.pyt` does the map work. Both are tested off Windows in `tests/test_arcgis_pro.py`,
+against a fake arcpy.

@@ -110,7 +110,8 @@ def media_type(url: str) -> str:
 # Hosts we run, which all serve https. An http URL on one of them is upgraded; a third-party host
 # is left exactly as the source gave it, since assuming TLS somewhere we do not operate would turn
 # a working link into a broken one.
-UGS_HOSTS = ("ugspub.nr.utah.gov", "geology.utah.gov", "maps-assets.geology.utah.gov")
+UGS_HOSTS = ("ugspub.nr.utah.gov", "geology.utah.gov", "maps-assets.geology.utah.gov",
+             "wp.me")  # geology.utah.gov's WordPress short links
 
 
 def href(u: str | None) -> str | None:

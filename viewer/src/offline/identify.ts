@@ -72,8 +72,9 @@ export async function identifyAt(url: string, lon: number, lat: number, mapZoom:
 const unlessAborted = <T,>(work: Promise<T>, signal?: AbortSignal): Promise<T> => (!signal ? work
   : new Promise<T>((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-    work.then(resolve, reject);
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   }));
 
 /** identifyAt for several points, reading each tile they fall in once. A tile that fails to load

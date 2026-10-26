@@ -12,8 +12,8 @@ export function setFix(next: Fix): void {
   fixListeners.forEach((fn) => fn());
 }
 export const lastFix = (): Fix | null => fix;
-export const useFix = (): Fix | null => useSyncExternalStore(
-  (fn) => { fixListeners.add(fn); return () => { fixListeners.delete(fn); }; }, () => fix, () => null);
+const subscribeFix = (fn: () => void) => { fixListeners.add(fn); return () => { fixListeners.delete(fn); }; };
+export const useFix = (): Fix | null => useSyncExternalStore(subscribeFix, () => fix, () => null);
 
 type Orientation = { alpha: number | null; absolute: boolean; webkitCompassHeading?: number };
 
@@ -46,11 +46,12 @@ const attach = (on: boolean) => {
   else window.removeEventListener(EVENT, onOrientation);
 };
 
-export const useHeading = (): number | null => useSyncExternalStore((fn) => {
+const subscribeHeading = (fn: () => void) => {
   if (!headingListeners.size) attach(true);
   headingListeners.add(fn);
   return () => { headingListeners.delete(fn); if (!headingListeners.size) attach(false); };
-}, () => heading, () => null);
+};
+export const useHeading = (): number | null => useSyncExternalStore(subscribeHeading, () => heading, () => null);
 
 /** Ask for the compass. Call from a tap: iOS refuses the request otherwise. */
 export async function askHeading(): Promise<void> {

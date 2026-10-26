@@ -206,9 +206,10 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const tol = unit?.scale ? toleranceM(unit.scale) : 0;
   const near = useQuery({
     queryKey: ["near-contact", unit?.url, at, tol],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!unit || target.kind !== "point") return null;
-      const ring = await identifyPoints(unit.url, ringAround(target.lon, target.lat, tol), target.zoom ?? 12);
+      const ring = await identifyPoints(unit.url, ringAround(target.lon, target.lat, tol), target.zoom ?? 12,
+        undefined, signal);
       return otherUnit(unit, ring.map(unit.read)) ?? null;
     },
     enabled: querying && !!unit && tol > 0,

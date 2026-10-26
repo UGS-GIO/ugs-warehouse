@@ -27,7 +27,8 @@ def test_scale_vocabulary_constants():
     ("1:62.500", 62500), ("1:2,950,000", 2950000), ("500000", 500000), ("100k", 100000),
     ("500k", 500000), ("1 inch = 200 feet", 2400), ("1 inch = 2,000 feet", 24000),
     ("1 inch = 8,000 feet", 96000), ("1 inch = 1 mile", 63360), ("2 inches = 1 mile", 31680),
-    ("1 inch = 2 miles", 126720), ("1 inch = 20 miles", 1267200),
+    ("1 inch = 2 miles", 126720), ("1 inch = 20 miles", 1267200), ("1 inch = 2.500 miles", 158400),
+    ("1 inch = 12.500 miles", 792000),
     ("1\" = 20'", 240), ("1\" =  40'", 480), ("1\" =  50'", 600), ("1\" = 3200'", 38400),
     ("1/4 inch = 1 foot", 48),
 ])
@@ -45,7 +46,7 @@ def test_denominator_takes_the_largest_of_several_scales():
     assert scale.denominator("1: 48,000 and 1:24,000") == 24000
 
 
-@pytest.mark.parametrize("raw", ["", "unk", "0.180555556", "0.25", "2 inch = 250,00 feet",
+@pytest.mark.parametrize("raw", ["", "unk", "0.180555556", "0.180", "1:0.5", "0k", "0.25", "2 inch = 250,00 feet",
                                  "1 inch = . feet", "1 inch = 2.000.0 miles"])
 def test_denominator_leaves_an_unreadable_scale_none(raw):
     assert scale.denominator(raw) is None

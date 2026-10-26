@@ -73,6 +73,9 @@ describe("isImageServed", () => {
     const self = (href: string) => [{ rel: "self", href }];
     expect(await served({ links: self("./ugs-publications/M/M-1/M-1.json"), assets: { cog } })).toBe(true);
     expect(await served({ links: self("./ugs-publications/RI/RI-1/RI-1.json"), assets: { cog } })).toBe(false);
+    // A publication Collection: no `collection`, listed under its series key.
+    expect((await import("@/stac")).isImageServed({ type: "Collection", assets: { cog } }, "ugs-publications/MP")).toBe(true);
+    expect((await import("@/stac")).isImageServed({ type: "Collection", assets: { cog } }, "ugs-publications/RI")).toBe(false);
     expect(await served({ collection: "MP", assets: { image: cog } })).toBe(false);
     expect(await served({ collection: "hazards", assets: { data: parquet } })).toBe(false);
     expect(await served({ collection: "RI", assets: { cog } })).toBe(false);

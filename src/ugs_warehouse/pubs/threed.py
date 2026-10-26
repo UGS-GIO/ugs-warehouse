@@ -293,6 +293,13 @@ def threed_object(series_id: str, name: str) -> str:
 
 # The three STAC assets a converted pub carries, plus the classes sidecar — single source of truth so
 # the convert step (writes them) and the pubs ingest (presence-stamps them) never drift.
+def stac_classes(classes: list[dict]) -> list[dict]:
+    """`classification:classes` as the extension types them: `value` is an integer, so a MapUnit
+    code moves to `ugs:map_unit`, where the viewer joins features to it."""
+    return [c if isinstance(c.get("value"), int)
+            else {**c, "value": i, "ugs:map_unit": str(c.get("value"))} for i, c in enumerate(classes)]
+
+
 POLY_NAME, LINE_NAME, MESH_NAME, CLASSES_NAME = "3d_polygons.parquet", "3d_lines.parquet", "3d.glb", "3d_classes.json"
 
 

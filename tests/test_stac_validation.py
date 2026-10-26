@@ -174,6 +174,20 @@ def test_a_publication_whose_series_id_has_a_space_validates():
         _validate(_drop_private(it))
 
 
+def test_a_fence_diagram_keyed_on_map_units_validates():
+    """The classification extension's `value` is an integer, so a MapUnit code rides on ugs:map_unit."""
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "OFR-778DM", "pub_year": "2026", "pub_name": "A map with a fence diagram"}, [],
+        override={}, registered_dois=frozenset(), has_cog=True, has_3d=True,
+        classes_3d=[{"value": "Zuw", "name": "Zuw", "title": "Upper unit", "color_hint": "AABBCC"}])
+    fence = next(it for it in items if it["id"].endswith("_fence"))
+    assert fence["properties"]["classification:classes"][0] == {
+        "value": 0, "name": "Zuw", "title": "Upper unit", "color_hint": "AABBCC", "ugs:map_unit": "Zuw"}
+    _validate(_drop_private(fence))
+
+
 def test_a_publication_with_a_table_and_no_footprint_validates():
     """A companion table carries the Utah placeholder as geometry and bbox; a Collection on the Utah placeholder keeps
     its required extent and flags it with `ugs:footprint_source`."""

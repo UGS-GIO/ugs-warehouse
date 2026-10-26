@@ -23,7 +23,7 @@ from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
 from . import counties, dois, identify, identity, topic
 from .relations import layer_kind, source_of_label
 from .scale import MOSAIC_TIER_LABEL, denominator
-from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
+from .threed import LINE_NAME, MESH_NAME, POLY_NAME, stac_classes, threed_object
 from .vectors import GEOPACKAGE_MIME, VECTORS_PREFIX, geopackage_object, pmtiles_object
 
 UGSPUB = identity.UGSPUB
@@ -637,7 +637,7 @@ def _fence_item(ctx: _PubCtx, classes_3d: list[dict] | None) -> dict:
         "fence_mesh": {"href": config.public_url(threed_object(sid, MESH_NAME)), "type": "model/gltf-binary",
                        "roles": ["data", "visual"], "title": "3D fence mesh (glTF)"}},
         geometry=ctx.aoi, item_bbox=ctx.aoi_bbox, footprint_source=ctx.aoi_source,
-        extra={"classification:classes": classes_3d} if classes_3d else None,
+        extra={"classification:classes": stac_classes(classes_3d)} if classes_3d else None,
         extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None)
 
 

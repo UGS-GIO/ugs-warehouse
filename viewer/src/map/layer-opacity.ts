@@ -12,8 +12,8 @@ export function parseOpacityParam(raw: unknown): Record<string, number> {
 }
 
 export function opacityParam(all: Record<string, number>): string | undefined {
-  const entries = Object.entries(all).filter(([, o]) => o < 1);
-  return entries.length ? entries.map(([id, o]) => `${id}~${Math.round(o * 100) / 100}`).join(",") : undefined;
+  const entries = Object.entries(all).map(([id, o]) => [id, Math.round(o * 100) / 100] as const).filter(([, o]) => o < 1);
+  return entries.length ? entries.map(([id, o]) => `${id}~${o}`).join(",") : undefined;
 }
 
 /** One layer's opacity and a setter. Replaces history: dragging a slider shouldn't fill Back. */

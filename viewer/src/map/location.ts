@@ -37,7 +37,9 @@ const EVENT = typeof window !== "undefined" && "ondeviceorientationabsolute" in 
 
 const onOrientation = (e: Event) => {
   const next = headingOf(e as unknown as Orientation);
-  if (next === null || (heading !== null && Math.abs(next - heading) < 2)) return;
+  if (next === null) return;
+  // Shortest way round, so jitter across north (359° to 1°) counts as 2°, not 358°.
+  if (heading !== null && Math.abs(((next - heading + 540) % 360) - 180) < 2) return;
   heading = Math.round(next);
   headingListeners.forEach((fn) => fn());
 };

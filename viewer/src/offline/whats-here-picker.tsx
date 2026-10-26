@@ -473,7 +473,7 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
         <button type="button" className={`${btn} ml-auto bg-primary text-primary-foreground hover:bg-primary/90`}
           disabled={save.isPending || pricing || total === 0}
           onClick={() => save.mutate(undefined, { onSuccess: onClose })}>
-          {pricing ? "Pricing…" : `Save offline · ${opfs.formatBytes(total)}`}
+          {pricing ? "Checking size…" : `Save offline · ${opfs.formatBytes(total)}`}
         </button>
       </> : <>
         {opfs.isSupported() && (

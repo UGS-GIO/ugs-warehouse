@@ -80,6 +80,7 @@ def refresh() -> int:
     global _cache
     with _lock:
         _cache = None
+    fetch_layers.cache_clear()
     return len(_manifest())
 
 
@@ -179,7 +180,9 @@ def compose_style(layers: list[dict], pmtiles_url: str, source_layer: str, *, na
     style: dict = {"version": 8}
     style.update({k: v for k, v in (("name", name), ("sprite", sprite), ("glyphs", glyphs)) if v})
     style["sources"] = {source: {"type": "vector", "url": f"pmtiles://{pmtiles_url}"}}
-    style["layers"] = [{**lyr, "source": source, "source-layer": source_layer} for lyr in layers]
+    # A background layer draws no source.
+    style["layers"] = [lyr if lyr.get("type") == "background"
+                       else {**lyr, "source": source, "source-layer": source_layer} for lyr in layers]
     return style
 
 

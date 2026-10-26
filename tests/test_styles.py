@@ -147,6 +147,8 @@ def test_compose_style_binds_every_layer_to_the_pmtiles_source():
     assert style["version"] == 8 and style["name"] == "Counties" and "sprite" not in style
     assert style["sources"] == {"v": {"type": "vector", "url": "pmtiles://https://cdn/x.pmtiles"}}
     assert style["layers"] == [{**FRAGMENT[0], "source": "v", "source-layer": "x"}]
+    bg = {"id": "bg", "type": "background"}
+    assert styles.compose_style([bg], "https://cdn/x.pmtiles", "x")["layers"] == [bg]
 
 
 def _styled_item(item_id="enmin_ut_counties"):

@@ -10,7 +10,8 @@ For how the catalog is built and served, see [Architecture](ARCHITECTURE.md).
 
 The model uses STAC 1.1 and its official extensions, and follows Portolan's conformance rules. The
 one field STAC has no standard for, the join columns of a relationship, is the namespaced
-`ugs:foreign_keys`.
+`ugs:foreign_keys`. Each document's `self` link is its absolute public URL, as STAC requires; every
+other link is relative. CI checks the builders' output with rashid and stac-node-validator.
 
 ## Status
 

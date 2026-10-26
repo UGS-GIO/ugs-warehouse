@@ -72,6 +72,7 @@ def run(cmd: list[str]) -> None:
 def fetch(url: str, dest: Path) -> None:
     with requests.get(url, stream=True, timeout=600) as r:
         r.raise_for_status()
+        r.raw.decode_content = True
         with open(dest, "wb") as f:
             shutil.copyfileobj(r.raw, f)
 

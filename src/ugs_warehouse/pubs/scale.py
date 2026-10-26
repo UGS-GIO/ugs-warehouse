@@ -32,7 +32,7 @@ def denominator(raw: str) -> int | None:
     or more to the inch is read as a mistyped ratio: the maps that say so are 7.5' quadrangles."""
     s = (raw or "").strip().lower()
     if ratios := _RATIO.findall(s):
-        nums = [n for r in ratios if (n := _number(r))]
+        nums = [n for r in ratios if (n := _number(r)) and n >= 1]
         return int(min(nums)) if len(nums) == len(ratios) else None
     if (n := _number(s)) is not None:
         return int(n) if n >= 1 else None   # 0.18…: a spreadsheet time of day, not a scale

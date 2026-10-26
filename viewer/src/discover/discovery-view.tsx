@@ -459,18 +459,19 @@ export function DiscoveryView({
           below a screenful of cards with nothing saying they existed, and the opt-in engine was a
           bare checkbox beside the item count — which read as that count's label. */}
       {q.trim().length >= MIN_Q && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs">
+        // Phones: one row that scrolls sideways, like a maps app's chips, so results start higher.
+        <div className="no-scrollbar flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs max-sm:flex-nowrap max-sm:overflow-x-auto">
           {placeHit && (
             <button type="button" onClick={pickPlace} disabled={placeFind.isPending}
               title={`Show what's mapped in and around ${placeHit.text}`}
-              className="mr-1 inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2.5 py-0.5 font-medium text-primary hover:bg-primary/20 disabled:opacity-50">
+              className="mr-1 inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-primary bg-primary/10 px-2.5 py-0.5 font-medium text-primary hover:bg-primary/20 disabled:opacity-50">
               <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
               </svg>
               {placeFind.isPending ? `Finding ${placeHit.text}…` : `Near ${placeHit.text}`}
             </button>
           )}
-          <span className="text-muted-foreground">Showing</span>
+          <span className="text-muted-foreground max-sm:hidden">Showing</span>
           <ScopeChip on={scope === "all"} onClick={() => setScope("all")}>Everything</ScopeChip>
           <ScopeChip on={scope === "items"} onClick={() => setScope("items")}>
             Layers &amp; publications · {results.length}
@@ -743,7 +744,7 @@ function ScopeChip({ on, onClick, title, children }: {
 }) {
   return (
     <button type="button" onClick={onClick} title={title}
-      className={`rounded-full border px-2.5 py-0.5 ${on
+      className={`shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 ${on
         ? "border-primary bg-primary text-primary-foreground"
         : "border-border bg-card text-muted-foreground hover:border-primary hover:text-foreground"}`}>
       {children}

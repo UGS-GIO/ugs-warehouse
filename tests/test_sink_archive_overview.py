@@ -38,6 +38,7 @@ def uploads(monkeypatch, tmp_path):
                         lambda paths, **_: calls["delete"].extend(paths))
     monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_VERTICES", 1)
     monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001, 0.01, 0.1))
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: None)
     return calls
 
 
@@ -70,6 +71,50 @@ def test_levels_keep_features_in_order_and_thin_specks_to_one_per_cell(uploads):
     assert ids[:200] == list(range(1, 201)) and len(ids) == 201 and ids[200] > 200
     assert level.column("name").to_pylist()[:200] == [f"w{i}" for i in range(200)]
     assert LEGACY in uploads["delete"]
+
+
+def _rows(local: str) -> list[tuple]:
+    return _con("SELECT 1").execute(
+        f"SELECT feature_id, name, ST_Area(geom) FROM '{local}' ORDER BY feature_id").fetchall()
+
+
+def test_the_statewide_level_merges_each_block_of_one_class(uploads, monkeypatch):
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: "")
+    _write()
+    finer, merged = _rows(uploads["upload"][PATHS[1]]), _rows(uploads["upload"][PATHS[2]])
+    assert 0 < len(merged) < len(finer) / 2 and len(finer) == 201
+    # each merged shape keeps one feature's own attributes, and every shape drawn is still there
+    assert all(name == f"w{fid - 1}" for fid, name, _ in merged if fid <= 200)
+    assert sum(a for *_, a in merged) == pytest.approx(sum(a for *_, a in _rows(
+        _write_level_unmerged(monkeypatch, uploads))), rel=1e-6)
+
+
+def _write_level_unmerged(monkeypatch, uploads) -> str:
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: None)
+    _write()
+    return uploads["upload"][PATHS[2]]
+
+
+def test_the_statewide_level_keeps_features_of_different_classes_apart(uploads, monkeypatch):
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: "name")   # every name differs
+    _write()
+    assert len(_rows(uploads["upload"][PATHS[2]])) == 201
+
+
+def test_a_style_field_the_layer_lacks_leaves_the_level_unmerged(uploads, monkeypatch):
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: 'no "such" field')
+    _write()
+    assert len(_rows(uploads["upload"][PATHS[2]])) == 201
+
+
+@pytest.mark.parametrize(("render", "want"), [
+    ({"field": "wetland_type", "legend": [{}, {}]}, "wetland_type"),
+    ({"legend": [{}]}, ""),
+    ({"legend": [{}, {}]}, None),   # classes the style tells apart by a filter: left unmerged
+])
+def test_merge_class_comes_from_the_style(monkeypatch, render, want):
+    monkeypatch.setattr(sink_archive.styles, "renders_for", lambda item_id, keys: ({"default": render}, None))
+    assert sink_archive._merge_class("x") == want
 
 
 def test_each_level_is_smaller_than_the_last(uploads):

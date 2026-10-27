@@ -290,12 +290,11 @@ export function WhatsHerePicker({ target, startSaving, onClose }: {
   const listed = saving ? here.filter((h) => h.save && !priceOf(h)?.isError)
     : querying ? here.filter(isThere)
     : here.filter((h) => h.group !== "table");   // a table is only something to save
-  // What the geology card shows is not listed again below it.
+  // The unit's source is not listed again below the card; every published map here still is.
   const source = { scale: unit?.scale, year: unit?.year };
   const better = detailedMap && detailedMap.h.id !== unit?.from.id && mapOrder(detailedMap, source) < 0
     ? detailedMap : undefined;
-  const inCard = new Set(querying ? [unit?.from.id, better?.h.id] : []);
-  const rows = listed.filter((h) => !inCard.has(h.id));
+  const rows = listed.filter((h) => !(querying && h.id === unit?.from.id));
   const groups = [
     { name: "Data layers", rows: rows.filter((h) => h.group === "layer" && !REFERENCE_IDS.has(h.id)) },
     { name: "Data tables", rows: rows.filter((h) => h.group === "table") },

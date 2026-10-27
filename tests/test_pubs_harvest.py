@@ -1169,3 +1169,34 @@ def test_a_plate_cog_carries_band_statistics_with_the_web_mercator_tiling(tmp_pa
             k: was.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")}
     assert stats[0] == {"MINIMUM": 50.0, "MAXIMUM": 50.0, "MEAN": 50.0, "STDDEV": 0.0}  # masked out
     assert stats[3]["MINIMUM"] == 0.0 and stats[3]["MAXIMUM"] == 255.0  # the alpha band too
+
+
+# --- a sheet with no footprint is cropped to its quad ---------------------------------------------
+
+def _sheet(tmp_path, west, north, width_deg, height_deg):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    path = str(tmp_path / "sheet.tif")
+    with rasterio.open(path, "w", driver="GTiff", height=50, width=50, count=1, dtype="uint8",
+                       crs="EPSG:4326", transform=from_origin(west, north, width_deg / 50, height_deg / 50)) as ds:
+        ds.write(np.full((1, 50, 50), 200, "uint8"))
+    return path
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_one_quad_sheet_crops_to_its_quad(tmp_path):
+    from ugs_warehouse.pubs import harvest
+    # A 7.5' quad (40.5-40.625N, 111.625-111.5W) with collar and a legend to its east.
+    q = harvest.sheet_quad(_sheet(tmp_path, -111.65, 40.65, 0.22, 0.18))
+    assert q and (q.west, q.south, q.east, q.north) == (-111.625, 40.5, -111.5, 40.625)
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+@pytest.mark.parametrize("west, north, w, h", [
+    (-111.6, 40.6, 0.1, 0.1),          # holds only part of a quad
+    (-112.1, 40.9, 0.6, 0.45),         # a 30' x 60' sheet: more than one quad
+])
+def test_other_sheets_keep_the_whole_sheet(tmp_path, west, north, w, h):
+    from ugs_warehouse.pubs import harvest
+    assert harvest.sheet_quad(_sheet(tmp_path, west, north, w, h)) is None

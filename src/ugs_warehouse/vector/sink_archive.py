@@ -19,7 +19,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..core import config, gcs, stac
+from ..core import config, gcs, stac, styles
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
@@ -50,12 +50,15 @@ PAGE_ROWS = 1024
 OVERVIEW_TOLERANCES = (0.00068, 0.0027, 0.0108)
 OVERVIEW_MIN_VERTICES = 1_000_000  # about 16 MB of WKB
 OVERVIEW_MIN_SHRINK = 0.7   # a level must be under 70% of the file before it, or it is not written
+# The statewide level merges the features of one symbol class in each block of this many pixels, so
+# a FeatureServer tile there holds a bounded number of features however dense the layer is.
+MERGE_BLOCK_PX = 32
 # A small layer also gets a GeoJSON copy, which a web map loads in one request from the CDN with no
 # server in the path. The cap is on the GeoParquet, about a fifth of the GeoJSON's size.
 GEOJSON_MAX_BYTES = 1_000_000
 GEOJSON_MIME = "application/geo+json"
 # Bump when write or write_overviews changes what they write in a way the settings below miss.
-ARCHIVE_BUILD_VERSION = 1
+ARCHIVE_BUILD_VERSION = 2
 
 
 def archive_signature() -> str:
@@ -65,7 +68,7 @@ def archive_signature() -> str:
     return "|".join(str(v) for v in (
         f"{stac.ARCHIVE_SIGNATURE_PREFIX}{ARCHIVE_BUILD_VERSION}", GEOPARQUET_VERSION, TARGET_ROW_GROUP_BYTES, ROW_GROUP_MIN,
         ROW_GROUP_MAX, PAGE_BYTES, PAGE_ROWS, *OVERVIEW_TOLERANCES, OVERVIEW_MIN_VERTICES,
-        OVERVIEW_MIN_SHRINK))
+        OVERVIEW_MIN_SHRINK, MERGE_BLOCK_PX))
 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.
@@ -252,6 +255,33 @@ def _overview_table(con: duckdb.DuckDBPyConnection, view: str, tolerance: float)
     return f"{view}_overview"
 
 
+def _merge_class(item_id: str) -> str | None:
+    """What the statewide level merges features by: the default style's field, '' when the style
+    draws every feature alike, None when it has classes but no field to tell them apart."""
+    render = styles.renders_for(item_id, set())[0].get("default") or {}
+    if render.get("field"):
+        return str(render["field"])
+    return "" if len(render.get("legend") or []) <= 1 else None
+
+
+def _merge(con: duckdb.DuckDBPyConnection, table: str, tolerance: float, by: str) -> None:
+    """Replace `table`'s features of one class in each block with one shape, which keeps the
+    attributes of the largest."""
+    b = tolerance * MERGE_BLOCK_PX
+    cls = f', "{by}"' if by else ""
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE {table}_merged AS SELECT arg_max(feature_id, "
+        f"ST_XMax(geom) - ST_XMin(geom) + ST_YMax(geom) - ST_YMin(geom)) AS feature_id, "
+        f"ST_Union_Agg(geom) AS _merged FROM {table} "
+        f"GROUP BY floor(ST_XMin(geom) / {b}), floor(ST_YMin(geom) / {b}){cls}")
+    con.execute(
+        f"CREATE TEMP TABLE {table}_out AS SELECT * EXCLUDE (_merged) REPLACE (_merged AS geom) "
+        f"FROM {table} JOIN {table}_merged USING (feature_id) ORDER BY feature_id")
+    con.execute(f"DROP TABLE {table}_merged")
+    con.execute(f"DROP TABLE {table}")
+    con.execute(f"ALTER TABLE {table}_out RENAME TO {table}")
+
+
 def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                     written: dict[str, gcs.FileMeta], listed: set[str] = frozenset()) -> None:
     """Write `{stem}_overview_{n}.parquet` per OVERVIEW_TOLERANCES when the layer is heavy enough,
@@ -272,12 +302,16 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     if points or (vertices or 0) < OVERVIEW_MIN_VERTICES:
         return
     previous, failed = written["data"].size, []
+    merge_by = _merge_class(topic.stem)
     for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 local = os.path.join(tmp, os.path.basename(path))
                 table = _overview_table(con, view, tolerance)
                 try:
+                    # Only the statewide level: at a finer one a click must find the one feature.
+                    if n == len(OVERVIEW_TOLERANCES) and merge_by is not None:
+                        _merge(con, table, tolerance, merge_by)
                     _copy_geoparquet(con, table, local)
                 finally:
                     con.execute(f"DROP TABLE IF EXISTS {table}")

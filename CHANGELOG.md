@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.18.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.17.0...v1.18.0) (2026-10-27)
+
+
+### Features
+
+* **vector:** merge each class's features per block in the statewide overview ([#693](https://github.com/UGS-GIO/ugs-warehouse/issues/693)) ([1f4e491](https://github.com/UGS-GIO/ugs-warehouse/commit/1f4e49116cc9a6d0fcf7ae2cd05b9a13ee17b943))
+
+
+### Bug Fixes
+
+* **deps:** bump the FeatureServer to v0.7.2 ([#690](https://github.com/UGS-GIO/ugs-warehouse/issues/690)) ([00f17c7](https://github.com/UGS-GIO/ugs-warehouse/commit/00f17c7c03303120b289089aa6b8f0160c72dd3d))
+
 ## [1.17.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.16.1...v1.17.0) (2026-10-26)
 
 

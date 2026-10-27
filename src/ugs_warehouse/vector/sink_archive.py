@@ -268,7 +268,7 @@ def _merge(con: duckdb.DuckDBPyConnection, table: str, tolerance: float, by: str
     """Replace `table`'s features of one class in each block with one shape, which keeps the
     attributes of the largest."""
     b = tolerance * MERGE_BLOCK_PX
-    cls = f', "{by}"' if by else ""
+    cls = ', "' + by.replace('"', '""') + '"' if by else ""
     con.execute(
         f"CREATE OR REPLACE TEMP TABLE {table}_merged AS SELECT arg_max(feature_id, "
         f"ST_XMax(geom) - ST_XMin(geom) + ST_YMax(geom) - ST_YMin(geom)) AS feature_id, "
@@ -310,7 +310,8 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                 table = _overview_table(con, view, tolerance)
                 try:
                     # Only the statewide level: at a finer one a click must find the one feature.
-                    if n == len(OVERVIEW_TOLERANCES) and merge_by is not None:
+                    columns = [c[0] for c in con.execute(f"DESCRIBE {table}").fetchall()]
+                    if n == len(OVERVIEW_TOLERANCES) and merge_by in ("", *columns):
                         _merge(con, table, tolerance, merge_by)
                     _copy_geoparquet(con, table, local)
                 finally:

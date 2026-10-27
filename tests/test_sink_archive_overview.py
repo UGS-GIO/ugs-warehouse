@@ -101,6 +101,12 @@ def test_the_statewide_level_keeps_features_of_different_classes_apart(uploads, 
     assert len(_rows(uploads["upload"][PATHS[2]])) == 201
 
 
+def test_a_style_field_the_layer_lacks_leaves_the_level_unmerged(uploads, monkeypatch):
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: 'no "such" field')
+    _write()
+    assert len(_rows(uploads["upload"][PATHS[2]])) == 201
+
+
 @pytest.mark.parametrize(("render", "want"), [
     ({"field": "wetland_type", "legend": [{}, {}]}, "wetland_type"),
     ({"legend": [{}]}, ""),

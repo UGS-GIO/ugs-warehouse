@@ -1,0 +1,133 @@
+# WFS for the USGS NGWMN harvester, in place of the GeoServer `groundwater` workspace.
+# Type names, field names, geometry names and CRS match GeoServer, so the harvester's
+# requests do not change. libpq reads the connection from
+# PGHOST, PGPORT, PGDATABASE, PGUSER and PGPASSWORD.
+MAP
+  NAME "groundwater"
+  EXTENT 220000 4090000 690000 4660000
+  PROJECTION
+    "init=epsg:26912"
+  END
+
+  WEB
+    METADATA
+      "wfs_title"              "UGS groundwater (NGWMN)"
+      "wfs_srs"                "EPSG:26912 EPSG:4326"
+      "wfs_enable_request"     "*"
+      "wfs_namespace_prefix"   "groundwater"
+      "wfs_namespace_uri"      "groundwater"
+      "wfs_getfeature_formatlist" "text/xml; subtype=gml/3.1.1,text/xml; subtype=gml/2.1.2,application/gml+xml; version=3.2"
+    END
+  END
+
+  LAYER
+    # The harvester filters with GeoServer's CQL_FILTER=unique_id='N', which MapServer
+    # only takes as a validated SQL substitution.
+    # A missing or malformed filter returns no rows, not the whole table.
+    NAME "ngwmn_daily_levels_view"
+    TYPE POINT
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "application_name=ngwmn-wfs"
+    DATA "shape FROM (SELECT readingdate_iso8601, usgsid, unique_id, locationid, timezone, uom, depth_to_water, wlmethod, quality, latitude, longitude, shape FROM gwportal.ngwmn_daily_levels_view WHERE %CQL_FILTER%) AS t USING UNIQUE unique_id USING SRID=26912"
+    VALIDATION
+      "CQL_FILTER"         "^unique_id='[0-9]{1,18}'$"
+      "default_CQL_FILTER" "false"
+    END
+    METADATA
+      "wfs_title"         "ngwmn_daily_levels_view"
+      "gml_include_items" "all"
+      "gml_geometries"    "shape"
+      "gml_shape_type"    "point"
+      "gml_types"         "auto"
+      "wfs_featureid"     "unique_id"
+    END
+  END
+
+  LAYER
+    NAME "ugs_ngwmn_monitoring_locations"
+    TYPE POINT
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "application_name=ngwmn-wfs"
+    DATA "shape FROM (SELECT locationid, locationname, locationtype, locationdesc, altlocationcontext, altlocationid, latitude, longitude, horizontalaccmeasurevalue, horizontalaccmeasureunit, horizontalcollectionmethod, horizontalcoordrefsystem, verticalmeasure, verticalunit, verticalcollectionmethod, verticalcoordrefsystem, welltype, aquifername, wellformationtype, welldepthmeasureunit, wlnetworkname, link, nationalaquifer, welldepth, usgs_id, win, send, display, siteid, wrnum, linkgeophysicallog, imagepath, notes, linklithologiclog, linkdevelopmentlog, loggertype, baroefficiency, barologgertype, installdate, enddate, locstatus, personnel, inwqx, stickup, hascond, shape, verticalaccmeasurevalue, density_correction, density_g_cm3, has_packer, sensor_depth_below_casing, ref_density_g_cm3 FROM gwportal.ugs_ngwmn_monitoring_locations) AS t USING UNIQUE siteid USING SRID=26912"
+    METADATA
+      "wfs_title"         "ugs_ngwmn_monitoring_locations"
+      "gml_include_items" "all"
+      "gml_geometries"    "shape"
+      "gml_shape_type"    "point"
+      "gml_types"         "auto"
+      "wfs_featureid"     "siteid"
+    END
+  END
+
+  LAYER
+    NAME "ugs_ngwmn_casing"
+    TYPE POINT
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "application_name=ngwmn-wfs"
+    DATA "shape FROM (SELECT row_number() OVER (ORDER BY siteno, casingdepthfrom) AS fid, agencycd, siteno, casingdepthfrom, casingdepthfromunit, casingdepthto, casingdepthtounit, casingmaterial, casingdiameter, casingdiameterunit, casingthickness, casingthickunit, shape FROM gwportal.ugs_ngwmn_casing) AS t USING UNIQUE fid USING SRID=26912"
+    METADATA
+      "wfs_title"         "ugs_ngwmn_casing"
+      "gml_include_items" "all"
+      "gml_exclude_items" "fid"
+      "gml_geometries"    "shape"
+      "gml_shape_type"    "point"
+      "gml_types"         "auto"
+      "wfs_featureid"     "fid"
+    END
+  END
+
+  LAYER
+    NAME "ugs_ngwmn_screen"
+    TYPE POINT
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "application_name=ngwmn-wfs"
+    DATA "shape FROM (SELECT row_number() OVER (ORDER BY siteno, screendepthfrom) AS fid, agencycd, screendepthfrom, screendepthfromunit, screendepthto, screendepthtounit, holesize, holesizeunit, screenmaterial, screendiameter, screendiameterunit, comments, siteno, shape FROM gwportal.ugs_ngwmn_screen) AS t USING UNIQUE fid USING SRID=26912"
+    METADATA
+      "wfs_title"         "ugs_ngwmn_screen"
+      "gml_include_items" "all"
+      "gml_exclude_items" "fid"
+      "gml_geometries"    "shape"
+      "gml_shape_type"    "point"
+      "gml_types"         "auto"
+      "wfs_featureid"     "fid"
+    END
+  END
+
+  LAYER
+    NAME "ugs_ngwmn_lithology"
+    TYPE POINT
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "application_name=ngwmn-wfs"
+    DATA "shape FROM (SELECT row_number() OVER (ORDER BY siteno, lithologydepthfrom) AS fid, agencycd, lithologydepthfrom, lithologydepthfromunit, lithologydepthto, lithologydepthtounit, lithologydescription, lithologyid, observationmethod, siteno, unitcolor, highlowperm, clay, silt, sand, gravel, cobbles, boulders, conglomerate, bedrock, other, fmname, comment, lithologyunit, shape FROM gwportal.ugs_ngwmn_lithology) AS t USING UNIQUE fid USING SRID=26912"
+    METADATA
+      "wfs_title"         "ugs_ngwmn_lithology"
+      "gml_include_items" "all"
+      "gml_exclude_items" "fid"
+      "gml_geometries"    "shape"
+      "gml_shape_type"    "point"
+      "gml_types"         "auto"
+      "wfs_featureid"     "fid"
+    END
+  END
+
+  LAYER
+    NAME "ugs_ngwmn_waterlevel_spatial"
+    TYPE POINT
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "application_name=ngwmn-wfs"
+    DATA "geom FROM (SELECT row_number() OVER (ORDER BY usgsid, readingdate) AS fid, usgsid, readingdate, locationid, timezone, uom, depth_to_water, wlmethod, quality, latitude, longitude, geom, depth_to_water_string, readingdate_iso8601 FROM gwportal.ugs_ngwmn_waterlevel_spatial) AS t USING UNIQUE fid USING SRID=4326"
+    PROJECTION
+      "init=epsg:4326"
+    END
+    METADATA
+      "wfs_title"         "ugs_ngwmn_waterlevel_spatial"
+      "wfs_srs"           "EPSG:4326 EPSG:26912"
+      "gml_include_items" "all"
+      "gml_exclude_items" "fid"
+      "gml_geometries"    "geom"
+      "gml_geom_type"     "point"
+      "gml_types"         "auto"
+      "wfs_featureid"     "fid"
+    END
+  END
+END

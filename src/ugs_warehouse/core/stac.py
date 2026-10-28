@@ -304,9 +304,9 @@ def _collection_skeleton(*, collection_id: str, path: str, title: str, descripti
                          head_links: list[dict] | None = None,
                          tail_links: list[dict] | None = None) -> dict:
     """The parts every collection.json shares, in one order: core fields, then `fields`, then
-    `assets` when there are any; links root/parent/self (depth from `path`), `head_links`, license,
-    the README/AGENTS links, then `tail_links`. License is CC-BY-4.0 by UGRC policy, with UGS as
-    producer, licensor and host."""
+    `assets` when there are any; links root/parent/self (depth from `path`), `head_links`, license
+    (when configured), the README/AGENTS links, then `tail_links`. License is config.DATA_LICENSE,
+    with UGS as producer, licensor and host."""
     depth = path.count("/") + 1
     return {
         "type": "Collection",
@@ -326,7 +326,8 @@ def _collection_skeleton(*, collection_id: str, path: str, title: str, descripti
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
             *(head_links or []),
-            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
+            *([{"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE}]
+              if config.LICENSE_URL else []),
             # Portolan requires README.md and AGENTS.md beside every node, linked from the JSON.
             *catalog_docs.markdown_links(),
             *(tail_links or []),
@@ -768,7 +769,8 @@ def _layer_collection_doc(item: dict, path: str) -> dict:
             {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../collection.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
-            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
+            *([{"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE}]
+              if config.LICENSE_URL else []),
             *catalog_docs.markdown_links(),
             # pmtiles, service and related links describe the layer, not where the item sits.
             *[lnk for lnk in item.get("links") or []

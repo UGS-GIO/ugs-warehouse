@@ -348,7 +348,7 @@ separate deploy such as review.
 | `WAREHOUSE_{ARCHIVE,PMTILES,THUMBS,FEATURES,OVERRIDES}_PREFIX` | `warehouse/{geoparquet,pmtiles,thumbs,featureserv,overrides}` | Per-artifact object prefixes |
 | `WAREHOUSE_CATALOG_ID`, `WAREHOUSE_CATALOG_TITLE` | `ugs-warehouse`, `Utah Geological Survey data warehouse` | Root catalog id and title |
 | `WAREHOUSE_EXTERNAL_CATALOGS` | USWB catalog | JSON list of `[url, title]` linked under the root |
-| `WAREHOUSE_LICENSE`, `WAREHOUSE_LICENSE_URL` | `CC-BY-4.0` and its URL | License stamped on collections |
+| `WAREHOUSE_LICENSE`, `WAREHOUSE_LICENSE_URL` | `other` and optional URL | License stamped on collections |
 | `WAREHOUSE_STAGED_SOURCE_BUCKETS` | `stagedrasters` | Comma list of buckets a raster promote may copy from |
 | `PGF_BASE_URL` | the features service `run.app` URL | OGC API Features base advertised in the catalog |
 | `STYLES_CDN_BASE`, `STYLES_INDEX_URL`, `STYLES_INDEX_OBJECT` | `{PUBLIC_BASE_URL}/styles`, `{STYLES_CDN_BASE}/index.json`, `styles/index.json` | ugs-styles manifest location |

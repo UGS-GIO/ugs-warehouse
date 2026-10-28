@@ -21,11 +21,11 @@ metadata:
     description: OGC API Features over the UGS geospatial warehouse GeoParquet. For standards clients (ArcGIS Pro, QGIS). UGS web maps use PMTiles.
     keywords: [geology, Utah]
     keywords_type: theme
-    terms_of_service: https://creativecommons.org/licenses/by/4.0/
+    terms_of_service: https://geology.utah.gov
     url: https://geology.utah.gov
   license:
-    name: CC-BY-4.0
-    url: https://creativecommons.org/licenses/by/4.0/
+    name: other
+    url: https://geology.utah.gov
   provider:
     name: Utah Geological Survey
     url: https://geology.utah.gov

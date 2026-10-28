@@ -21,10 +21,10 @@ MAP
   END
 
   LAYER
-    # The harvester asks for this layer by the ugs_ name and filters with GeoServer's
-    # CQL_FILTER=unique_id='N', which MapServer only takes as a validated SQL substitution.
+    # The harvester filters with GeoServer's CQL_FILTER=unique_id='N', which MapServer
+    # only takes as a validated SQL substitution.
     # A missing or malformed filter returns no rows, not the whole table.
-    NAME "ugs_ngwmn_daily_levels_view"
+    NAME "ngwmn_daily_levels_view"
     TYPE POINT
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
@@ -34,7 +34,7 @@ MAP
       "default_CQL_FILTER" "false"
     END
     METADATA
-      "wfs_title"         "ugs_ngwmn_daily_levels_view"
+      "wfs_title"         "ngwmn_daily_levels_view"
       "gml_include_items" "all"
       "gml_geometries"    "shape"
       "gml_shape_type"    "point"

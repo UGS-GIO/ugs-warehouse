@@ -84,7 +84,10 @@ def readme(*, title: str, description: str, kind: str, children: int,
         out.append("- `items.json` lists the publications in this series, one entry each\n")
     out.append(_extent_line(extent))
     # PTL-FIL-005 wants the license and the provenance in the README itself, not only in the JSON.
-    out.append(f"- License: {lic} ({config.LICENSE_URL})\n")
+    if config.LICENSE_URL:
+        out.append(f"- License: {lic} ({config.LICENSE_URL})\n")
+    else:
+        out.append(f"- License: {lic}\n")
     out.append(f"- Produced and published by: {_providers_line()}\n")
     formats = _formats(items or [])
     if formats:

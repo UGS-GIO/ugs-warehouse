@@ -102,11 +102,10 @@ PGF_BASE_URL = os.environ.get(
 ).rstrip("/")
 
 
-# License + attribution. Utah state geospatial data defaults to CC-BY-4.0 per UGRC policy
-# (gis.utah.gov/documentation/policy/license) — an SPDX id, not the placeholder "proprietary".
+# License + attribution. Defaults to "other" pending finalized licensing terms.
 # Override per-deployment if a given dataset carries different terms.
-DATA_LICENSE = os.environ.get("WAREHOUSE_LICENSE", "CC-BY-4.0")  # SPDX identifier
-LICENSE_URL = os.environ.get("WAREHOUSE_LICENSE_URL", "https://creativecommons.org/licenses/by/4.0/")
+DATA_LICENSE = os.environ.get("WAREHOUSE_LICENSE", "other")
+LICENSE_URL = os.environ.get("WAREHOUSE_LICENSE_URL", "")
 
 # STAC `providers` block — who produced/licenses/hosts the data. UGS is all three here.
 PROVIDERS = [

@@ -108,13 +108,16 @@ def test_mirrored_asset_alternate_validates():
 
 
 def test_collection_validates_with_license_and_providers():
-    """The collection builder emits license (SPDX), providers, and a rel:license link."""
+    """The collection builder emits license and providers."""
     coll = stac._collection_doc(
         collection="OFR", path="ugs-publications/OFR", item_ids=["OFR-100"],
     )
-    assert coll["license"] == "CC-BY-4.0"
+    assert coll["license"] == stac.config.DATA_LICENSE
     assert coll["providers"] and coll["providers"][0]["name"] == "Utah Geological Survey"
-    assert any(link["rel"] == "license" for link in coll["links"])
+    if stac.config.LICENSE_URL:
+        assert any(link["rel"] == "license" for link in coll["links"])
+    else:
+        assert not any(link["rel"] == "license" for link in coll["links"])
     _validate(coll)
 
 

@@ -432,7 +432,8 @@ def test_refresh_keeps_index_rows_not_full_publication_items(monkeypatch):
         gc.collect()
         alive.extend(o for o in gc.get_objects()  # plain dicts: other libraries' mappings vary
                      if type(o) is dict and o.get("stac_version")
-                     and "MARKER" in str((o.get("properties") or {}).get("proj:wkt2")))
+                     and isinstance(o.get("properties"), dict)
+                     and "MARKER" in str(o["properties"].get("proj:wkt2")))
         return real(*a, **k)
 
     monkeypatch.setattr(stac, "_write_pub_series", check)

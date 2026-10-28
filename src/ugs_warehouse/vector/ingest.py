@@ -211,7 +211,8 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         # skip the rebuild.
         content_hash = fingerprint.published_hash(topic) if data_failed else fp
         item_changed = sink_stac.write(topic, con, view, metadata=meta, related=related_info,
-                                       content_hash=content_hash, file_meta=written)
+                                       content_hash=content_hash, file_meta=written,
+                                       pmtiles_layers=sink_pmtiles.tile_layers(topic, con, view))
 
     if not _run_sink(topic, "stac", _stac):
         rc = 1

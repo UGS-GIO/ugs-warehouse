@@ -84,7 +84,12 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   speck kept per pixel. The FeatureServer draws small scales from the coarsest one under the
   request's `maxAllowableOffset`. Downloads and tables read `data`. A layer whose GeoParquet is
   1 MB or less also gets a `geojson` asset, gzipped on the CDN, for web maps that load the whole
-  layer in one request.
+  layer in one request. A topic with 5,000 polygons or fewer gets a second tile layer,
+  `<stem>_labels`: one point per polygon at its pole of inaccessibility
+  (`ST_MaximumInscribedCircle`), with every attribute, listed after the topic's own layer in
+  `pmtiles:layers`. A style labels from it, since labelling the polygons repeats a name in every
+  tile the polygon crosses. Larger topics get none: every point is kept at every zoom, which added
+  96 MB to the 119 MB PLSS sections archive.
 - **CDN invalidation.** The ingest marks a layer pending when its data or a field the FeatureServer
   serves changed; restyle, retire and an ops-console override edit mark the layers they touch
   (`core/cdn.py`). After a catalog refresh, which runs one at a time under a lease, a run marks its

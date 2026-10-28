@@ -236,7 +236,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           metadata: dict | None = None, bbox: list[float] | None = None,
           row_count: int | None = None, related: dict | None = None,
           content_hash: str | None = None,
-          file_meta: dict[str, gcs.FileMeta] | None = None) -> bool:
+          file_meta: dict[str, gcs.FileMeta] | None = None,
+          pmtiles_layers: list[str] | None = None) -> bool:
     """Write the topic's item; True when what the FeatureServer serves from it changed."""
     rel = related or {}
     rel_links = rel.get("links") or []
@@ -263,7 +264,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         # `related` links (the FK graph) ride alongside the web-map pmtiles link.
         # featureserv binds one collection per topic, named after the STAC item id — so the
         # queryable OGC API Features endpoint is addressable here and nowhere else in the catalog.
-        extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem]),
+        extra_links=[stac.pmtiles_link(pmtiles_url, pmtiles_layers or [topic.stem]),
                      {"rel": "service", "href": f"{config.PGF_BASE_URL}/collections/{topic.stem}",
                       "type": "application/json",
                       # STAC links carry no `roles`; the title is what tells a consumer this is the

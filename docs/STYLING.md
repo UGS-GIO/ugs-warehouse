@@ -44,7 +44,7 @@ machine identity is the declared `itemId`.
 
 | Item asset | `kind` | `ugs:renders.<id>` carries | Rendered by |
 |---|---|---|---|
-| `pmtiles` (vector) | `vector` | `style_url` → GL fragment; paint on `source-layer` | MapLibre (client) |
+| `pmtiles` (vector) | `vector` | `style_url` → GL fragment; paint on `source-layer` (polygon labels on `<stem>_labels`) | MapLibre (client) |
 | `cog` single-band (e.g. gravity) | `raster` | `colormap_name` / `rescale` / `nodata` | titiler (future) |
 | `cog` RGB geologic plate (pubs) | — | nothing — the plate **is** the cartography | served as-is |
 | Zarr datacube collection (federated, e.g. UBM) | `raster` | bound by `collectionId`, not `itemId`: its own catalog attaches it as the collection's `renders` | the viewer (`rescale` = default stretch) |

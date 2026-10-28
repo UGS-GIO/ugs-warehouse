@@ -37,7 +37,8 @@ def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:
     n, h = con.execute(
         f"SELECT count(*)::BIGINT, COALESCE(sum(hash(v)::HUGEINT), 0)::VARCHAR FROM {view} v"
     ).fetchone()
-    tiling = sink_pmtiles.tiling_signature(introspect.has_ugs_key(con, view))
+    tiling = sink_pmtiles.tiling_signature(introspect.has_ugs_key(con, view),
+                                           sink_pmtiles.has_labels(con, view))
     return f"{n}:{h}:{tiling}:{sink_archive.archive_signature()}"
 
 

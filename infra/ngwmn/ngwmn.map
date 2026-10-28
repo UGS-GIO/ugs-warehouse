@@ -23,18 +23,15 @@ MAP
   LAYER
     # The harvester asks for this layer by the ugs_ name and filters with GeoServer's
     # CQL_FILTER=unique_id='N', which MapServer only takes as a validated SQL substitution.
+    # A missing or malformed filter returns no rows, not the whole table.
     NAME "ugs_ngwmn_daily_levels_view"
     TYPE POINT
-    STATUS ON
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
     DATA "shape FROM (SELECT readingdate_iso8601, usgsid, unique_id, locationid, timezone, uom, depth_to_water, wlmethod, quality, latitude, longitude, shape FROM gwportal.ngwmn_daily_levels_view WHERE %CQL_FILTER%) AS t USING UNIQUE unique_id USING SRID=26912"
     VALIDATION
-      "CQL_FILTER"         "^unique_id='[0-9]+'$"
-      "default_CQL_FILTER" "true"
-    END
-    PROJECTION
-      "init=epsg:26912"
+      "CQL_FILTER"         "^unique_id='[0-9]{1,18}'$"
+      "default_CQL_FILTER" "false"
     END
     METADATA
       "wfs_title"         "ugs_ngwmn_daily_levels_view"
@@ -49,13 +46,9 @@ MAP
   LAYER
     NAME "ugs_ngwmn_monitoring_locations"
     TYPE POINT
-    STATUS ON
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
     DATA "shape FROM (SELECT locationid, locationname, locationtype, locationdesc, altlocationcontext, altlocationid, latitude, longitude, horizontalaccmeasurevalue, horizontalaccmeasureunit, horizontalcollectionmethod, horizontalcoordrefsystem, verticalmeasure, verticalunit, verticalcollectionmethod, verticalcoordrefsystem, welltype, aquifername, wellformationtype, welldepthmeasureunit, wlnetworkname, link, nationalaquifer, welldepth, usgs_id, win, send, display, siteid, wrnum, linkgeophysicallog, imagepath, notes, linklithologiclog, linkdevelopmentlog, loggertype, baroefficiency, barologgertype, installdate, enddate, locstatus, personnel, inwqx, stickup, hascond, shape, verticalaccmeasurevalue, density_correction, density_g_cm3, has_packer, sensor_depth_below_casing, ref_density_g_cm3 FROM gwportal.ugs_ngwmn_monitoring_locations) AS t USING UNIQUE siteid USING SRID=26912"
-    PROJECTION
-      "init=epsg:26912"
-    END
     METADATA
       "wfs_title"         "ugs_ngwmn_monitoring_locations"
       "gml_include_items" "all"
@@ -69,13 +62,9 @@ MAP
   LAYER
     NAME "ugs_ngwmn_casing"
     TYPE POINT
-    STATUS ON
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
-    DATA "shape FROM (SELECT row_number() OVER () AS fid, agencycd, siteno, casingdepthfrom, casingdepthfromunit, casingdepthto, casingdepthtounit, casingmaterial, casingdiameter, casingdiameterunit, casingthickness, casingthickunit, shape FROM gwportal.ugs_ngwmn_casing) AS t USING UNIQUE fid USING SRID=26912"
-    PROJECTION
-      "init=epsg:26912"
-    END
+    DATA "shape FROM (SELECT row_number() OVER (ORDER BY siteno, casingdepthfrom) AS fid, agencycd, siteno, casingdepthfrom, casingdepthfromunit, casingdepthto, casingdepthtounit, casingmaterial, casingdiameter, casingdiameterunit, casingthickness, casingthickunit, shape FROM gwportal.ugs_ngwmn_casing) AS t USING UNIQUE fid USING SRID=26912"
     METADATA
       "wfs_title"         "ugs_ngwmn_casing"
       "gml_include_items" "all"
@@ -90,13 +79,9 @@ MAP
   LAYER
     NAME "ugs_ngwmn_screen"
     TYPE POINT
-    STATUS ON
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
-    DATA "shape FROM (SELECT row_number() OVER () AS fid, agencycd, screendepthfrom, screendepthfromunit, screendepthto, screendepthtounit, holesize, holesizeunit, screenmaterial, screendiameter, screendiameterunit, comments, siteno, shape FROM gwportal.ugs_ngwmn_screen) AS t USING UNIQUE fid USING SRID=26912"
-    PROJECTION
-      "init=epsg:26912"
-    END
+    DATA "shape FROM (SELECT row_number() OVER (ORDER BY siteno, screendepthfrom) AS fid, agencycd, screendepthfrom, screendepthfromunit, screendepthto, screendepthtounit, holesize, holesizeunit, screenmaterial, screendiameter, screendiameterunit, comments, siteno, shape FROM gwportal.ugs_ngwmn_screen) AS t USING UNIQUE fid USING SRID=26912"
     METADATA
       "wfs_title"         "ugs_ngwmn_screen"
       "gml_include_items" "all"
@@ -111,13 +96,9 @@ MAP
   LAYER
     NAME "ugs_ngwmn_lithology"
     TYPE POINT
-    STATUS ON
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
-    DATA "shape FROM (SELECT row_number() OVER () AS fid, agencycd, lithologydepthfrom, lithologydepthfromunit, lithologydepthto, lithologydepthtounit, lithologydescription, lithologyid, observationmethod, siteno, unitcolor, highlowperm, clay, silt, sand, gravel, cobbles, boulders, conglomerate, bedrock, other, fmname, comment, lithologyunit, shape FROM gwportal.ugs_ngwmn_lithology) AS t USING UNIQUE fid USING SRID=26912"
-    PROJECTION
-      "init=epsg:26912"
-    END
+    DATA "shape FROM (SELECT row_number() OVER (ORDER BY siteno, lithologydepthfrom) AS fid, agencycd, lithologydepthfrom, lithologydepthfromunit, lithologydepthto, lithologydepthtounit, lithologydescription, lithologyid, observationmethod, siteno, unitcolor, highlowperm, clay, silt, sand, gravel, cobbles, boulders, conglomerate, bedrock, other, fmname, comment, lithologyunit, shape FROM gwportal.ugs_ngwmn_lithology) AS t USING UNIQUE fid USING SRID=26912"
     METADATA
       "wfs_title"         "ugs_ngwmn_lithology"
       "gml_include_items" "all"
@@ -132,10 +113,9 @@ MAP
   LAYER
     NAME "ugs_ngwmn_waterlevel_spatial"
     TYPE POINT
-    STATUS ON
     CONNECTIONTYPE POSTGIS
     CONNECTION "application_name=ngwmn-wfs"
-    DATA "geom FROM (SELECT row_number() OVER () AS fid, usgsid, readingdate, locationid, timezone, uom, depth_to_water, wlmethod, quality, latitude, longitude, geom, depth_to_water_string, readingdate_iso8601 FROM gwportal.ugs_ngwmn_waterlevel_spatial) AS t USING UNIQUE fid USING SRID=4326"
+    DATA "geom FROM (SELECT row_number() OVER (ORDER BY usgsid, readingdate) AS fid, usgsid, readingdate, locationid, timezone, uom, depth_to_water, wlmethod, quality, latitude, longitude, geom, depth_to_water_string, readingdate_iso8601 FROM gwportal.ugs_ngwmn_waterlevel_spatial) AS t USING UNIQUE fid USING SRID=4326"
     PROJECTION
       "init=epsg:4326"
     END

@@ -384,9 +384,10 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, raw, error, missing, partOf, crumbs, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, raw, href, error, missing, partOf, crumbs, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
   raw?: StacDoc;                   // the doc as published, for the JSON panel (item may be normalised)
+  href?: string;                   // the URL the doc was fetched from, to resolve its relative self link
   error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
   missing?: string;                // an id this catalog does not have: say so instead of loading
   partOf?: PartOf;                 // the publication an Item belongs to
@@ -492,7 +493,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
               <DownloadsPanel key={String(item.id)} item={item} />
             </div>
             <EndpointsPanel item={item} collectionId={collectionId} />
-            <StacJson item={raw ?? item} title={`${item.id} — STAC JSON`} />
+            <StacJson item={raw ?? item} base={href} title={`${item.id} — STAC JSON`} />
           </aside>
         </div>
         </CubeStepsProvider>

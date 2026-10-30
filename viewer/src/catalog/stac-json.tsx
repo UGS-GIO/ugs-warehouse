@@ -7,10 +7,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CopyBtn } from "./endpoints-panel";
 import { selfHrefOf, type StacDoc } from "@/stac";
 
-export function StacJson({ item, title = "STAC item JSON" }: { item: StacDoc; title?: string }) {
+export function StacJson({ item, base, title = "STAC item JSON" }: { item: StacDoc; base?: string; title?: string }) {
   const [open, setOpen] = useState(false);
   const json = useMemo(() => JSON.stringify(item, null, 2), [item]);
-  const self = selfHrefOf(item);
+  // The published self link is relative (./{id}.json): resolve it against where the doc came from,
+  // not the viewer page. Without a base, a relative link would 404, so offer none.
+  const self = base ? selfHrefOf(item, base) : undefined;
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 

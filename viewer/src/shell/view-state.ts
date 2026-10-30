@@ -109,7 +109,7 @@ export function useViewState() {
     ...rollupIdx.map((r) => ({ isLoading: r.isLoading, error: r.error, optional: true })),
   ]);
   const item = {
-    data: itemData, raw: itemQuery.data, isLoading: itemQuery.isLoading,
+    data: itemData, raw: itemQuery.data, href: itemHref, isLoading: itemQuery.isLoading,
     // Unresolved because a lookup failed: that failure is the item's error (offline, 5xx).
     error: itemQuery.error ?? (itemHref ? undefined : resolution.error),
   };

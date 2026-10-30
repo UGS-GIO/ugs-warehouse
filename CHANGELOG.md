@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.18.0...v1.18.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **viewer:** fix the item page's Open .json link and rebuild the STAC JSON dialog ([#708](https://github.com/UGS-GIO/ugs-warehouse/issues/708)) ([8361aa6](https://github.com/UGS-GIO/ugs-warehouse/commit/8361aa67cb26c80cbbc56da93ba437b8c706fdc8))
+
 ## [1.18.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.17.0...v1.18.0) (2026-10-27)
 
 

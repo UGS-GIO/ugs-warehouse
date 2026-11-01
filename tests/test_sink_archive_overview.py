@@ -213,9 +213,9 @@ def test_stac_lists_each_level_with_its_role_and_tolerance(monkeypatch):
     assert index["overview_3"]["roles"] == ["ugs:overview"]
 
 
-# Two bow-ties (self-intersecting rings) among the circles: ST_Union_Agg cannot merge invalid
+# Two bow-ties (self-intersecting rings) and a null among the circles: ST_Union_Agg cannot merge invalid
 # polygons, and before ST_MakeValid every hazards topic lost its statewide level, then all of them.
-INVALID = ("SELECT i + 1 AS feature_id, 'w' AS name, CASE WHEN i < 2 "
+INVALID = ("SELECT i + 1 AS feature_id, 'w' AS name, CASE WHEN i = 2 THEN NULL WHEN i < 2 "
            "THEN ST_GeomFromText('POLYGON((' || i || ' 0, ' || (i + 1) || ' 1, ' || (i + 1) || ' 0, ' "
            "|| i || ' 1, ' || i || ' 0))') ELSE ST_Buffer(ST_Point(i * 0.3, 0), 0.2, 500) END AS geom "
            "FROM range(60) r(i)")

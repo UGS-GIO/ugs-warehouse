@@ -293,8 +293,8 @@ def _valid_view(con: duckdb.DuckDBPyConnection, view: str) -> str:
         return view
     print(f"[archive] {invalid} invalid geometries made valid for the overview levels")
     con.execute(
-        f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT * REPLACE (CASE WHEN ST_IsValid(geom) "
-        f"THEN geom ELSE ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) END AS geom) "
+        f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT * REPLACE (CASE WHEN geom IS NULL "
+        f"OR ST_IsValid(geom) THEN geom ELSE ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) END AS geom) "
         f"FROM {view}")
     return f"{view}_valid"
 

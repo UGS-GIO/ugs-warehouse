@@ -282,6 +282,23 @@ def _merge(con: duckdb.DuckDBPyConnection, table: str, tolerance: float, by: str
     con.execute(f"ALTER TABLE {table}_out RENAME TO {table}")
 
 
+def _valid_view(con: duckdb.DuckDBPyConnection, view: str) -> str:
+    """`view` with each invalid geometry made valid, for the overview levels; `view` itself when
+    every geometry is valid. ST_Union_Agg, which merges the statewide level, raises on invalid
+    polygons (a self-intersecting ring), and the level was then left out. ST_MakeValid can return a
+    collection of parts of lower dimension too, so only the parts of the geometry's own dimension
+    are kept. The archive keeps the geometry as it came."""
+    invalid = con.execute(f"SELECT count(*) FROM {view} WHERE NOT ST_IsValid(geom)").fetchone()[0]
+    if not invalid:
+        return view
+    print(f"[archive] {invalid} invalid geometries made valid for the overview levels")
+    con.execute(
+        f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT * REPLACE (CASE WHEN ST_IsValid(geom) "
+        f"THEN geom ELSE ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) END AS geom) "
+        f"FROM {view}")
+    return f"{view}_valid"
+
+
 def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                     written: dict[str, gcs.FileMeta], listed: set[str] = frozenset()) -> None:
     """Write `{stem}_overview_{n}.parquet` per OVERVIEW_TOLERANCES when the layer is heavy enough,
@@ -301,6 +318,7 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         f"FROM {view}").fetchone()
     if points or (vertices or 0) < OVERVIEW_MIN_VERTICES:
         return
+    view = _valid_view(con, view)
     previous, failed = written["data"].size, []
     merge_by = _merge_class(topic.stem)
     for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):

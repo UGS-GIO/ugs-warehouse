@@ -287,15 +287,23 @@ def _valid_view(con: duckdb.DuckDBPyConnection, view: str) -> str:
     every geometry is valid. ST_Union_Agg, which merges the statewide level, raises on invalid
     polygons (a self-intersecting ring), and the level was then left out. ST_MakeValid can return a
     collection of parts of lower dimension too, so only the parts of the geometry's own dimension
-    are kept. The archive keeps the geometry as it came."""
-    invalid = con.execute(f"SELECT count(*) FROM {view} WHERE NOT ST_IsValid(geom)").fetchone()[0]
+    are kept. The archive keeps the geometry as it came.
+
+    One validity pass: the repaired geometries alone go in a temp table, which the view swaps in by
+    feature_id, so the levels' several scans neither test validity again nor hold a second copy of
+    the layer."""
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE {view}_fixes AS SELECT feature_id, "
+        f"ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) AS geom "
+        f"FROM {view} WHERE NOT ST_IsValid(geom)")  # a null geometry is neither, and stays out
+    invalid = con.execute(f"SELECT count(*) FROM {view}_fixes").fetchone()[0]
     if not invalid:
+        con.execute(f"DROP TABLE {view}_fixes")
         return view
     print(f"[archive] {invalid} invalid geometries made valid for the overview levels")
     con.execute(
-        f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT * REPLACE (CASE WHEN geom IS NULL "
-        f"OR ST_IsValid(geom) THEN geom ELSE ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) END AS geom) "
-        f"FROM {view}")
+        f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT v.* REPLACE (coalesce(f.geom, v.geom) "
+        f"AS geom) FROM {view} v LEFT JOIN {view}_fixes f ON v.feature_id = f.feature_id")
     return f"{view}_valid"
 
 

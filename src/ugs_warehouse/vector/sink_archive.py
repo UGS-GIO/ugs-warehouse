@@ -9,11 +9,13 @@ GCS IO + bucket/prefix/CDN come from `core` (shared with the pubs producer).
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
 
 import duckdb
 import pyarrow as pa
@@ -282,9 +284,10 @@ def _merge(con: duckdb.DuckDBPyConnection, table: str, tolerance: float, by: str
     con.execute(f"ALTER TABLE {table}_out RENAME TO {table}")
 
 
-def _valid_view(con: duckdb.DuckDBPyConnection, view: str) -> str:
+@contextlib.contextmanager
+def _made_valid(con: duckdb.DuckDBPyConnection, view: str) -> Iterator[str]:
     """`view` with each invalid geometry made valid, for the overview levels; `view` itself when
-    every geometry is valid. ST_Union_Agg, which merges the statewide level, raises on invalid
+    every geometry is valid. Its temp table and view are dropped on exit. ST_Union_Agg, which merges the statewide level, raises on invalid
     polygons (a self-intersecting ring), and the level was then left out. ST_MakeValid can return a
     collection of parts of lower dimension too, so only the parts of the geometry's own dimension
     are kept. The archive keeps the geometry as it came.
@@ -296,15 +299,19 @@ def _valid_view(con: duckdb.DuckDBPyConnection, view: str) -> str:
         f"CREATE OR REPLACE TEMP TABLE {view}_fixes AS SELECT feature_id, "
         f"ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) AS geom "
         f"FROM {view} WHERE NOT ST_IsValid(geom)")  # a null geometry is neither, and stays out
-    invalid = con.execute(f"SELECT count(*) FROM {view}_fixes").fetchone()[0]
-    if not invalid:
-        con.execute(f"DROP TABLE {view}_fixes")
-        return view
-    print(f"[archive] {invalid} invalid geometries made valid for the overview levels")
-    con.execute(
-        f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT v.* REPLACE (coalesce(f.geom, v.geom) "
-        f"AS geom) FROM {view} v LEFT JOIN {view}_fixes f ON v.feature_id = f.feature_id")
-    return f"{view}_valid"
+    try:
+        invalid = con.execute(f"SELECT count(*) FROM {view}_fixes").fetchone()[0]
+        if not invalid:
+            yield view
+            return
+        print(f"[archive] {invalid} invalid geometries made valid for the overview levels")
+        con.execute(
+            f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT v.* REPLACE (coalesce(f.geom, v.geom) "
+            f"AS geom) FROM {view} v LEFT JOIN {view}_fixes f ON v.feature_id = f.feature_id")
+        yield f"{view}_valid"
+    finally:
+        con.execute(f"DROP VIEW IF EXISTS {view}_valid")
+        con.execute(f"DROP TABLE IF EXISTS {view}_fixes")
 
 
 def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
@@ -326,34 +333,34 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         f"FROM {view}").fetchone()
     if points or (vertices or 0) < OVERVIEW_MIN_VERTICES:
         return
-    view = _valid_view(con, view)
-    previous, failed = written["data"].size, []
-    merge_by = _merge_class(topic.stem)
-    for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                local = os.path.join(tmp, os.path.basename(path))
-                table = _overview_table(con, view, tolerance)
-                try:
-                    # Only the statewide level: at a finer one a click must find the one feature.
-                    columns = [c[0] for c in con.execute(f"DESCRIBE {table}").fetchall()]
-                    if n == len(OVERVIEW_TOLERANCES) and merge_by in ("", *columns):
-                        _merge(con, table, tolerance, merge_by)
-                    _copy_geoparquet(con, table, local)
-                finally:
-                    con.execute(f"DROP TABLE IF EXISTS {table}")
-                size = os.path.getsize(local)
-                if size >= OVERVIEW_MIN_SHRINK * previous:
-                    print(f"[{topic.fqn}] overview {n}: {size:,} B, not under "
-                          f"{OVERVIEW_MIN_SHRINK:.0%} of {previous:,} B; skipped")
-                    continue
-                written[f"overview_{n}"] = gcs.upload(local, path, content_type=PARQUET_MIME,
-                                                      cache_control=gcs.CACHE_MUTABLE)
-                previous = size
-                print(f"[{topic.fqn}] overview {n} ({tolerance} deg): {config.public_url(path)}")
-        except Exception:
-            log.exception("[%s] overview %d FAILED", topic.fqn, n, extra={"topic": topic.fqn})
-            failed.append(n)
+    with _made_valid(con, view) as source:
+        previous, failed = written["data"].size, []
+        merge_by = _merge_class(topic.stem)
+        for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    local = os.path.join(tmp, os.path.basename(path))
+                    table = _overview_table(con, source, tolerance)
+                    try:
+                        # Only the statewide level: at a finer one a click must find the one feature.
+                        columns = [c[0] for c in con.execute(f"DESCRIBE {table}").fetchall()]
+                        if n == len(OVERVIEW_TOLERANCES) and merge_by in ("", *columns):
+                            _merge(con, table, tolerance, merge_by)
+                        _copy_geoparquet(con, table, local)
+                    finally:
+                        con.execute(f"DROP TABLE IF EXISTS {table}")
+                    size = os.path.getsize(local)
+                    if size >= OVERVIEW_MIN_SHRINK * previous:
+                        print(f"[{topic.fqn}] overview {n}: {size:,} B, not under "
+                              f"{OVERVIEW_MIN_SHRINK:.0%} of {previous:,} B; skipped")
+                        continue
+                    written[f"overview_{n}"] = gcs.upload(local, path, content_type=PARQUET_MIME,
+                                                          cache_control=gcs.CACHE_MUTABLE)
+                    previous = size
+                    print(f"[{topic.fqn}] overview {n} ({tolerance} deg): {config.public_url(path)}")
+            except Exception:
+                log.exception("[%s] overview %d FAILED", topic.fqn, n, extra={"topic": topic.fqn})
+                failed.append(n)
     if failed:
         raise RuntimeError(f"overview levels {failed} failed")
 

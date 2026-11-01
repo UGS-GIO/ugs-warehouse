@@ -232,3 +232,13 @@ def test_invalid_polygons_still_get_every_level(uploads, monkeypatch):
         kinds = con.execute(f"SELECT DISTINCT ST_GeometryType(geom)::VARCHAR "
                             f"FROM '{uploads['upload'][path]}'").fetchall()
         assert {k for (k,) in kinds} <= {"POLYGON", "MULTIPOLYGON"}, kinds
+
+
+def test_the_repairs_are_dropped_after_the_levels(uploads):
+    """Cloud Run's /tmp is RAM: nothing of the repair outlives write_overviews."""
+    con = _con(INVALID)
+    sink_archive.write_overviews(TOPIC, con, "v", {"data": gcs.FileMeta(10**9)})
+    left = con.execute("SELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'v\\_%' ESCAPE '\\' "
+                       "UNION ALL SELECT view_name FROM duckdb_views() WHERE view_name LIKE 'v\\_%' "
+                       "ESCAPE '\\'").fetchall()
+    assert left == [], left

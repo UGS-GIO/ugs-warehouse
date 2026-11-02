@@ -306,8 +306,8 @@ def _made_valid(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> Iter
             return
         print(f"[{topic.fqn}] {invalid} invalid geometries made valid for the overview levels")
         con.execute(
-            f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT v.* REPLACE (coalesce(f.geom, v.geom) "
-            f"AS geom) FROM {view} v LEFT JOIN {view}_fixes f ON v.feature_id = f.feature_id")
+            f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT v.* REPLACE (CASE WHEN f.feature_id "
+            f"IS NULL THEN v.geom ELSE f.geom END AS geom) FROM {view} v LEFT JOIN {view}_fixes f ON v.feature_id = f.feature_id")
         yield f"{view}_valid"
     finally:
         con.execute(f"DROP VIEW IF EXISTS {view}_valid")

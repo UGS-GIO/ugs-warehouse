@@ -10,6 +10,7 @@ import { MapLegend } from "@/map/map-legend";
 import { RelatedTable } from "@/map/related-table";
 import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
+import { useSetHidden } from "@/map/layer-visibility";
 import { isReferenceAsset, relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
@@ -39,6 +40,7 @@ function MapView() {
   // opens it straight to saving.
   const [pick, setPick] = useState<{ target: Target; startSaving: boolean } | null>(null);
   // A datacube that can't open says so in its row instead of sitting "on" and blank.
+  const setHidden = useSetHidden();
   const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
     ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
   // A datacube's row picks its variable and steps into the URL, which toLayer reads back.
@@ -93,6 +95,8 @@ function MapView() {
         rows={c.layerRows}
         activeIds={c.idsForMap}
         openId={c.itemUrl ? idOf(c.itemUrl) : undefined}
+        hiddenOf={(id) => !!c.activeLayers.find((a) => a.id === id)?.hidden}
+        onSetHidden={setHidden}
         onToggle={c.toggleLayer}
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
@@ -106,7 +110,7 @@ function MapView() {
           return l?.pmHref ?? l?.rasterPmHref ?? l?.cogHref;
         }}
         // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
-        legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref ? []
+        legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref || l.hidden ? []
           : [{ id: l.id, title: l.title, color: colorForId(l.id), styleLayers: c.styleCache[l.id] }]))} />} />
     </>} /></>;
 }

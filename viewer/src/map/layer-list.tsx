@@ -57,8 +57,8 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
 // A pinned active-layer row that can be dragged to change draw order. Defined at module scope (not
 // inside LayerList) so its useSortable state survives re-renders — an inline component would be a new
 // type each render and remount mid-drag. Kept in lockstep with the plain `Row` below.
-function ActiveRow({ r, onToggle, onOpen, openId, onMove, offlineHrefOf, problem, controls }: {
-  r: LayerRow;
+function ActiveRow({ r, hidden, onSetHidden, onToggle, onOpen, openId, onMove, offlineHrefOf, problem, controls }: {
+  r: LayerRow; hidden: boolean; onSetHidden: (id: string, hidden: boolean) => void;
   onToggle: (id: string) => void; onOpen: (href: string) => void; openId?: string;
   onMove: { up?: () => void; down?: () => void };
   offlineHrefOf?: (id: string) => string | undefined;
@@ -74,8 +74,8 @@ function ActiveRow({ r, onToggle, onOpen, openId, onMove, offlineHrefOf, problem
       <button type="button" {...attributes} {...listeners} aria-label={`Reorder ${r.title}`} title="Drag to reorder"
         className="flex shrink-0 cursor-grab touch-none items-center justify-center px-0.5 text-muted-foreground/60 hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-8 pointer-coarse:text-lg"><span aria-hidden>⠿</span></button>
       <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 pointer-coarse:min-h-11 pointer-coarse:basis-[calc(100%-3.5rem)]">
-        <input type="checkbox" checked={true} onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
-        <span className="min-w-0">
+        <input type="checkbox" checked={!hidden} onChange={() => onSetHidden(r.id, !hidden)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
+        <span className={`min-w-0 ${hidden ? "text-muted-foreground" : ""}`}>
           <span className="block truncate" title={r.title}>{r.title}</span>
           {problem && <span className="block text-xs text-destructive">{problem}</span>}
         </span>
@@ -88,10 +88,16 @@ function ActiveRow({ r, onToggle, onOpen, openId, onMove, offlineHrefOf, problem
       {offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
       <button type="button" onClick={() => onOpen(r.href)} aria-label={`Details for ${r.title}`} title="Details"
         className={INFO_CLASS}><span aria-hidden>ⓘ</span></button>
+      <RemoveButton title={r.title} onClick={() => onToggle(r.id)} />
       {controls && <div className="basis-full pl-6">{controls}</div>}
     </div>
   );
 }
+
+const RemoveButton = ({ title, onClick }: { title: string; onClick: () => void }) => (
+  <button type="button" onClick={onClick} aria-label={`Remove ${title} from the map`} title="Remove from map"
+    className={MOVE_CLASS}><span aria-hidden className="text-sm">×</span></button>
+);
 
 // Hover-revealed, except where there is no hover (a phone): there it is always shown. On a touch
 // screen every control here is a 44 px target; a mouse keeps the dense rows.
@@ -102,9 +108,11 @@ const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded te
 const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-2xs font-medium normal-case tracking-normal hover:bg-hover "
   + "pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
-export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf, controlsOf }: {
+export function LayerList({ rows, activeIds, hiddenOf, onSetHidden, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf, controlsOf }: {
   rows: LayerRow[];
   activeIds: string[];
+  hiddenOf: (id: string) => boolean;   // on the map but unchecked
+  onSetHidden: (id: string, hidden: boolean) => void;
   onToggle: (id: string) => void;
   // Whole group on/off — a publication series or a mart schema is what people actually want drawn.
   onToggleMany: (ids: string[], on: boolean) => void;
@@ -161,8 +169,9 @@ export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, ope
   const renderRow = (r: LayerRow, on: boolean) => (
     <div key={r.id} className={`group flex flex-wrap items-center gap-2 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${r.id === openId ? "bg-muted" : ""}`}>
       <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 pointer-coarse:min-h-11">
-        <input type="checkbox" checked={on} onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
-        <span className="min-w-0">
+        <input type="checkbox" checked={on && !hiddenOf(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5"
+          onChange={() => (on ? onSetHidden(r.id, !hiddenOf(r.id)) : onToggle(r.id))} />
+        <span className={`min-w-0 ${on && hiddenOf(r.id) ? "text-muted-foreground" : ""}`}>
           <span className="block truncate" title={r.title}>{r.title}</span>
           {on && problemOf?.(r.id) && <span className="block text-xs text-destructive">{problemOf(r.id)}</span>}
         </span>
@@ -172,6 +181,7 @@ export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, ope
       {on && offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
       <button type="button" onClick={() => onOpen(r.href)} aria-label={`Details for ${r.title}`} title="Details"
         className={INFO_CLASS}><span aria-hidden>ⓘ</span></button>
+      {on && <RemoveButton title={r.title} onClick={() => onToggle(r.id)} />}
       {on && controlsOf?.(r.id) && <div className="basis-full pl-5">{controlsOf(r.id)}</div>}
     </div>
   );
@@ -199,7 +209,7 @@ export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, ope
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={active.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 {active.map((r, i) => (
-                  <ActiveRow key={r.id} r={r} onToggle={onToggle} onOpen={onOpen} openId={openId}
+                  <ActiveRow key={r.id} r={r} hidden={hiddenOf(r.id)} onSetHidden={onSetHidden} onToggle={onToggle} onOpen={onOpen} openId={openId}
                     onMove={moves(i)} offlineHrefOf={offlineHrefOf} problem={problemOf?.(r.id)}
                     controls={controlsOf?.(r.id)} />
                 ))}

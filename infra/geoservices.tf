@@ -43,8 +43,10 @@ resource "google_cloud_run_v2_service" "geoservices" {
       }
 
       resources {
+        # 4 vCPU: dense tiles are CPU-bound, and in Map Viewer-like sessions 4 took 0.73x the time
+        # of 2 (0.46x with the #710 layout). Memory past 1 GiB made no difference.
         limits = {
-          cpu    = "2"
+          cpu    = "4"
           memory = "2Gi"
         }
         startup_cpu_boost = true

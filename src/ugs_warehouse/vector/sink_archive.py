@@ -285,7 +285,7 @@ def _merge(con: duckdb.DuckDBPyConnection, table: str, tolerance: float, by: str
 
 
 @contextlib.contextmanager
-def _made_valid(con: duckdb.DuckDBPyConnection, view: str) -> Iterator[str]:
+def _made_valid(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> Iterator[str]:
     """`view` with each invalid geometry made valid, for the overview levels; `view` itself when
     every geometry is valid. Its temp table and view are dropped on exit. ST_Union_Agg, which merges the statewide level, raises on invalid
     polygons (a self-intersecting ring), and the level was then left out. ST_MakeValid can return a
@@ -304,7 +304,7 @@ def _made_valid(con: duckdb.DuckDBPyConnection, view: str) -> Iterator[str]:
         if not invalid:
             yield view
             return
-        print(f"[archive] {invalid} invalid geometries made valid for the overview levels")
+        print(f"[{topic.fqn}] {invalid} invalid geometries made valid for the overview levels")
         con.execute(
             f"CREATE OR REPLACE TEMP VIEW {view}_valid AS SELECT v.* REPLACE (coalesce(f.geom, v.geom) "
             f"AS geom) FROM {view} v LEFT JOIN {view}_fixes f ON v.feature_id = f.feature_id")
@@ -333,7 +333,7 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         f"FROM {view}").fetchone()
     if points or (vertices or 0) < OVERVIEW_MIN_VERTICES:
         return
-    with _made_valid(con, view) as source:
+    with _made_valid(topic, con, view) as source:
         previous, failed = written["data"].size, []
         merge_by = _merge_class(topic.stem)
         for n, (tolerance, path) in enumerate(zip(OVERVIEW_TOLERANCES, paths), 1):

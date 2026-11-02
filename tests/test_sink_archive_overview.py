@@ -228,7 +228,7 @@ def test_invalid_polygons_still_get_every_level(uploads, monkeypatch):
     assert [k for k in written if k.startswith("overview")] == ["overview_1", "overview_2", "overview_3"]
     for path in PATHS:
         con = duckdb.connect()
-        con.execute("LOAD spatial")
+        con.execute("INSTALL spatial; LOAD spatial;")
         kinds = con.execute(f"SELECT DISTINCT ST_GeometryType(geom)::VARCHAR "
                             f"FROM '{uploads['upload'][path]}'").fetchall()
         assert {k for (k,) in kinds} <= {"POLYGON", "MULTIPOLYGON"}, kinds

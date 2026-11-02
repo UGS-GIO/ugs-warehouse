@@ -295,11 +295,11 @@ def _made_valid(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> Iter
     One validity pass: the repaired geometries alone go in a temp table, which the view swaps in by
     feature_id, so the levels' several scans neither test validity again nor hold a second copy of
     the layer."""
-    con.execute(
-        f"CREATE OR REPLACE TEMP TABLE {view}_fixes AS SELECT feature_id, "
-        f"ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) AS geom "
-        f"FROM {view} WHERE NOT ST_IsValid(geom)")  # a null geometry is neither, and stays out
     try:
+        con.execute(
+            f"CREATE OR REPLACE TEMP TABLE {view}_fixes AS SELECT feature_id, "
+            f"ST_CollectionExtract(ST_MakeValid(geom), ST_Dimension(geom) + 1) AS geom "
+            f"FROM {view} WHERE NOT ST_IsValid(geom)")  # a null geometry is neither, and stays out
         invalid = con.execute(f"SELECT count(*) FROM {view}_fixes").fetchone()[0]
         if not invalid:
             yield view

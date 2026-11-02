@@ -93,7 +93,6 @@ function MapView() {
         rows={c.layerRows}
         activeIds={c.idsForMap}
         openId={c.itemUrl ? idOf(c.itemUrl) : undefined}
-        colorOf={colorForId}
         onToggle={c.toggleLayer}
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}

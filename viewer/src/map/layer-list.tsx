@@ -2,7 +2,7 @@
 // then hunt a checkbox in a stack of bordered cards — two clicks before anything drew, and no way
 // to see what existed. Here the whole set is visible at once, active layers pinned on top.
 //
-// Rows are dense list rows, not cards: a state swatch, the title, and an info button. Items with no
+// Rows are dense list rows, not cards: a checkbox, the title, and an info button. Items with no
 // map asset never appear — they aren't layers, and they were most of the old noise.
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -57,8 +57,8 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
 // A pinned active-layer row that can be dragged to change draw order. Defined at module scope (not
 // inside LayerList) so its useSortable state survives re-renders — an inline component would be a new
 // type each render and remount mid-drag. Kept in lockstep with the plain `Row` below.
-function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf, problem, controls }: {
-  r: LayerRow; colorOf: (id: string) => string | undefined;
+function ActiveRow({ r, onToggle, onOpen, openId, onMove, offlineHrefOf, problem, controls }: {
+  r: LayerRow;
   onToggle: (id: string) => void; onOpen: (href: string) => void; openId?: string;
   onMove: { up?: () => void; down?: () => void };
   offlineHrefOf?: (id: string) => string | undefined;
@@ -73,14 +73,13 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf
       className={`group flex flex-wrap items-center gap-1.5 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${isDragging ? "opacity-60" : ""} ${r.id === openId ? "bg-muted" : ""}`}>
       <button type="button" {...attributes} {...listeners} aria-label={`Reorder ${r.title}`} title="Drag to reorder"
         className="flex shrink-0 cursor-grab touch-none items-center justify-center px-0.5 text-muted-foreground/60 hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-8 pointer-coarse:text-lg"><span aria-hidden>⠿</span></button>
-      <button type="button" onClick={() => onToggle(r.id)} aria-pressed={true}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left pointer-coarse:min-h-11 pointer-coarse:basis-[calc(100%-3.5rem)]">
-        <span className="h-3 w-3 shrink-0 rounded-sm border" style={{ background: colorOf(r.id), borderColor: colorOf(r.id) }} />
+      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 pointer-coarse:min-h-11 pointer-coarse:basis-[calc(100%-3.5rem)]">
+        <input type="checkbox" checked onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
         <span className="min-w-0">
           <span className="block truncate" title={r.title}>{r.title}</span>
           {problem && <span className="block text-xs text-destructive">{problem}</span>}
         </span>
-      </button>
+      </label>
       {/* Taps for what the grip does by drag: a drag must never be the only way (WCAG 2.5.7). */}
       <button type="button" onClick={onMove.up} disabled={!onMove.up} aria-label={`Move ${r.title} up`} title="Move up"
         className={`${MOVE_CLASS} pointer-coarse:ml-auto`}><span aria-hidden>▲</span></button>
@@ -103,10 +102,9 @@ const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded te
 const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-2xs font-medium normal-case tracking-normal hover:bg-hover "
   + "pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
-export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf, controlsOf }: {
+export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf, controlsOf }: {
   rows: LayerRow[];
   activeIds: string[];
-  colorOf: (id: string) => string | undefined;
   onToggle: (id: string) => void;
   // Whole group on/off — a publication series or a mart schema is what people actually want drawn.
   onToggleMany: (ids: string[], on: boolean) => void;
@@ -161,15 +159,13 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
 
   const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
     <div className={`group flex flex-wrap items-center gap-2 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${r.id === openId ? "bg-muted" : ""}`}>
-      <button type="button" onClick={() => onToggle(r.id)} aria-pressed={on}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left pointer-coarse:min-h-11">
-        <span className="h-3 w-3 shrink-0 rounded-sm border border-muted-foreground/50"
-          style={on ? { background: colorOf(r.id), borderColor: colorOf(r.id) } : undefined} />
+      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 pointer-coarse:min-h-11">
+        <input type="checkbox" checked={on} onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
         <span className="min-w-0">
           <span className="block truncate" title={r.title}>{r.title}</span>
           {on && problemOf?.(r.id) && <span className="block text-xs text-destructive">{problemOf(r.id)}</span>}
         </span>
-      </button>
+      </label>
       {/* Active rows only: downloading a layer you are not looking at is not a thing anyone asks for,
           and a single active layer renders through here rather than through the sortable ActiveRow. */}
       {on && offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
@@ -202,7 +198,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={active.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 {active.map((r, i) => (
-                  <ActiveRow key={r.id} r={r} colorOf={colorOf} onToggle={onToggle} onOpen={onOpen} openId={openId}
+                  <ActiveRow key={r.id} r={r} onToggle={onToggle} onOpen={onOpen} openId={openId}
                     onMove={moves(i)} offlineHrefOf={offlineHrefOf} problem={problemOf?.(r.id)}
                     controls={controlsOf?.(r.id)} />
                 ))}

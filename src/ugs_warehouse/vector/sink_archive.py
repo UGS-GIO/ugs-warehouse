@@ -38,7 +38,7 @@ GEOPARQUET_VERSION = "1.1.0"
 #
 # A remote reader pays the store's time to first byte on every range request, so a cold map view is
 # bound by how many requests it makes, not by how many bytes. Measured with Map Viewer-like
-# sessions against the FeatureServer (#710): 8 MB groups and 256 KiB pages capped at 8192 rows took
+# sessions against the FeatureServer: 8 MB groups and 256 KiB pages capped at 8192 rows took
 # 0.56x the time of 32 MB groups and 64 KiB / 1024-row pages, for 5% more bytes stored. Smaller
 # pages were slower (16 KiB: 2.2x) and larger ones no faster (1 MiB: 0.57x, 30% more fetched).
 TARGET_ROW_GROUP_BYTES = 8 * 1024**2

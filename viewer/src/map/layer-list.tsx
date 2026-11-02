@@ -74,7 +74,7 @@ function ActiveRow({ r, onToggle, onOpen, openId, onMove, offlineHrefOf, problem
       <button type="button" {...attributes} {...listeners} aria-label={`Reorder ${r.title}`} title="Drag to reorder"
         className="flex shrink-0 cursor-grab touch-none items-center justify-center px-0.5 text-muted-foreground/60 hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-8 pointer-coarse:text-lg"><span aria-hidden>⠿</span></button>
       <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 pointer-coarse:min-h-11 pointer-coarse:basis-[calc(100%-3.5rem)]">
-        <input type="checkbox" checked onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
+        <input type="checkbox" checked={true} onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
         <span className="min-w-0">
           <span className="block truncate" title={r.title}>{r.title}</span>
           {problem && <span className="block text-xs text-destructive">{problem}</span>}
@@ -157,8 +157,9 @@ export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, ope
     down: i < active.length - 1 ? () => moveTo(active[i].id, active[i + 1].id) : undefined,
   });
 
-  const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
-    <div className={`group flex flex-wrap items-center gap-2 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${r.id === openId ? "bg-muted" : ""}`}>
+  // A render function, not a component: a component made here remounts every render and drops focus.
+  const renderRow = (r: LayerRow, on: boolean) => (
+    <div key={r.id} className={`group flex flex-wrap items-center gap-2 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${r.id === openId ? "bg-muted" : ""}`}>
       <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 pointer-coarse:min-h-11">
         <input type="checkbox" checked={on} onChange={() => onToggle(r.id)} className="h-4 w-4 shrink-0 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" />
         <span className="min-w-0">
@@ -205,7 +206,7 @@ export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, ope
               </SortableContext>
             </DndContext>
           ) : (
-            active.map((r) => <Row key={r.id} r={r} on />)
+            active.map((r) => renderRow(r, true))
           )}
           {legend}
         </div>
@@ -228,7 +229,7 @@ export function LayerList({ rows, activeIds, onToggle, onToggleMany, onOpen, ope
                   All
                 </button>
               }>
-              {items.map((r) => <Row key={r.id} r={r} on={false} />)}
+              {items.map((r) => renderRow(r, false))}
             </Fold>
           ))}
         </Fold>

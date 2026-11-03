@@ -35,12 +35,19 @@ GEOPARQUET_VERSION = "1.1.0"
 # of riverine's polylines. So target BYTES and derive the row count per topic. (DuckDB has
 # ROW_GROUP_SIZE_BYTES, but it refuses to run while preserving insertion order, which would throw
 # away the hilbert sort that makes the bbox stats prune at all.)
-TARGET_ROW_GROUP_BYTES = 32 * 1024**2
-ROW_GROUP_MIN = 512          # heavy geometry: a few hundred rows is already tens of MB
+#
+# A remote reader pays the store's time to first byte on every range request, so a cold map view is
+# bound by how many requests it makes, not by how many bytes. Measured with Map Viewer-like
+# sessions against the FeatureServer: 8 MB groups and 256 KiB pages capped at 8192 rows took
+# 0.56x the time of 32 MB groups and 64 KiB / 1024-row pages, for 5% more bytes stored. Smaller
+# pages were slower (16 KiB: 2.2x) and larger ones no faster (1 MiB: 0.57x, 30% more fetched).
+TARGET_ROW_GROUP_BYTES = 8 * 1024**2
+ROW_GROUP_MIN = 128          # heavy geometry: a hundred rows is already megabytes
 ROW_GROUP_MAX = 122_880      # DuckDB's own default, the ceiling for very light rows
-PAGE_BYTES = 64 * 1024       # ~100 rows of polygon geometry: what a page-index reader fetches
-# 64 KiB of bbox doubles is 8192 rows, ~1 degree of a hilbert-sorted layer: too coarse to prune.
-PAGE_ROWS = 1024
+PAGE_BYTES = 256 * 1024      # a few hundred rows of polygon geometry per request
+# Caps the pages of narrow columns, the bbox columns among them, which PAGE_BYTES alone lets grow
+# to 32,768 doubles.
+PAGE_ROWS = 8192
 
 # A statewide map of a heavy layer cannot be drawn from the archive without reading all of it, so
 # heavy line and polygon layers also get generalized copies, one per drawing scale. Each tolerance

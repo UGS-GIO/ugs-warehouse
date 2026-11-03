@@ -1,6 +1,6 @@
 # ArcGIS FeatureServer (UGS-GIO/cloud-native-geoservices): public, scale-to-zero, reads the public CDN,
 # no secrets. Its cache budgets size themselves from the memory limit, so memory buys warm tiles.
-# Past its limits it sheds with 503 rather than queueing, so concurrency can be high.
+# Tiles are CPU-bound, so concurrency stays near 3 requests per vCPU and more load adds instances.
 #
 # It lives in the build project, beside the Artifact Registry that holds its image. This file owns
 # its settings; cloudbuild.yaml only rolls out new images (`--image`), so the image and the traffic
@@ -28,7 +28,7 @@ resource "google_cloud_run_v2_service" "geoservices" {
   template {
     service_account                  = var.runtime_service_account
     timeout                          = "60s"
-    max_instance_request_concurrency = 100
+    max_instance_request_concurrency = 12
 
     scaling {
       min_instance_count = 0
@@ -43,8 +43,10 @@ resource "google_cloud_run_v2_service" "geoservices" {
       }
 
       resources {
+        # 4 vCPU: dense tiles are CPU-bound, and in Map Viewer-like sessions 4 took 0.73x the time
+        # of 2 (0.46x with the smaller archive pages). Memory past 1 GiB made no difference.
         limits = {
-          cpu    = "2"
+          cpu    = "4"
           memory = "2Gi"
         }
         startup_cpu_boost = true

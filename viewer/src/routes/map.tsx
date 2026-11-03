@@ -95,7 +95,7 @@ function MapView() {
         rows={c.layerRows}
         activeIds={c.idsForMap}
         openId={c.itemUrl ? idOf(c.itemUrl) : undefined}
-        hiddenOf={(id) => !!c.activeLayers.find((a) => a.id === id)?.hidden}
+        hiddenOf={(id) => c.activeLayers.some((a) => a.id === id && a.hidden)}
         onSetHidden={setHidden}
         onToggle={c.toggleLayer}
         onToggleMany={c.toggleLayers}

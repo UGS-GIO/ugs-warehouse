@@ -1,6 +1,7 @@
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { layerParam, parseLayerParam } from "@/map/map-model";
 import { hideParam, parseHideParam } from "@/map/layer-visibility";
+import { idOf } from "@/stac";
 import { setPin } from "@/map/camera";
 import { DISCOVER_KEYS } from "@/discover/discovery-model";
 
@@ -53,7 +54,7 @@ export function useNav() {
           c: next.c || undefined,
           i: next.i || undefined,
           l: layerParam(next.l),
-          hide: hideParam(parseHideParam(rest.hide), next.l ?? []),
+          hide: hideParam(parseHideParam(rest.hide), next.l ?? (next.i ? [idOf(next.i)] : [])),
           s: next.s?.length ? next.s.join(",") : undefined,
         };
       },

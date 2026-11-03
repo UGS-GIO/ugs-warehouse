@@ -86,7 +86,7 @@ function MapView() {
       ? <FeatureDetail feature={dock.feature}
           onOpenRelated={(r) => { setDock({ kind: "related", feature: dock.feature, related: r }); c.revealInfo.current?.(); }}
           onClose={() => setDock(DOCK_ITEM)} />
-      : <MapDetail item={c.item.data} loading={c.item.isLoading} />}
+      : <MapDetail item={c.item.data} loading={c.item.isLoading} collectionId={c.collectionId ?? ""} />}
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
       <BasemapDownload bbox={view}

@@ -211,3 +211,34 @@ def test_stac_lists_each_level_with_its_role_and_tolerance(monkeypatch):
     index = stac._index_entry({"id": "x", "assets": assets})["assets"]
     assert index["overview_3"]["ugs:simplify_tolerance"] == tols[2]
     assert index["overview_3"]["roles"] == ["ugs:overview"]
+
+
+# Two bow-ties (self-intersecting rings) and a null among the circles: ST_Union_Agg cannot merge invalid
+# polygons, and before ST_MakeValid every hazards topic lost its statewide level, then all of them.
+INVALID = ("SELECT i + 1 AS feature_id, 'w' AS name, CASE WHEN i = 2 THEN NULL WHEN i < 2 "
+           "THEN ST_GeomFromText('POLYGON((' || i || ' 0, ' || (i + 1) || ' 1, ' || (i + 1) || ' 0, ' "
+           "|| i || ' 1, ' || i || ' 0))') ELSE ST_Buffer(ST_Point(i * 0.3, 0), 0.2, 500) END AS geom "
+           "FROM range(60) r(i)")
+
+
+def test_invalid_polygons_still_get_every_level(uploads, monkeypatch):
+    monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: "")  # merge, as prod does
+    monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_SHRINK", 2)  # a small layer: keep every level
+    written = _write(INVALID)
+    assert [k for k in written if k.startswith("overview")] == ["overview_1", "overview_2", "overview_3"]
+    for path in PATHS:
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial;")
+        kinds = con.execute(f"SELECT DISTINCT ST_GeometryType(geom)::VARCHAR "
+                            f"FROM '{uploads['upload'][path]}'").fetchall()
+        assert {k for (k,) in kinds} <= {"POLYGON", "MULTIPOLYGON"}, kinds
+
+
+def test_the_repairs_are_dropped_after_the_levels(uploads):
+    """Cloud Run's /tmp is RAM: nothing of the repair outlives write_overviews."""
+    con = _con(INVALID)
+    sink_archive.write_overviews(TOPIC, con, "v", {"data": gcs.FileMeta(10**9)})
+    left = con.execute("SELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'v\\_%' ESCAPE '\\' "
+                       "UNION ALL SELECT view_name FROM duckdb_views() WHERE view_name LIKE 'v\\_%' "
+                       "ESCAPE '\\'").fetchall()
+    assert left == [], left

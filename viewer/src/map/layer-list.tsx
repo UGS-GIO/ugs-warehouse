@@ -101,8 +101,8 @@ const RemoveButton = ({ title, onClick }: { title: string; onClick: () => void }
 
 // Hover-revealed, except where there is no hover (a phone): there it is always shown. On a touch
 // screen every control here is a 44 px target; a mouse keeps the dense rows.
-const INFO_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 "
-  + "hover:text-foreground focus:opacity-100 group-hover:opacity-100 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-lg pointer-coarse:opacity-100";
+const INFO_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground "
+  + "hover:text-foreground pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-lg";
 const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-3xs text-muted-foreground hover:text-foreground disabled:opacity-25 "
   + "pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-sm";
 const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-2xs font-medium normal-case tracking-normal hover:bg-hover "

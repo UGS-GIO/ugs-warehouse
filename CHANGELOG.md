@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.18.1](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.18.0...v1.18.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **overviews:** make geometry valid before the merge, so hazards topics get overviews ([#713](https://github.com/UGS-GIO/ugs-warehouse/issues/713)) ([3133cd6](https://github.com/UGS-GIO/ugs-warehouse/commit/3133cd63306f1c6b905201a395d6bd8c5aa4252a))
+* **viewer:** fix the item page's Open .json link and rebuild the STAC JSON dialog ([#708](https://github.com/UGS-GIO/ugs-warehouse/issues/708)) ([8361aa6](https://github.com/UGS-GIO/ugs-warehouse/commit/8361aa67cb26c80cbbc56da93ba437b8c706fdc8))
+* **viewer:** use checkboxes instead of colored squares in the layer list ([#716](https://github.com/UGS-GIO/ugs-warehouse/issues/716)) ([4268105](https://github.com/UGS-GIO/ugs-warehouse/commit/426810599cd38acfa882b662b376f38df7019d68))
+
+
+### Performance Improvements
+
+* **archive:** write 256 KiB / 8,192-row pages and 8 MB row groups ([#712](https://github.com/UGS-GIO/ugs-warehouse/issues/712)) ([c082c7d](https://github.com/UGS-GIO/ugs-warehouse/commit/c082c7d6704850fe9a6c4281bfbc29c010609197))
+* **geoservices:** run the FeatureServer on 4 vCPU ([#714](https://github.com/UGS-GIO/ugs-warehouse/issues/714)) ([86b8190](https://github.com/UGS-GIO/ugs-warehouse/commit/86b8190fc779cae6dbb4d99ecb6434b30cfc2ade))
+
 ## [1.18.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.17.0...v1.18.0) (2026-10-27)
 
 

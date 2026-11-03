@@ -19,6 +19,7 @@ import { useIndexes } from "@/stac/items-index";
 import { useStyleLayersFor } from "@/stac/styles";
 import { parseCubeParam } from "@/zarr/cube-picks";
 import { parseOpacityParam } from "@/map/layer-opacity";
+import { parseHideParam } from "@/map/layer-visibility";
 
 export function useViewState() {
   const { sp, view, collectionUrl, itemUrl, urlLayerIds, seriesSel, go, openDiscoverSearch } = useNav();
@@ -109,7 +110,7 @@ export function useViewState() {
     ...rollupIdx.map((r) => ({ isLoading: r.isLoading, error: r.error, optional: true })),
   ]);
   const item = {
-    data: itemData, raw: itemQuery.data, isLoading: itemQuery.isLoading,
+    data: itemData, raw: itemQuery.data, href: itemHref, isLoading: itemQuery.isLoading,
     // Unresolved because a lookup failed: that failure is the item's error (offline, 5xx).
     error: itemQuery.error ?? (itemHref ? undefined : resolution.error),
   };
@@ -213,9 +214,11 @@ export function useViewState() {
   const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
   const cubePicks = parseCubeParam(sp.cube);
   const opacities = parseOpacityParam(sp.op);
+  const hidden = parseHideParam(sp.hide);
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id), cubePicks[id]))
     .filter((l): l is ActiveLayer => l !== null)
-    .map((l) => (l.id in opacities ? { ...l, opacity: opacities[l.id] } : l));
+    .map((l) => (l.id in opacities ? { ...l, opacity: opacities[l.id] } : l))
+    .map((l) => (hidden.has(l.id) ? { ...l, hidden: true } : l));
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
   // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset

@@ -114,11 +114,13 @@ def _page_rows(path: str, column: str) -> list[int]:
 
 
 def test_bbox_pages_are_short_enough_to_prune(tmp_path) -> None:
-    """64 KiB pages of bbox doubles held 8192 rows; a z13 tile then read a page per row group."""
-    _written(tmp_path)
+    """PAGE_BYTES alone lets a page of bbox doubles hold 32,768 rows; PAGE_ROWS caps it."""
+    n = sink_archive.PAGE_ROWS * 3  # enough rows that the cap, not the row group, ends pages
+    rows_per_group, _ = _written(tmp_path, rows=n)
+    assert rows_per_group > sink_archive.PAGE_ROWS
     for col in ("bbox_xmin", "bbox_ymax", "bbox.xmin", "bbox.ymax"):
         rows = _page_rows(str(tmp_path / "out.parquet"), col)
-        assert sum(rows) == 5000 and max(rows) <= sink_archive.PAGE_ROWS, (col, rows)
+        assert sum(rows) == n and max(rows) == sink_archive.PAGE_ROWS, (col, rows)
 
 
 # A row group is the floor on what a clipped export downloads, so it has to be bounded in BYTES.

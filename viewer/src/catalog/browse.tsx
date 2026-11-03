@@ -606,7 +606,7 @@ export function Browse() {
   if (c.collectionId && c.itemUrl) {
     return (
       <div className={C.wrap}>
-        <ItemDetail collectionId={c.collectionId} item={c.item.data} raw={c.item.raw} error={c.item.error}
+        <ItemDetail collectionId={c.collectionId} item={c.item.data} raw={c.item.raw} href={c.item.href} error={c.item.error}
           missing={c.itemNotFound ? c.itemUrl : undefined}
           partOf={c.partOf} crumbs={c.crumbs} layout="page"
           onBack={() => c.go({ view: "catalog", ...itemBackTarget(c) })}

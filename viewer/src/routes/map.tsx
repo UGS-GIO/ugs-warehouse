@@ -102,7 +102,7 @@ function MapView() {
         onReorder={c.setLayerOrder}
         problemOf={(id) => zarrProblems[id]}
         controlsOf={layerControlsOf}
-        onOpen={c.openItem}
+        onOpen={(href) => { setDock(DOCK_ITEM); c.openItem(href); }}
         // PMTiles, the raster mosaics and COGs are all single files read by range, and the
         // service worker answers all three out of OPFS, so all three can be stored whole.
         offlineHrefOf={(id) => {

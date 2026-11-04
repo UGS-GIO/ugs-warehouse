@@ -57,3 +57,8 @@ alert_emails = ["you@utah.gov", "teammate@utah.gov"]
 
 # PR CI trigger identity, logs only. Empty → trigger_service_account.
 # ci_trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-warehouse-ci@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
+
+# Cloud Armor on api.geology.utah.gov: uncached requests a minute per IP, and the State/UGS office
+# addresses (CIDR, at most 10) that get the looser trusted limit.
+# geoservices_rate_limit_per_minute = 6000
+# geoservices_trusted_ip_ranges     = ["203.0.113.0/24"]

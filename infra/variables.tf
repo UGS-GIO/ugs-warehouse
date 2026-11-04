@@ -133,3 +133,36 @@ variable "runtime_service_account" {
   description = "Runtime SA the public warehouse services run as (cloudbuild.yaml _RUNTIME_SA)."
   default     = "warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
 }
+
+variable "geoservices_rate_limit_per_minute" {
+  type        = number
+  default     = 6000
+  description = <<-EOT
+    Uncached requests a minute one IP may send to the FeatureServer and ImageServer before Cloud
+    Armor answers 429. Cache hits do not count. 1,500 (25/s) was reached by a single stress test
+    at 32 concurrent tile requests, and an office behind one address shares it.
+  EOT
+}
+
+variable "geoservices_trusted_ip_ranges" {
+  type        = list(string)
+  default     = []
+  description = "Shared addresses (State and UGS offices), in CIDR, that get geoservices_trusted_rate_limit_per_minute. At most 10, Cloud Armor's limit for one rule."
+
+  validation {
+    condition     = length(var.geoservices_trusted_ip_ranges) <= 10
+    error_message = "Cloud Armor allows at most 10 ranges in one rule."
+  }
+}
+
+variable "geoservices_trusted_rate_limit_per_minute" {
+  type        = number
+  default     = 30000
+  description = "Uncached requests a minute one trusted address may send before a 429."
+}
+
+variable "geoservices_429_alert_per_second" {
+  type        = number
+  default     = 0.1
+  description = "Cloud Armor 429s a second, summed over the geoservices backends, that sustained for 10 minutes raise an alert. 0.1 is six a minute: any steady rate limiting of real clients."
+}

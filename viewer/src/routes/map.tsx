@@ -11,7 +11,7 @@ import { RelatedTable } from "@/map/related-table";
 import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
 import { useSetHidden } from "@/map/layer-visibility";
-import { isReferenceAsset, relatedAssets } from "@/stac";
+import { collKeyOf, isReferenceAsset, relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
@@ -86,7 +86,7 @@ function MapView() {
       ? <FeatureDetail feature={dock.feature}
           onOpenRelated={(r) => { setDock({ kind: "related", feature: dock.feature, related: r }); c.revealInfo.current?.(); }}
           onClose={() => setDock(DOCK_ITEM)} />
-      : <MapDetail item={c.item.data} loading={c.item.isLoading} />}
+      : <MapDetail item={c.item.data} loading={c.item.isLoading} collectionId={c.collectionId ?? collKeyOf(c.item.href) ?? ""} />}
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
       <BasemapDownload bbox={view}
@@ -102,7 +102,7 @@ function MapView() {
         onReorder={c.setLayerOrder}
         problemOf={(id) => zarrProblems[id]}
         controlsOf={layerControlsOf}
-        onOpen={c.openItem}
+        onOpen={(href) => { setDock(DOCK_ITEM); c.openItem(href); }}
         // PMTiles, the raster mosaics and COGs are all single files read by range, and the
         // service worker answers all three out of OPFS, so all three can be stored whole.
         offlineHrefOf={(id) => {

@@ -384,3 +384,20 @@ const ABOUT_DEFS: MetaDef[] = [
   { key: "ugs:topic_category", label: "Topic" },
 ];
 export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);
+
+// The derived metadata a reader cares about; the pipeline's own fields (dbt schema, serving table,
+// keys) stay in the STAC JSON.
+const GLANCE = new Set(["Records", "Mappable", "Coordinate system", "Ingested"]);
+
+/** The line under an item's title: category, kind, record count, byline. */
+export function itemFacts(item: StacDoc, collectionId: string): string {
+  // The item-view getters read an ItemRef; build a lightweight one over the resolved doc.
+  const it: ItemRef = { collId: collectionId, href: "", data: item };
+  return [categorize(it).label, kindLabel(it), recordCountLabel(it), ...bylineParts(it)].filter(Boolean).join(" · ");
+}
+
+export function glanceRowsOf(item: StacDoc): MetaRow[] {
+  const p = item.properties ?? {};
+  const meta = curatedDerived(p);
+  return [...meta.derived.filter((r) => GLANCE.has(r.label)), ...meta.curated, ...aboutRows(p)];
+}

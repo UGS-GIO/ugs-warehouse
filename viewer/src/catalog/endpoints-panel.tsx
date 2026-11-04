@@ -41,11 +41,11 @@ export function CopyBtn({ text, className = "px-1.5 py-0.5 text-sm" }: { text: s
 export const listedAssets = (item: StacDoc) => Object.entries(item.assets ?? {})
   .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.roles?.includes("related") && !isOverview(a));
 
-export function AssetsPanel({ item }: { item: StacDoc }) {
+export function AssetsPanel({ item, title = "Assets", note }: { item: StacDoc; title?: string; note?: string }) {
   const assets = listedAssets(item);
   if (!assets.length) return null;
   return (
-    <Panel title="Assets">
+    <Panel title={title} note={note}>
       <div className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
         {assets.map(([key, a]) => {
           const zarr = assetKind(a) === "zarr";

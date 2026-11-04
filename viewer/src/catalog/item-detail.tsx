@@ -4,7 +4,6 @@
 import { type ReactNode, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
-import type { ItemRef } from "./browse";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { CommentsPanel } from "@/review/comments-panel";
@@ -16,8 +15,7 @@ import { FieldsPanel, Preview } from "./asset-viewer";
 import { AssetsPanel, EndpointsPanel, listedAssets } from "./endpoints-panel";
 import { CubeStepsPanel, CubeStepsProvider } from "@/zarr/cube-steps-context";
 import { DownloadsPanel } from "./downloads-panel";
-import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, groupPartsByFile, kindLabel, type MetaRow, type PartGroup, type PartSection,
-  recordCountLabel } from "./item-view";
+import { collectionLabel, glanceRowsOf, groupPartsByFile, itemFacts, type MetaRow, type PartGroup, type PartSection } from "./item-view";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { CiteMenu } from "./cite-menu";
@@ -300,7 +298,7 @@ function PartOfLine({ partOf }: { partOf?: PartOf }) {
 
 // Review deploy only: reviews baked into the catalog detail — a diff vs the live version, an
 // item-level comment thread, and a per-column comment button (flag a wrong name/unit/type).
-function CatalogReview({ item }: { item: StacDoc }) {
+export function CatalogReview({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
   const geoparquet = parquetAsset(item)?.href;
   const cols = tableColumns(item);
@@ -355,13 +353,10 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 // One labeled metadata group (Curated / Derived) as a key→value list; hidden when it has no rows.
-// The derived metadata a reader cares about; the pipeline's own fields (dbt schema, serving table,
-// keys) stay in the STAC JSON.
-const GLANCE = new Set(["Records", "Mappable", "Coordinate system", "Ingested"]);
 const PRIMARY = "inline-flex items-center rounded border border-primary bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground no-underline hover:opacity-90";
 const SECONDARY = "inline-flex items-center rounded border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground no-underline hover:border-primary";
 
-function MetaList({ rows }: { rows: MetaRow[] }) {
+export function MetaList({ rows }: { rows: MetaRow[] }) {
   return (
     <dl className="divide-y divide-border overflow-hidden rounded-lg border border-border">
       {rows.map((r) => (
@@ -419,13 +414,9 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
   const crumb = <Breadcrumb className="mb-1.5 text-xs"
     crumbs={crumbs ?? [{ label: collectionId, onClick: onBack }, { label: String(item.id ?? "") }]} />;
 
-  // The item-view getters read an ItemRef; build a lightweight one over the resolved doc.
-  const it: ItemRef = { collId: collectionId, href: "", data: item };
-  const meta = curatedDerived(p);
-  const glance = meta.derived.filter((r) => GLANCE.has(r.label));
-  const facts = [categorize(it).label, kindLabel(it), recordCountLabel(it), ...bylineParts(it)].filter(Boolean);
+  const facts = itemFacts(item, collectionId);
   const page = layout === "page";
-  const glanceRows = [...glance, ...meta.curated, ...aboutRows(p)];
+  const glanceRows = glanceRowsOf(item);
   const atAGlance = glanceRows.length > 0 && <Section title="At a glance"><MetaList rows={glanceRows} /></Section>;
   const description = typeof p.description === "string" && p.description;
   // Title, facts, description and actions, shared by both layouts.
@@ -438,7 +429,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
           <PartOfLine partOf={partOf} />
           <p className="mt-1.5 text-sm text-muted-foreground">
-            {facts.join(" · ")}
+            {facts}
             {IS_REVIEW && item.id && <> <ReviewBadge itemId={String(item.id)} /></>}
           </p>
           {!page && description && <p className="mt-3 text-muted-foreground">{description}</p>}

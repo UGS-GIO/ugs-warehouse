@@ -33,12 +33,14 @@ def uploads(monkeypatch, tmp_path):
         return gcs.FileMeta(kept.stat().st_size)
 
     monkeypatch.setattr(sink_archive.gcs, "upload", upload)
-    monkeypatch.setattr(sink_archive.gcs, "list_paths", lambda prefix: calls["stored"])
+    monkeypatch.setattr(sink_archive.gcs, "list_paths",
+                        lambda prefix: [p for p in calls["stored"] if p.startswith(prefix)])
     monkeypatch.setattr(sink_archive.gcs, "delete_many",
                         lambda paths, **_: calls["delete"].extend(paths))
     monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_VERTICES", 1)
     monkeypatch.setattr(sink_archive, "OVERVIEW_TOLERANCES", (0.001, 0.01, 0.1))
     monkeypatch.setattr(sink_archive, "_merge_class", lambda item_id: None)
+    monkeypatch.setattr(sink_archive, "TILE_LODS", ())  # test_sink_archive_tile_levels.py covers them
     return calls
 
 

@@ -143,3 +143,16 @@ def test_the_item_lists_the_levels_written(monkeypatch):
     assert tiles["tiles_lod12"]["ugs:lod"] == 12 and tiles["tiles_lod12"]["proj:code"] == "EPSG:3857"
     assert tiles["tiles_lod12"]["roles"] == ["ugs:tiles"]
     assert sink_stac.published_overviews(TOPIC) == {sink_archive.config.tile_level_path(TOPIC.stem, 9)}
+
+
+def test_a_speck_is_one_pixel(uploads):
+    _write(POLYGONS)
+    step = sink_archive.lod_resolution(9)
+    specks = [r for r in _level(uploads, 9).to_pylist() if r["feature_id"] > 120]
+    assert len(specks) == 1  # one a cell, as the overviews keep
+    for r in specks:
+        (ring,), = r["geometry"]
+        x, y = ring[0]["x"], ring[0]["y"]
+        assert [(p["x"], p["y"]) for p in ring] == pytest.approx(
+            [(x, y), (x + step, y), (x + step, y + step), (x, y)])
+        assert r["bbox"] == pytest.approx({"xmin": x, "ymin": y, "xmax": x + step, "ymax": y + step})

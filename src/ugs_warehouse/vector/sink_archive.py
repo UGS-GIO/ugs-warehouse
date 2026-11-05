@@ -362,9 +362,10 @@ def _copy_tile_level(con: duckdb.DuckDBPyConnection, table: str, path: str, lod:
 
     The geometry goes to Web Mercator and through GeoJSON's coordinate arrays into GeoArrow's
     native `multipolygon` or `multilinestring` encoding, each point snapped to the LOD's pixel
-    grid. A ring that snaps under four points, or a line under two, is left out, and so is a
-    feature with no part left. The covering is the bbox grown by half a pixel, so it holds the
-    snapped shape. Rows keep feature_id order, which is the archive's hilbert order."""
+    grid. A ring that snaps under four points, or a line under two, is left out. A polygon with no
+    ring left (a speck _overview_table kept) is one pixel at its first point, as the FeatureServer
+    draws a polygon that simplifies away; a line with no part left is left out. The covering is the bbox grown by half a pixel, so it holds the snapped shape. Rows
+    keep feature_id order, which is the archive's hilbert order."""
     for macro in _TILE_MACROS:
         con.execute(macro)
     step, half = lod_resolution(lod), lod_resolution(lod) / 2
@@ -377,14 +378,28 @@ def _copy_tile_level(con: duckdb.DuckDBPyConnection, table: str, path: str, lod:
     else:
         coords, shape = "'[[[\"DOUBLE\"]]]'", (
             f"list_filter(list_transform(c, l -> tile_dedupe(tile_snap(l, {step}))), l -> len(l) >= 2)")
+    box = (f"{{'xmin': ST_XMin(m) - {half}, 'ymin': ST_YMin(m) - {half}, "
+           f"'xmax': ST_XMax(m) + {half}, 'ymax': ST_YMax(m) + {half}}}")
+    if polygons:
+        # A speck's pixel: the grid point (cx, cy) its first point snaps to, as the fewest points a
+        # ring takes, a triangle over half the pixel there.
+        x, y = f"cx * {step}", f"cy * {step}"
+        corners = [(x, y), (f"{x} + {step}", y), (f"{x} + {step}", f"{y} + {step}"), (x, y)]
+        pixel = "[[[" + ", ".join(f"{{'x': {a}, 'y': {b}}}" for a, b in corners) + "]]]"
+        geometry = f"CASE WHEN len(g) > 0 THEN g ELSE {pixel} END"
+        box = (f"CASE WHEN len(g) > 0 THEN {box} ELSE {{'xmin': {x}, 'ymin': {y}, "
+               f"'xmax': {x} + {step}, 'ymax': {y} + {step}}} END")
+        cells = f", round(c[1][1][1][1] / {step}) AS cx, round(c[1][1][1][2] / {step}) AS cy"
+        kept = "WHERE len(c) > 0"
+    else:
+        geometry, cells, kept = "g", "", "WHERE len(g) > 0"
     rows_per_group = _row_group_size(con, table)
     batches = con.execute(
-        f"SELECT feature_id{keep}, geometry, bbox FROM (SELECT feature_id{keep}, {shape} AS geometry, "
-        f"{{'xmin': ST_XMin(m) - {half}, 'ymin': ST_YMin(m) - {half}, "
-        f"'xmax': ST_XMax(m) + {half}, 'ymax': ST_YMax(m) + {half}}} AS bbox "
+        f"SELECT feature_id{keep}, {geometry} AS geometry, {box} AS bbox FROM ("
+        f"SELECT *, {shape} AS g{cells} "
         f"FROM (SELECT *, json_transform(ST_AsGeoJSON(ST_Multi(m))->'coordinates', {coords}) AS c "
         f"FROM (SELECT feature_id{keep}, {mercator} AS m FROM {table}))) "
-        f"WHERE len(geometry) > 0 ORDER BY feature_id"
+        f"{kept} ORDER BY feature_id"
     ).to_arrow_reader(rows_per_group)
     kind = "MultiPolygon" if polygons else "MultiLineString"
     geo = json.dumps({"version": GEOPARQUET_VERSION, "primary_column": "geometry", "columns": {

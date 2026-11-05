@@ -132,6 +132,12 @@ def overview_path(stem: str, level: int) -> str:
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}_overview_{level}.parquet"
 
 
+def tile_level_path(stem: str, lod: int) -> str:
+    """The topic's tile-ready GeoParquet for one web map zoom (ArcGIS LOD), in Web Mercator
+    (vector/sink_archive.py)."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}_lod{lod:02d}.parquet"
+
+
 def geojson_path(stem: str) -> str:
     """The topic's GeoJSON copy, written beside a small archive (vector/sink_archive.py)."""
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}.geojson"

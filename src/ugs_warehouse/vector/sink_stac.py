@@ -153,10 +153,12 @@ def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, 
 
 
 def published_overviews(topic: Topic) -> set[str]:
-    """Object paths of the overview levels the published item lists."""
+    """Object paths of the overview and tile levels the published item lists."""
     listed = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
-    return {config.overview_path(topic.stem, n)
-            for n in range(1, len(sink_archive.OVERVIEW_TOLERANCES) + 1) if f"overview_{n}" in listed}
+    return ({config.overview_path(topic.stem, n)
+             for n in range(1, len(sink_archive.OVERVIEW_TOLERANCES) + 1) if f"overview_{n}" in listed}
+            | {config.tile_level_path(topic.stem, z) for z in sink_archive.TILE_LODS
+               if f"tiles_lod{z:02d}" in listed})
 
 
 def published_geojson(topic: Topic) -> bool:
@@ -203,6 +205,17 @@ def _assets(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, pmti
                 "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:overview"],
                 "title": f"GeoParquet generalized to {tolerance} deg for small-scale display",
                 "ugs:simplify_tolerance": tolerance}
+    # Tile-ready levels, one per web map zoom (vector/sink_archive.py): GeoParquet 1.1 in EPSG:3857
+    # with native GeoArrow geometry snapped to the zoom's pixel grid. Any tile server can read
+    # them; the FeatureServer picks one by the tile's resolution.
+    for z in sink_archive.TILE_LODS:
+        key, path = f"tiles_lod{z:02d}", config.tile_level_path(topic.stem, z)
+        if (key in file_meta) if rewritten else (key in carried and gcs.exists(path)):
+            resolution = sink_archive.lod_resolution(z)
+            assets[key] = {
+                "href": config.public_url(path), "type": PARQUET_MIME, "roles": ["ugs:tiles"],
+                "title": f"Tile-ready GeoParquet for zoom {z} ({resolution:.2f} m/px, EPSG:3857)",
+                "proj:code": "EPSG:3857", "ugs:lod": z, "ugs:resolution": resolution}
     path = config.geojson_path(topic.stem)
     if ("geojson" in file_meta) if rewritten else ("geojson" in carried and gcs.exists(path)):
         assets["geojson"] = {"href": config.public_url(path), "type": sink_archive.GEOJSON_MIME,

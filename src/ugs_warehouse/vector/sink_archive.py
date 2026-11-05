@@ -22,6 +22,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..core import config, gcs, stac, styles
+from . import web_mercator
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
@@ -62,12 +63,20 @@ OVERVIEW_MIN_SHRINK = 0.7   # a level must be under 70% of the file before it, o
 # The statewide level merges the features of one symbol class in each block of this many pixels, so
 # a FeatureServer tile there holds a bounded number of features however dense the layer is.
 MERGE_BLOCK_PX = 32
+# Heavy layers also get one tile-ready level per web map zoom, readable by any GeoParquet 1.1 tool:
+# generalized at the zoom's pixel as the overviews are, in Web Mercator, every coordinate snapped
+# to the zoom's pixel grid from the origin, with native GeoArrow geometry and a bbox covering. A
+# tile server then neither parses WKB, simplifies nor reprojects; on the snapped grid quantizing
+# is integer arithmetic. LODs are ArcGIS's (Map Viewer's): 156543.03 m/px at 0, halving per level.
+TILE_LODS = tuple(range(5, 15))
+LOD0_RESOLUTION = 156543.03392804097
+TILE_MERGE_LOD = 7  # at this LOD and coarser, a level merges per style class as the statewide overview does
 # A small layer also gets a GeoJSON copy, which a web map loads in one request from the CDN with no
 # server in the path. The cap is on the GeoParquet, about a fifth of the GeoJSON's size.
 GEOJSON_MAX_BYTES = 1_000_000
 GEOJSON_MIME = "application/geo+json"
 # Bump when write or write_overviews changes what they write in a way the settings below miss.
-ARCHIVE_BUILD_VERSION = 2
+ARCHIVE_BUILD_VERSION = 3
 
 
 def archive_signature() -> str:
@@ -77,7 +86,7 @@ def archive_signature() -> str:
     return "|".join(str(v) for v in (
         f"{stac.ARCHIVE_SIGNATURE_PREFIX}{ARCHIVE_BUILD_VERSION}", GEOPARQUET_VERSION, TARGET_ROW_GROUP_BYTES, ROW_GROUP_MIN,
         ROW_GROUP_MAX, PAGE_BYTES, PAGE_ROWS, *OVERVIEW_TOLERANCES, OVERVIEW_MIN_VERTICES,
-        OVERVIEW_MIN_SHRINK, MERGE_BLOCK_PX))
+        OVERVIEW_MIN_SHRINK, MERGE_BLOCK_PX, *TILE_LODS, TILE_MERGE_LOD))
 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.
@@ -321,6 +330,131 @@ def _made_valid(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> Iter
         con.execute(f"DROP TABLE IF EXISTS {view}_fixes")
 
 
+def lod_resolution(lod: int) -> float:
+    """Metres per pixel of a web map zoom: ArcGIS's LOD, a Map Viewer tile's quantization step."""
+    return LOD0_RESOLUTION / 2**lod
+
+
+def _style_fields(item_id: str, columns: list[str]) -> list[str]:
+    """The columns the item's styles symbolize by, which a tile level keeps beside feature_id."""
+    renders = styles.renders_for(item_id, set())[0]
+    fields = {str(r["field"]) for r in renders.values() if r.get("field")}
+    return [c for c in columns if c in fields]
+
+
+def _quoted(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+# DuckDB macros for _copy_tile_level: a run of [x, y] pairs snapped to the grid as GeoArrow's
+# {x, y} structs, and a run without the points that land on the one before.
+_TILE_MACROS = (
+    "CREATE OR REPLACE TEMP MACRO tile_snap(run, step) AS "
+    "list_transform(run, p -> {'x': round(p[1] / step) * step, 'y': round(p[2] / step) * step})",
+    "CREATE OR REPLACE TEMP MACRO tile_dedupe(run) AS list_transform(list_filter("
+    "list_zip(run, list_concat([NULL], run[1:-1])), z -> z[2] IS NULL OR z[1] != z[2]), z -> z[1])",
+)
+
+
+def _copy_tile_level(con: duckdb.DuckDBPyConnection, table: str, path: str, lod: int,
+                     fields: list[str], polygons: bool) -> int:
+    """Write `table`, generalized for `lod`, as a tile-ready GeoParquet level; returns its rows.
+
+    The geometry goes to Web Mercator and through GeoJSON's coordinate arrays into GeoArrow's
+    native `multipolygon` or `multilinestring` encoding, each point snapped to the LOD's pixel
+    grid. A ring that snaps under four points, or a line under two, is left out. A polygon with no
+    ring left (a speck _overview_table kept) is one pixel at its first point, as the FeatureServer
+    draws a polygon that simplifies away; a line with no part left is left out. The covering is the bbox grown by half a pixel, so it holds the snapped shape. Rows
+    keep feature_id order, which is the archive's hilbert order."""
+    for macro in _TILE_MACROS:
+        con.execute(macro)
+    step, half = lod_resolution(lod), lod_resolution(lod) / 2
+    keep = "".join(f", {_quoted(f)}" for f in fields)
+    mercator = "ST_Transform(geom, 'EPSG:4326', 'EPSG:3857', always_xy := true)"
+    if polygons:
+        coords, shape = "'[[[[\"DOUBLE\"]]]]'", (
+            "list_filter(list_transform(c, poly -> list_filter(list_transform(poly, r -> "
+            f"tile_dedupe(tile_snap(r, {step}))), r -> len(r) >= 4)), poly -> len(poly) > 0)")
+    else:
+        coords, shape = "'[[[\"DOUBLE\"]]]'", (
+            f"list_filter(list_transform(c, l -> tile_dedupe(tile_snap(l, {step}))), l -> len(l) >= 2)")
+    box = (f"{{'xmin': ST_XMin(m) - {half}, 'ymin': ST_YMin(m) - {half}, "
+           f"'xmax': ST_XMax(m) + {half}, 'ymax': ST_YMax(m) + {half}}}")
+    if polygons:
+        # A speck's pixel: the grid point (cx, cy) its first point snaps to, as the fewest points a
+        # ring takes, a triangle over half the pixel there.
+        x, y = f"cx * {step}", f"cy * {step}"
+        corners = [(x, y), (f"{x} + {step}", y), (f"{x} + {step}", f"{y} + {step}"), (x, y)]
+        pixel = "[[[" + ", ".join(f"{{'x': {a}, 'y': {b}}}" for a, b in corners) + "]]]"
+        geometry = f"CASE WHEN len(g) > 0 THEN g ELSE {pixel} END"
+        box = (f"CASE WHEN len(g) > 0 THEN {box} ELSE {{'xmin': {x}, 'ymin': {y}, "
+               f"'xmax': {x} + {step}, 'ymax': {y} + {step}}} END")
+        cells = f", round(c[1][1][1][1] / {step}) AS cx, round(c[1][1][1][2] / {step}) AS cy"
+        kept = "WHERE len(c) > 0"
+    else:
+        geometry, cells, kept = "g", "", "WHERE len(g) > 0"
+    rows_per_group = _row_group_size(con, table)
+    batches = con.execute(
+        f"SELECT feature_id{keep}, {geometry} AS geometry, {box} AS bbox FROM ("
+        f"SELECT *, {shape} AS g{cells} "
+        f"FROM (SELECT *, json_transform(ST_AsGeoJSON(ST_Multi(m))->'coordinates', {coords}) AS c "
+        f"FROM (SELECT feature_id{keep}, {mercator} AS m FROM {table}))) "
+        f"{kept} ORDER BY feature_id"
+    ).to_arrow_reader(rows_per_group)
+    kind = "MultiPolygon" if polygons else "MultiLineString"
+    geo = json.dumps({"version": GEOPARQUET_VERSION, "primary_column": "geometry", "columns": {
+        "geometry": {"encoding": kind.lower(), "geometry_types": [kind],
+                     "crs": web_mercator.PROJJSON, "edges": "planar",
+                     "covering": {"bbox": {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}}}}})
+    schema = batches.schema.with_metadata({"geo": geo, "ugs:lod": str(lod), "ugs:resolution": repr(step)})
+    leaf = "geometry" + ".list.element" * (3 if polygons else 2)
+    dictionary = [f.name for f in schema if f.name in fields and (
+        pa.types.is_string(f.type) or pa.types.is_large_string(f.type) or pa.types.is_integer(f.type))]
+    rows = 0
+    with pq.ParquetWriter(path, schema, compression="zstd", compression_level=9, write_page_index=True,
+                          data_page_size=PAGE_BYTES, max_rows_per_page=PAGE_ROWS, write_batch_size=64,
+                          use_dictionary=dictionary, use_byte_stream_split=[f"{leaf}.x", f"{leaf}.y"]) as out:
+        for batch in batches:
+            out.write_table(pa.Table.from_batches([batch], schema), row_group_size=rows_per_group)
+            rows += batch.num_rows
+    return rows
+
+
+def _write_tile_levels(topic: Topic, con: duckdb.DuckDBPyConnection, source: str,
+                       written: dict[str, gcs.FileMeta], merge_by: str | None) -> list[str]:
+    """Write `{stem}_lod{NN}.parquet` per TILE_LODS from the made-valid `source`, recording each in
+    `written`; returns the keys of the levels that failed. A layer that mixes lines and polygons
+    gets none: a native GeoArrow column holds one kind."""
+    dims = con.execute(f"SELECT min(ST_Dimension(geom)), max(ST_Dimension(geom)) FROM {source} "
+                       f"WHERE geom IS NOT NULL").fetchone()
+    if dims[0] != dims[1] or dims[0] not in (1, 2):
+        print(f"[{topic.fqn}] tile levels: geometry of dimensions {dims}; none written")
+        return []
+    columns = [c[0] for c in con.execute(f"DESCRIBE {source}").fetchall()]
+    fields = _style_fields(topic.stem, columns)
+    failed = []
+    for lod in TILE_LODS:
+        key, path = f"tiles_lod{lod:02d}", config.tile_level_path(topic.stem, lod)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                local = os.path.join(tmp, os.path.basename(path))
+                tolerance = lod_resolution(lod) / 111_320  # degrees, as the overviews' are
+                table = _overview_table(con, source, tolerance)
+                try:
+                    if lod <= TILE_MERGE_LOD and merge_by in ("", *columns):
+                        _merge(con, table, tolerance, merge_by)
+                    rows = _copy_tile_level(con, table, local, lod, fields, dims[0] == 2)
+                finally:
+                    con.execute(f"DROP TABLE IF EXISTS {table}")
+                written[key] = gcs.upload(local, path, content_type=PARQUET_MIME,
+                                          cache_control=gcs.CACHE_MUTABLE)
+                print(f"[{topic.fqn}] tile level LOD {lod} ({rows:,} features): {config.public_url(path)}")
+        except Exception:
+            log.exception("[%s] tile level LOD %d FAILED", topic.fqn, lod, extra={"topic": topic.fqn})
+            failed.append(key)
+    return failed
+
+
 def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                     written: dict[str, gcs.FileMeta], listed: set[str] = frozenset()) -> None:
     """Write `{stem}_overview_{n}.parquet` per OVERVIEW_TOLERANCES when the layer is heavy enough,
@@ -330,11 +464,15 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     removes only the overview files the published item does not list (`listed`); a level this run
     leaves out drops from the item now and from storage on the next run.
 
+    The tile-ready levels (`{stem}_lod{NN}.parquet`, `_write_tile_levels`) are written here too,
+    from the same made-valid source, and cleaned up the same way.
+
     One level at a time. A level that fails is left out and the next is still tried; the call
     raises after the last so the sink reports the failure."""
     paths = [config.overview_path(topic.stem, n) for n in range(1, len(OVERVIEW_TOLERANCES) + 1)]
-    prefix = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}_overview"
-    gcs.delete_many([p for p in gcs.list_paths(prefix) if p not in listed], strict=False)
+    base = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}"
+    stale = [p for prefix in (f"{base}_overview", f"{base}_lod") for p in gcs.list_paths(prefix)]
+    gcs.delete_many([p for p in stale if p not in listed], strict=False)
     vertices, points = con.execute(
         f"SELECT sum(ST_NPoints(geom)), bool_and(ST_GeometryType(geom)::VARCHAR LIKE '%POINT') "
         f"FROM {view}").fetchone()
@@ -368,8 +506,9 @@ def write_overviews(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
             except Exception:
                 log.exception("[%s] overview %d FAILED", topic.fqn, n, extra={"topic": topic.fqn})
                 failed.append(n)
+        failed += _write_tile_levels(topic, con, source, written, merge_by)
     if failed:
-        raise RuntimeError(f"overview levels {failed} failed")
+        raise RuntimeError(f"overview and tile levels {failed} failed")
 
 
 def write_geojson(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,

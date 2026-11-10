@@ -3,10 +3,10 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatBadgeAssets, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  assetEntries, groupParts, groupPartsByFile, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
+  type AssetEntry, assetEntries, drawOrder, formatName, groupParts, groupPartsByFile, isCartographic, PART_GROUP_OPEN, siblingsOf, TAB_LABEL, TAB_ORDER, tabGroups, plateEntry, previewKindOf, series, title, typeOf, year,
   parseScale, scaleDenominator, firstAuthor,
 } from "./item-view";
-import { collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
+import { type AssetKind, collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
 
 // Minimal item factory — the fields the view-model reads (collId, id, bbox, properties, assets).
 const item = (
@@ -377,20 +377,19 @@ describe("groupParts (the publication page's layers and tables)", () => {
     const sections = groupParts(parts);
     expect(sections.map((s) => s.label)).toEqual([undefined, undefined]);
     expect(sections[0].groups.map((g) => [g.label, g.parts.map((p) => p.id)])).toEqual([["Map", ["P_plate", "P_units"]]]);
-    expect(sections[1].groups.map((g) => [g.label, g.parts.length])).toEqual(
-      [["Map layers", 3], ["Tables", 2], ["Supporting tables", 1]]);
+    expect(sections[1].groups.map((g) => [g.label, g.parts.length])).toEqual([["Geology", 3], ["Tables", 3]]);
   });
 
   it("groups by source dataset first when there are several (quads), then by kind", () => {
     const sections = groupParts([...map, ...of("Quad B", "layer", 2), ...of("Quad A", "layer", 1), ...of("Quad A", "table", 1)]);
     expect(sections.map((s) => [s.label, s.count])).toEqual([[undefined, 2], ["Quad A", 2], ["Quad B", 2]]);
-    expect(sections[1].groups.map((g) => g.label)).toEqual(["Map layers", "Tables"]);
+    expect(sections[1].groups.map((g) => g.label)).toEqual(["Geology", "Tables"]);
   });
 
   it(`collapses a group of more than ${PART_GROUP_OPEN} entries, and keeps Map and small groups open`, () => {
     const big = groupParts([...map, ...of("Mills", "layer", PART_GROUP_OPEN + 1), ...of("Mills", "table", 2)]);
     expect(big[0].groups[0].collapsed).toBe(false);
-    expect(big[1].groups.map((g) => [g.label, g.collapsed])).toEqual([["Map layers", true], ["Tables", false]]);
+    expect(big[1].groups.map((g) => [g.label, g.collapsed])).toEqual([["Geology", true], ["Tables", false]]);
     const quads = groupParts([...of("Quad A", "layer", PART_GROUP_OPEN + 1), ...of("Quad B", "layer", 2)]);
     expect(quads.map((s) => [s.label, s.collapsed])).toEqual([["Quad A", true], ["Quad B", false]]);
   });
@@ -409,7 +408,60 @@ describe("groupParts (the publication page's layers and tables)", () => {
 
   it("files an unknown kind after the known ones under its own name", () => {
     expect(groupParts(of("Mills", "annotation", 1).concat(of("Mills", "layer", 1)))[0].groups.map((g) => g.label))
-      .toEqual(["Map layers", "annotation"]);
+      .toEqual(["Geology", "annotation"]);
+  });
+});
+
+describe("the publication's map layers (OFR-784DM's 11 GeMS layers)", () => {
+  const layer = (name: string, geometry: string) =>
+    ({ id: `OFR-784DM__Mills__${name}`, title: name.replace(/_/g, " "), kind: "layer", geometry, sourceFile: "GIS Data - Zip" });
+  const table = (name: string, kind = "table") => ({ id: `OFR-784DM__Mills__${name}`, title: name, kind, sourceFile: "GIS Data - Zip" });
+  const parts = [
+    layer("CartographicLines", "lines"), layer("CartographicPoints", "points"), layer("ContactsAndFaults", "lines"),
+    table("DataSources"), table("DescriptionOfMapUnits"), table("GeoMaterialDict"),
+    layer("GeologicFeatures_labels", "polygons"), layer("GeologicLines", "lines"), layer("GeologicPoints", "points"),
+    table("Glossary"), layer("MapUnitOverlays", "polygons"), layer("MapUnitPolys", "polygons"),
+    layer("MapUnitPolys_labels", "polygons"), table("MiscellaneousMapInformation", "supporting"),
+    layer("OrientationPoints", "points"), layer("UtahStateBoundary", "polygons"),
+    { id: "OFR-784DM_plate", title: "Map plate" },
+  ];
+
+  it("splits Geology (6) from a collapsed Cartographic and labels (5), and puts the tables in one group", () => {
+    const groups = groupPartsByFile(parts).flatMap((f) => f.sections.flatMap((s) => s.groups));
+    expect(groups.map((g) => [g.label, g.parts.length, g.collapsed])).toEqual([
+      ["Map", 1, false], ["Geology", 6, false], ["Cartographic and labels", 5, true], ["Tables", 5, false]]);
+    expect(groups[2].parts.map((p) => p.title)).toEqual(
+      ["CartographicLines", "CartographicPoints", "GeologicFeatures labels", "MapUnitPolys labels", "UtahStateBoundary"]);
+  });
+
+  it("steps a layer page through all 11 layers in list order, and a table through the 5 tables", () => {
+    const s = siblingsOf(parts, "OFR-784DM__Mills__MapUnitPolys");
+    expect(s?.list).toHaveLength(11);
+    expect(s?.noun).toBe("Layer");
+    expect(s?.list[s.index].id).toBe("OFR-784DM__Mills__MapUnitPolys");
+    expect(s?.list.slice(0, 6).every((p) => !isCartographic(p))).toBe(true);
+    expect(siblingsOf(parts, "OFR-784DM__Mills__Glossary")?.list).toHaveLength(5);
+    expect(siblingsOf(parts, "OFR-784DM_plate")).toBeUndefined();
+  });
+
+  it("adds layers points first and polygons last, so polygons draw at the bottom", () => {
+    const order = drawOrder(parts).map((p) => p.geometry);
+    expect(order).toHaveLength(11);
+    expect(order).toEqual([...order].sort((a, b) => ["points", "lines", "polygons"].indexOf(a!) - ["points", "lines", "polygons"].indexOf(b!)));
+  });
+});
+
+describe("the preview tab vocabulary", () => {
+  const e = (key: string, kind: AssetKind, type?: string): AssetEntry => ({ key, kind, asset: { href: `${key}.x`, type } });
+  it("labels every tab from the fixed set and holds several images under one Image tab", () => {
+    const tabs = tabGroups([e("publication", "pdf"), e("lith", "image", "image/jpeg"), e("xs", "image", "image/jpeg"), e("plate", "cog")]);
+    expect(tabs.map((t) => [t.label, t.entries.length])).toEqual([["Document", 1], ["Map preview", 1], ["Image", 2]]);
+    expect(Object.values(TAB_LABEL).every((l) => TAB_ORDER.includes(l))).toBe(true);
+  });
+  it("names the format for the caption", () => {
+    expect(formatName({ href: "a.tif" }, "cog")).toBe("Cloud-Optimized GeoTIFF");
+    expect(formatName({ href: "a.jpg", type: "image/jpeg" }, "image")).toBe("JPEG image");
+    expect(formatName({ href: "a.parquet" }, "parquet")).toBe("GeoParquet");
   });
 });
 
@@ -434,7 +486,7 @@ describe("groupPartsByFile (source file, then dataset, then kind)", () => {
   it("has no file level when every part came from one file", () => {
     const out = groupPartsByFile([part("a", "layer", "GIS Data - Zip"), part("b", "table", "GIS Data - Zip")]);
     expect(out.map((f) => f.label)).toEqual([undefined]);
-    expect(out[0].sections[0].groups.map((g) => g.label)).toEqual(["Map layers", "Tables"]);
+    expect(out[0].sections[0].groups.map((g) => g.label)).toEqual(["Geology", "Tables"]);
   });
 
   it("files parts with no source file under Other files beside the named ones", () => {

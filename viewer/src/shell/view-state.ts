@@ -127,6 +127,7 @@ export function useViewState() {
   const partOf = partOfIsPub && partOfAbs && partOfSeries ? {
     c: partOfSeries, i: idOf(partOfAbs),
     title: String((partOfDoc.data as { title?: unknown } | undefined)?.title ?? idOf(partOfAbs)),
+    doc: partOfDoc.data,
   } : undefined;
 
   // Open a collection fresh (series filter is per-collection → cleared). Item open / layer

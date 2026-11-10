@@ -1,8 +1,9 @@
 // Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
 import { SchemaTable } from "./schema-table";
+import { Tabs } from "@base-ui/react/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
+import { lazy, type ReactNode, Suspense, useMemo, useRef, useState } from "react";
 
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
@@ -15,8 +16,9 @@ import { type Asset, type AssetKind, cogRenderAsset, geopackageAsset, isDrawable
   summaryFieldsOf, tableColumns, thumbnailAsset, usePlate } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { UiSegmented } from "@/ui/segmented";
+import { UiSelect } from "@/ui/select";
 import { useDataSaver } from "@/lib/data-saver";
-import { type AssetEntry, assetEntries, plateEntry, previewKindOf } from "./item-view";
+import { type AssetEntry, assetEntries, formatName, plateEntry, previewKindOf, TAB_LABEL, tabGroups } from "./item-view";
 import { Chevron } from "@/ui/chevron";
 
 // deck.gl's mesh layers and the terrain builder: only items with a 3D asset need them, so they load
@@ -88,7 +90,7 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
 }
 
 // A click on a plate or mosaic preview: the unit under it, or the scan-only notice.
-function IdentifyResultCard() {
+export function IdentifyResultCard() {
   const { identify, clearIdentify } = usePreviewMap();
   return identify ? <IdentifyCard result={identify} onClose={clearIdentify} /> : null;
 }
@@ -111,11 +113,6 @@ function VectorPreview({ item }: { item: StacDoc }) {
     </>
   );
 }
-
-const KIND_LABEL: Record<AssetKind, string> = {
-  cog: "Map", zarr: "Datacube", threeD: "3D", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
-};
-
 
 // Small text/CSV peek — fetch the head of the file and show it; no parsing, just a glance.
 function TextPreview({ href }: { href: string }) {
@@ -206,20 +203,66 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
   );
 }
 
+// One thing a preview tab can show: its title and format make the caption under the tabs.
+export type PreviewEntry = { key: string; title: string; format?: string; render: () => ReactNode };
+type PreviewTab = { label: string; entries: PreviewEntry[] };
+
+// Tabs named from the fixed vocabulary (TAB_LABEL). A tab holding several files (two images) picks
+// between them in its caption; the caption says which file is shown and its format.
+export function PreviewTabs({ tabs, initial }: { tabs: PreviewTab[]; initial?: string }) {
+  // No reset-on-item-change effect: an unknown remembered tab or entry falls back to the first.
+  const [tabLabel, setTabLabel] = useState(initial);
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const tab = tabs.find((t) => t.label === tabLabel) ?? tabs[0];
+  if (!tab) return null;
+  const entry = tab.entries.find((e) => e.key === picked[tab.label]) ?? tab.entries[0];
+  const pick = (k: string) => setPicked((p) => ({ ...p, [tab.label]: k }));
+  const choices = tab.entries.map((e) => ({ value: e.key, label: e.title }));
+  return (
+    <Tabs.Root value={tab.label} onValueChange={(v) => setTabLabel(String(v))} className="mt-2">
+      {tabs.length > 1 && (
+        <Tabs.List aria-label="Preview" className="mb-1.5 flex flex-wrap gap-1.5">
+          {tabs.map((t) => (
+            <Tabs.Tab key={t.label} value={t.label} className={(s) => toggle(s.active) + " rounded"}
+              aria-label={t.entries.length > 1 ? `${t.label}, ${t.entries.length}` : undefined}>
+              {t.label}
+              {t.entries.length > 1 && <span aria-hidden className="ml-1 text-muted-foreground">{t.entries.length}</span>}
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+      )}
+      <Tabs.Panel value={tab.label}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {tab.entries.length > 3
+            ? <UiSelect value={entry.key} onValueChange={pick} items={choices} label={`Which ${tab.label.toLowerCase()}`} className="min-w-48 text-xs" />
+            : tab.entries.length > 1
+            ? <UiSegmented value={entry.key} onValueChange={pick} items={choices} className="text-xs" />
+            : <span className="font-medium text-foreground">{entry.title}</span>}
+          {entry.format && <span>· {entry.format}</span>}
+        </div>
+        {entry.render()}
+      </Tabs.Panel>
+    </Tabs.Root>
+  );
+}
+
+// An asset as a preview entry, its pane read with `doc` (the plate Item for the plate).
+export const assetPreviewEntry = (e: AssetEntry, item: StacDoc): PreviewEntry => ({
+  key: e.key, title: e.asset.title ?? e.key, format: formatName(e.asset, e.kind),
+  render: () => <AssetPane kind={e.kind} asset={e.asset} item={e.doc ?? item} />,
+});
+
 // Tabbed viewer over every asset on an item: previewable files (PDF, image, COG, parquet, text)
-// get a tab + inline pane; the rest are listed as download links. The default tab is the
-// highest-priority file (map > pdf > data > image > text).
+// get a tab + inline pane; the rest are listed as download links. The default tab holds the
+// highest-priority file (the publication PDF, else map > data > image > text).
 function AssetViewer({ item, extra }: { item: StacDoc; extra?: AssetEntry }) {
   const entries = useMemo(() => assetEntries(item, extra), [item, extra]);
-  const tabs = entries.filter((e) => e.kind !== "other");
+  const shown = entries.filter((e) => e.kind !== "other");
   // The GeoPackage has its own "Download all data" link on the publication page.
   const gpkg = geopackageAsset(item);
   const others = entries.filter((e) => e.kind === "other" && e.asset !== gpkg);
-  // No reset-on-item-change effect: `active` below falls back to the first tab whenever the
-  // remembered key isn't in this item's tabs.
-  const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);
 
-  if (!tabs.length) {
+  if (!shown.length) {
     // Nothing previewable — show the footprint (if any) + download links for the raw files.
     return (
       <>
@@ -228,27 +271,16 @@ function AssetViewer({ item, extra }: { item: StacDoc; extra?: AssetEntry }) {
       </>
     );
   }
-  const active = tabs.find((e) => e.key === activeKey) ?? tabs[0];
+  const tabs = tabGroups(shown).map((g) => ({ label: g.label, entries: g.entries.map((e) => assetPreviewEntry(e, item)) }));
   return (
-    <div className="mt-2">
-      {tabs.length > 1 && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {tabs.map((e) => (
-            <button key={e.key} onClick={() => setActiveKey(e.key)}
-              className={toggle(e.key === active.key) + " rounded"}>
-              <span className="mr-1 text-muted-foreground">{KIND_LABEL[e.kind]}</span>
-              {e.asset.title ?? e.key}
-            </button>
-          ))}
-        </div>
-      )}
-      <AssetPane kind={active.kind} asset={active.asset} item={active.doc ?? item} />
+    <>
+      <PreviewTabs tabs={tabs} initial={TAB_LABEL[shown[0].kind]} />
       {others.length > 0 && (
         <div className="mt-2 text-xs text-muted-foreground">
           Other files: <AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} />
         </div>
       )}
-    </div>
+    </>
   );
 }
 

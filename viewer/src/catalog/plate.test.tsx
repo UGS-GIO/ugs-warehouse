@@ -70,11 +70,13 @@ const renderPage = (item: StacDoc) => render(
 );
 
 describe("the plate on a publication page", () => {
-  it("adds a Map tab beside the PDF and an Add to map that adds the plate layer", async () => {
+  it("adds a Map preview tab beside the Document and an Add to map that adds the plate layer", async () => {
     renderPage(await loadPublication());
-    const mapTab = await screen.findByRole("button", { name: /Map\s*Map plate/ });
-    expect(mapTab).toBeDefined();
-    expect(screen.getByRole("button", { name: /PDF\s*Publication/ })).toBeDefined();
+    const mapTab = await screen.findByRole("tab", { name: "Map preview" });
+    expect(screen.getByRole("tab", { name: "Document" }).getAttribute("aria-selected")).toBe("true");
+    await userEvent.click(mapTab);
+    expect(screen.getByText("Map plate")).toBeDefined();
+    expect(screen.getByText("· Cloud-Optimized GeoTIFF")).toBeDefined();
     await userEvent.click(await screen.findByRole("button", { name: /Add to map/ }));
     expect(ctx.addLayer).toHaveBeenCalledWith("M-246DM_plate");
   });
@@ -84,7 +86,7 @@ describe("the plate on a publication page", () => {
     renderPage(await loadPublication());
     expect((await screen.findByRole("alert")).textContent).toContain("Map plate could not be loaded");
     expect(screen.queryByRole("button", { name: /Add to map/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Map\s*Map plate/ })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Map preview" })).toBeNull();
   });
 });
 

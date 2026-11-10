@@ -2,7 +2,6 @@
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
 import { type ReactNode, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
@@ -13,11 +12,15 @@ import { PhotoGallery } from "./photo-gallery";
 
 import { DiffPanel } from "@/review/diff-panel";
 import { FieldsPanel, Preview } from "./asset-viewer";
+import { EntryLink, useOpenEntry } from "./entry-link";
+import { hasMapLayers, PublicationPreview } from "./publication-preview";
+import { AddAllLayersButton } from "@/map/add-all-layers-button";
+import { UiSelect } from "@/ui/select";
 import { AssetsPanel, EndpointsPanel, listedAssets } from "./endpoints-panel";
 import { CubeStepsPanel, CubeStepsProvider } from "@/zarr/cube-steps-context";
 import { DownloadsPanel } from "./downloads-panel";
 import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, groupPartsByFile, kindLabel, type MetaRow, type PartGroup, type PartSection,
-  recordCountLabel } from "./item-view";
+  recordCountLabel, siblingsOf } from "./item-view";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { CiteMenu } from "./cite-menu";
@@ -187,16 +190,6 @@ function IssueContents({ item }: { item: StacDoc }) {
   );
 }
 
-// A same-view link to another catalog entry (keeps the view and its other search keys). `terrain`
-// is cleared because the 3D toggle belongs to the item it was set on; a newly opened one starts 2D.
-function EntryLink({ c, i, className, children }: { c: string; i: string; className?: string; children: ReactNode }) {
-  return (
-    <Link to="." search={(prev) => ({ ...prev, c, i, terrain: undefined })} className={className}>
-      {children}
-    </Link>
-  );
-}
-
 // One file with every layer and table of the publication, each layer in its own CRS. Only when the
 // publication has one (a very large one is not packaged).
 export function GeopackageLink({ item }: { item: StacDoc }) {
@@ -265,7 +258,10 @@ export function PublicationParts({ item, collectionId }: { item: StacDoc; collec
     : <div key={i}>{s.groups.map(group)}</div>;
   return (
     <section className="mt-4 rounded-md border border-border bg-card p-3">
-      <h3 className="text-sm font-semibold">Layers and tables</h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Layers and tables</h3>
+        <AddAllLayersButton item={item} />
+      </div>
       {groupPartsByFile(parts).map((f, fi) => f.label
         ? (
           <details key={f.label} open={!f.collapsed} className="mt-2 border-t border-border pt-2">
@@ -287,7 +283,7 @@ export function PlateAddToMap({ item }: { item: StacDoc }) {
   return plate?.id ? <AddToMapButton large layerId={String(plate.id)} doc={plate} /> : null;
 }
 
-export type PartOf = { title: string; c: string; i: string };
+export type PartOf = { title: string; c: string; i: string; doc?: StacDoc };
 
 function PartOfLine({ partOf }: { partOf?: PartOf }) {
   if (!partOf) return null;
@@ -295,6 +291,32 @@ function PartOfLine({ partOf }: { partOf?: PartOf }) {
     <p className="mt-1 text-sm text-muted-foreground">
       Part of <EntryLink c={partOf.c} i={partOf.i} className="text-primary hover:underline">{partOf.title}</EntryLink>
     </p>
+  );
+}
+
+// On a layer or table page: step to the publication's previous or next one, or jump to any.
+export function PartStepper({ partOf, id }: { partOf?: PartOf; id: string }) {
+  const open = useOpenEntry();
+  const sib = partOf?.doc ? siblingsOf(collectionParts(partOf.doc), id) : undefined;
+  if (!partOf || !sib) return null;
+  const c = `${partOf.c}/${partOf.i}`;
+  const prev = sib.list[sib.index - 1];
+  const next = sib.list[sib.index + 1];
+  const step = "inline-flex items-center rounded border border-border bg-card px-2.5 py-1 text-sm no-underline";
+  return (
+    <nav aria-label={`Step through this publication's ${sib.noun.toLowerCase()}s`}
+      className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+      {prev
+        ? <EntryLink c={c} i={prev.id} className={`${step} text-foreground hover:border-primary`}><span title={prev.title}>‹ Previous</span></EntryLink>
+        : <span aria-disabled className={`${step} text-muted-foreground opacity-50`}>‹ Previous</span>}
+      <span className="text-muted-foreground">{sib.noun} {sib.index + 1} of {sib.list.length}</span>
+      {next
+        ? <EntryLink c={c} i={next.id} className={`${step} text-foreground hover:border-primary`}><span title={next.title}>Next ›</span></EntryLink>
+        : <span aria-disabled className={`${step} text-muted-foreground opacity-50`}>Next ›</span>}
+      <span className="ml-1 text-muted-foreground">Jump to</span>
+      <UiSelect value={id} onValueChange={(v) => open(c, v)} label={`Jump to another ${sib.noun.toLowerCase()}`}
+        items={sib.list.map((p) => ({ value: p.id, label: p.title }))} className="min-w-44 text-sm" />
+    </nav>
   );
 }
 
@@ -425,6 +447,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
   const glance = meta.derived.filter((r) => GLANCE.has(r.label));
   const facts = [categorize(it).label, kindLabel(it), recordCountLabel(it), ...bylineParts(it)].filter(Boolean);
   const page = layout === "page";
+  const pubPreview = hasMapLayers(item);
   const glanceRows = [...glance, ...meta.curated, ...aboutRows(p)];
   const atAGlance = glanceRows.length > 0 && <Section title="At a glance"><MetaList rows={glanceRows} /></Section>;
   const description = typeof p.description === "string" && p.description;
@@ -437,6 +460,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
         <div className="min-w-0 max-w-3xl">
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
           <PartOfLine partOf={partOf} />
+          <PartStepper partOf={partOf} id={String(item.id ?? "")} />
           <p className="mt-1.5 text-sm text-muted-foreground">
             {facts.join(" · ")}
             {IS_REVIEW && item.id && <> <ReviewBadge itemId={String(item.id)} /></>}
@@ -449,6 +473,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
           {hasGeom && <button onClick={onMap} className={SECONDARY}>View on map</button>}
           <AddToMapButton large />
           <PlateAddToMap item={item} />
+          <AddAllLayersButton item={item} />
           <SaveLayerOffline item={item} className={SECONDARY} />
           {onExplore && <button onClick={onExplore} className={SECONDARY}>Explore ⤢</button>}
           {via && <a href={via.href} target="_blank" rel="noopener" className={SECONDARY}>{via.title ?? "Publication page"} ↗</a>}
@@ -478,7 +503,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
         <CubeStepsProvider key={String(item.id)}>
         <div className="mt-5 grid gap-8 lg:grid-cols-3">
           <div className="min-w-0 space-y-6 lg:col-span-2">
-            <Preview item={item} />
+            {pubPreview ? <PublicationPreview key={String(item.id)} item={item} /> : <Preview item={item} />}
             <IssueContents item={item} />
             <PublicationData item={item} collectionId={collectionId} />
             {!fieldsUnderMap && <FieldsPanel item={item} />}
@@ -492,7 +517,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
               <CubeStepsPanel />
               <DownloadsPanel key={String(item.id)} item={item} />
             </div>
-            <EndpointsPanel item={item} collectionId={collectionId} />
+            <EndpointsPanel item={item} collectionId={collectionId} href={href} parent={partOf?.doc} />
             <StacJson item={raw ?? item} base={href} title={`${item.id} — STAC JSON`} />
           </aside>
         </div>
@@ -505,7 +530,7 @@ export function ItemDetail({ collectionId, item, raw, href, error, missing, part
   return (
     <div className="space-y-5">
       {head}
-      <Preview item={item} />
+      {pubPreview ? <PublicationPreview key={String(item.id)} item={item} /> : <Preview item={item} />}
       <IssueContents item={item} />
       <PublicationData item={item} collectionId={collectionId} />
       {atAGlance}

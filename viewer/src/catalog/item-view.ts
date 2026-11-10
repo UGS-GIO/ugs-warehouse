@@ -7,8 +7,8 @@
 import type { ItemRef } from "./browse";
 import { GEOM_NAMES } from "@/data/columns";
 import {
-  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, isOverview, KIND_RANK,
-  parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, zarrAsset,
+  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, isOverview, isTableKind,
+  KIND_RANK, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -189,23 +189,57 @@ const FORMAT_LABEL: Partial<Record<ReturnType<typeof assetKind>, string>> = {
 };
 // ---- a publication's layers and tables, grouped ----
 // The publication page lists its Items: the plate, units and fence (no kind) first under "Map", then
-// by kind (Map layers, Tables, Supporting tables), and by source dataset first when there are several
-// (a publication of several quads). A source groups by its raw key, so two whose titles read the same
-// stay apart, and shows its title. A group of more than PART_GROUP_OPEN entries starts collapsed. A
-// publication whose links carry no kind is one flat list.
+// Geology, Cartographic and labels (collapsed), and Tables, by source dataset first when there are
+// several (a publication of several quads). A source groups by its raw key, so two whose titles read
+// the same stay apart, and shows its title. A group of more than PART_GROUP_OPEN entries starts
+// collapsed. A publication whose links carry no kind is one flat list.
 export type PartGroup = { label?: string; parts: CollectionPart[]; collapsed: boolean };
 export type PartSection = { label?: string; count: number; collapsed: boolean; groups: PartGroup[] };
 export const PART_GROUP_OPEN = 8;
-const KINDS: [string, string][] = [["layer", "Map layers"], ["table", "Tables"], ["supporting", "Supporting tables"]];
+
+// GeMS names its cartographic feature classes (CartographicLines, CartographicPoints), and the label
+// and boundary layers a map ships beside them are drawing aids too; every other layer is geology.
+const CARTOGRAPHIC = /^cartographic|labels?$|anno(tation)?|boundary$/i;
+const layerName = (p: CollectionPart) => p.id.split("__").pop() ?? p.id;
+export const isCartographic = (p: CollectionPart): boolean =>
+  CARTOGRAPHIC.test(layerName(p)) || CARTOGRAPHIC.test(p.title.replace(/\s+/g, ""));
+export const isMapLayer = (p: CollectionPart): boolean => p.kind === "layer";
 
 const kindGroups = (parts: CollectionPart[]): PartGroup[] => {
-  const known = new Set(KINDS.map(([k]) => k));
-  const other = [...new Set(parts.flatMap((p) => (p.kind && !known.has(p.kind) ? [p.kind] : [])))].sort();
-  return [...KINDS, ...other.map((k): [string, string] => [k, k])].flatMap(([kind, label]) => {
-    const of = parts.filter((p) => p.kind === kind);
-    return of.length ? [{ label, parts: of, collapsed: of.length > PART_GROUP_OPEN }] : [];
-  });
+  const layers = parts.filter(isMapLayer);
+  const tables = parts.filter((p) => p.kind === "table" || p.kind === "supporting");
+  const other = [...new Set(parts.flatMap((p) => (p.kind && p.kind !== "layer" && !tables.includes(p) ? [p.kind] : [])))].sort();
+  const group = (label: string, of: CollectionPart[], collapsed = of.length > PART_GROUP_OPEN): PartGroup[] =>
+    of.length ? [{ label, parts: of, collapsed }] : [];
+  return [
+    ...group("Geology", layers.filter((p) => !isCartographic(p))),
+    ...group("Cartographic and labels", layers.filter(isCartographic), true),
+    ...group("Tables", tables),
+    ...other.flatMap((k) => group(k, parts.filter((p) => p.kind === k))),
+  ];
 };
+
+// The order the list shows a publication's map layers or tables in, for stepping between their pages.
+export const listOrder = (parts: CollectionPart[]): CollectionPart[] =>
+  groupPartsByFile(parts).flatMap((f) => f.sections.flatMap((s) => s.groups.flatMap((g) => g.parts)));
+
+// A part's siblings to step through on its page: every map layer for a layer, every table for a
+// table, in list order. None for the plate, or an id the publication does not list.
+export const siblingsOf = (parts: CollectionPart[], id: string): { list: CollectionPart[]; index: number; noun: string } | undefined => {
+  const self = parts.find((p) => p.id === id);
+  if (!self?.kind) return undefined;
+  const table = isTableKind(self.kind);
+  const list = listOrder(parts).filter((p) => (table ? isTableKind(p.kind) : p.kind === self.kind));
+  return list.length > 1 ? { list, index: list.findIndex((p) => p.id === id), noun: table ? "Table" : "Layer" } : undefined;
+};
+
+// Map layers in the order to add them to the Map: ?l= draws its first id on top, so points first,
+// then lines, then polygons at the bottom.
+const GEOMETRY_RANK: Record<string, number> = { points: 0, lines: 1, mixed: 2, polygons: 3 };
+export const drawOrder = (parts: CollectionPart[]): CollectionPart[] =>
+  parts.filter(isMapLayer).map((p, i) => ({ p, i }))
+    .sort((a, b) => (GEOMETRY_RANK[a.p.geometry ?? ""] ?? 2) - (GEOMETRY_RANK[b.p.geometry ?? ""] ?? 2) || a.i - b.i)
+    .map(({ p }) => p);
 
 // A publication's parts by the attachment they came from (`ugs:source_file`), each then grouped
 // by groupParts (source dataset, then kind). The plate, units and fence stay one "Map" entry on
@@ -275,6 +309,38 @@ export const assetEntries = (item: StacDoc, extra?: AssetEntry): AssetEntry[] =>
       || Number(isDrawableCog(y.asset, item)) - Number(isDrawableCog(x.asset, item))),
   ...(extra ? [extra] : []),
 ];
+
+// The preview tabs' one vocabulary, by what the reader does with the file; the format goes in the
+// caption under the tabs (formatName).
+export const TAB_LABEL: Record<AssetKind, string> = {
+  pdf: "Document", text: "Document", cog: "Map preview", zarr: "Map preview", parquet: "Table", image: "Image",
+  threeD: "3D", other: "File",
+};
+export const TAB_ORDER = ["Document", "Map preview", "Table", "Image", "3D", "File"];
+
+const IMAGE_FORMAT: Record<string, string> = {
+  "image/jpeg": "JPEG image", "image/png": "PNG image", "image/webp": "WebP image", "image/gif": "GIF image",
+  "image/tiff": "TIFF image",
+};
+export const formatName = (a: Asset, kind: AssetKind = assetKind(a)): string => {
+  switch (kind) {
+    case "cog": return "Cloud-Optimized GeoTIFF";
+    case "zarr": return "Zarr datacube";
+    case "pdf": return "PDF";
+    case "parquet": return "GeoParquet";
+    case "threeD": return "3D model";
+    case "text": return a.type?.includes("csv") || a.href.endsWith(".csv") ? "CSV" : "Text";
+    case "image": return IMAGE_FORMAT[a.type?.split(";")[0] ?? ""] ?? "Image";
+    default: return a.type ?? "File";
+  }
+};
+
+// Entries under their tab, in TAB_ORDER; a tab with several files (two images) holds them all.
+export const tabGroups = (entries: AssetEntry[]): { label: string; entries: AssetEntry[] }[] =>
+  TAB_ORDER.flatMap((label) => {
+    const of = entries.filter((e) => TAB_LABEL[e.kind] === label);
+    return of.length ? [{ label, entries: of }] : [];
+  });
 
 // A thumbnail or a metadata record (the ISO 19139 sidecar) describes the dataset; it isn't one of
 // its formats, so format chips and the Format facet skip it.

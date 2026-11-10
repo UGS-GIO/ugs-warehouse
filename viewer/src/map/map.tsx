@@ -24,6 +24,7 @@ import lightThumb from "@/assets/basemaps/light.webp";
 import satelliteThumb from "@/assets/basemaps/satellite.webp";
 import streetsThumb from "@/assets/basemaps/streets.webp";
 import { type ActiveLayer, type Footprint, mapDefaultLayers, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
+import { useLayerStack } from "./use-layer-stack";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
@@ -304,35 +305,12 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
   const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
 
-  // Restack the canvas to match the tray order. react-map-gl only calls moveLayer when a <Layer>'s
-  // beforeId prop changes, and we pass none — so a drag-reorder rewrites ?l= and re-renders the
-  // layers in the new order but never restacks the drawn features. Reconcile imperatively:
-  // moveLayer(id) with no `before` sends a layer to the top, so walking the desired stack bottom→top
-  // lands each above the last and the final order matches the tray. We deliberately avoid a computed
-  // beforeId — maplibre's moveLayer splices the layer OUT of the draw order before checking the
-  // before-target exists, so a beforeId pointing at a not-yet-loaded layer during an async window can
-  // drop a layer with no retry. Tray top row = front (drawn on top), so reverse to get bottom→top.
-  const orderKey = layers.map((l) => l.id).join(",");
-  const styledKey = layers.map((l) => styleCache[l.id]?.length ?? 0).join(",");
-  useEffect(() => {
-    const map = mapRef.current?.getMap();
-    if (!map) return;
-    const reconcile = () => {
-      if (!map.isStyleLoaded()) return;
-      const desired = orderedSublayerIds([...layers].reverse(), {
-        styledCount: (id) => styleCache[id]?.length,
-        cogReady,
-      }).filter((id) => map.getLayer(id));
-      // `idle` fires on every pan/zoom — skip the moveLayer churn when the stack is already correct.
-      const current = map.getStyle().layers.map((l) => l.id).filter((id) => desired.includes(id));
-      if (current.length === desired.length && current.every((id, i) => id === desired[i])) return;
-      for (const id of desired) map.moveLayer(id);
-    };
-    reconcile();
-    map.on("idle", reconcile);
-    return () => { map.off("idle", reconcile); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderKey, styledKey, cogReady, mapLoaded]);
+  // Restack the canvas to match the tray: a drag-reorder rewrites ?l= and re-renders the layers in
+  // the new order, but react-map-gl never restacks drawn features. Tray top row = front, so reverse.
+  useLayerStack(mapRef, orderedSublayerIds([...layers].reverse(), {
+    styledCount: (id) => styleCache[id]?.length,
+    cogReady,
+  }), mapLoaded);
 
   // Source/layer ids use slugOf(id) (imported) — a stable slug, never the array index, so unchecking
   // a layer can't rename a mounted source (maplibre throws "source id changed" and takes the map down).

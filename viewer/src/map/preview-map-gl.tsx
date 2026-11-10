@@ -17,7 +17,8 @@ import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { type IdentifyResult, identifyAt } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
-import { boundsOf, defaultVectorLayers, type FocusSel, GEOM_FILTER, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
+import { useLayerStack } from "./use-layer-stack";
+import { boundsOf, defaultVectorLayers, type FocusSel, GEOM_FILTER, identifyIds, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, pubOfEntry } from "@/stac";
 import { useLiveLegend, useStyleLayers } from "@/stac/styles";
 import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
@@ -217,34 +218,19 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [itemId, focusKey, mapLoaded]);
 
-  // A set's layers mount as their docs load, and react-map-gl puts each new layer on top, so the
-  // stack would follow load order. Walk the draw order bottom to top and send each to the top.
-  const setOrder = spec?.kind === "set"
-    ? ["set-cog-raster", ...spec.layers.flatMap((l) => defaultVectorLayers(l.color).map((d) => `set-${l.id}-${d.kind}`))]
-    : [];
-  const setOrderKey = setOrder.join(",");
-  useEffect(() => {
-    const map = mapRef.current?.getMap();
-    if (!map || !setOrder.length) return;
-    const reconcile = () => {
-      if (!map.isStyleLoaded()) return;
-      const desired = setOrder.filter((id) => map.getLayer(id));
-      const current = map.getStyle().layers.map((l) => l.id).filter((id) => desired.includes(id));
-      if (current.length === desired.length && current.every((id, i) => id === desired[i])) return;
-      for (const id of desired) map.moveLayer(id);
-    };
-    reconcile();
-    map.on("idle", reconcile);
-    return () => { map.off("idle", reconcile); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setOrderKey, cogReady, mapLoaded]);
+  // A set's layers mount as their docs load; keep them in draw order, the plate (and the identify
+  // layer that reads it) at the bottom.
+  useLayerStack(mapRef, spec?.kind === "set"
+    ? ["set-cog-raster", identifyIds("set").layer, ...spec.layers.flatMap((l) => defaultVectorLayers(l.color).map((d) => `set-${l.id}-${d.kind}`))]
+    : [], mapLoaded);
 
   const onMapClick = (e: MapLayerMouseEvent) => {
     if (spec?.kind === "set") {
+      // A hidden plate answers nothing.
+      if (!spec.plateOn) { onIdentify?.(null); return; }
       const pubTitle = String(spec.item.properties?.title ?? spec.item.id ?? "");
-      // A hidden plate answers nothing; the click still names the publication inside its bbox.
       onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
-        [{ slug: "set", hasUnits: !!spec.unitsHref && spec.plateOn, bbox: spec.item.bbox, pubTitle }]));
+        [{ slug: "set", hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle }]));
       return;
     }
     if (spec?.kind === "cog" || spec?.kind === "rasterpm") {

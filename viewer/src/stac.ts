@@ -288,9 +288,10 @@ export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | und
 export const partHrefsOf = (d: StacDoc | undefined): Map<string, string> => {
   const from = d && fetchedFrom.get(d);
   if (d?.type !== "Collection" || !from) return new Map();
-  try {
-    return new Map(itemLinks(d, from).map((l) => [idOf(l.href.split(/[?#]/)[0]), l.href]));
-  } catch { return new Map(); }
+  // One bad href loses only its own part; the preview names a part it cannot find.
+  return new Map((d.links ?? []).filter((l) => l.rel === "item").flatMap((l): [string, string][] => {
+    try { return [[idOf(l.href.split(/[?#]/)[0]), abs(l.href, from)]]; } catch { return []; }
+  }));
 };
 export const partHrefOf = (d: StacDoc | undefined, id: string): string | undefined => partHrefsOf(d).get(id);
 

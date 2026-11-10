@@ -56,16 +56,23 @@ function SetMap({ item, plate, hrefs, shown, setShown }: {
     const pm = pmtilesLink(urls[i] ? docOf.get(urls[i]) : undefined);
     return pm ? [{ id: p.id, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? p.id, color: colorForId(p.id), on: isOn(p) }] : [];
   });
+  // A layer with no link here, or whose loaded Item has no PMTiles, cannot be drawn: say so.
+  const undrawable = new Set(layers.filter((p, i) => {
+    const u = urls[i];
+    return !u || (docOf.get(u) && !drawn.some((l) => l.id === p.id));
+  }).map((p) => p.id));
   // useDocs hands back new objects each render; the spec only changes when what it draws does.
   const sig = JSON.stringify([cog?.href, unitsHref, shown.plateOn, drawn]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const spec: PreviewSpec = useMemo(() => ({ kind: "set", item, cogHref: cog?.href, unitsHref, plateOn: shown.plateOn, layers: drawn }), [sig, item]);
-  const geology = listOrder(parts).filter((p) => isMapLayer(p) && !isCartographic(p));
-  const carto = listOrder(parts).filter((p) => isMapLayer(p) && isCartographic(p));
+  const mapLayers = listOrder(parts).filter(isMapLayer);
+  const geology = mapLayers.filter((p) => !isCartographic(p));
+  const carto = mapLayers.filter(isCartographic);
   const row = (p: CollectionPart) => (
     <li key={p.id}>
-      <label className="flex cursor-pointer items-center gap-1.5 py-0.5">
-        <input type="checkbox" checked={isOn(p)} onChange={(e) => setOn([p], e.target.checked)} />
+      <label className={`flex items-center gap-1.5 py-0.5 ${undrawable.has(p.id) ? "opacity-50" : "cursor-pointer"}`}>
+        <input type="checkbox" checked={isOn(p) && !undrawable.has(p.id)} disabled={undrawable.has(p.id)}
+          onChange={(e) => setOn([p], e.target.checked)} />
         <span aria-hidden className="inline-block size-2.5 shrink-0 rounded-sm" style={{ background: colorForId(p.id) }} />
         <span className="truncate">{p.title}</span>
       </label>
@@ -111,7 +118,12 @@ function SetMap({ item, plate, hrefs, shown, setShown }: {
         </details>
       </div>
       {error != null && <p role="alert" className="mt-1 text-xs text-destructive">Some layers could not be loaded: {String(error)}</p>}
-      <p className="mt-1 text-xs text-muted-foreground">Click a unit on the plate to see what it is.</p>
+      {undrawable.size > 0 && (
+        <p role="alert" className="mt-1 text-xs text-destructive">
+          Not drawn, no map tiles found: {layers.filter((p) => undrawable.has(p.id)).map((p) => p.title).join(", ")}
+        </p>
+      )}
+      {cog && shown.plateOn && <p className="mt-1 text-xs text-muted-foreground">Click a unit on the plate to see what it is.</p>}
       <IdentifyResultCard />
     </>
   );

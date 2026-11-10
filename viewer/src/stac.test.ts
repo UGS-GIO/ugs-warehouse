@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, parquetAsset, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, parquetAsset, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, rasterTilesAsset, relatedJoins, viaLink, partHrefOf, partHrefsOf } from "./stac";
 import { ROOT_INDEX_URL, rootIndexItems, hasItemsIndex, indexItemRefs } from "./stac/items-index";
 import type { StacDoc } from "./stac";
 import { joinsRows, vectorSpecOf } from "./map/preview-spec";
@@ -509,6 +509,33 @@ describe("the publication's plate", () => {
     const doc = await stacDocQuery(url).queryFn();
     fetchMock.mockRestore();
     expect(plateHrefOf(collectionAsItem(doc))).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+  });
+});
+
+describe("a publication's parts", () => {
+  const url = "https://cdn/stac/ugs-publications/OFR/OFR-784DM/collection.json";
+  const links = [
+    { rel: "item", href: "./OFR-784DM__Mills__MapUnitPolys/OFR-784DM__Mills__MapUnitPolys.json" },
+    { rel: "item", href: "./OFR-784DM_plate/OFR-784DM_plate.json" },
+    { rel: "parent", href: "../catalog.json" },
+  ];
+
+  it("maps each item id to its URL, resolved against where the Collection was fetched", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ type: "Collection", id: "OFR-784DM", links })));
+    const doc = await stacDocQuery(url).queryFn();
+    fetchMock.mockRestore();
+    const pub = collectionAsItem(doc);
+    expect([...partHrefsOf(pub).keys()]).toEqual(["OFR-784DM__Mills__MapUnitPolys", "OFR-784DM_plate"]);
+    expect(partHrefOf(pub, "OFR-784DM__Mills__MapUnitPolys"))
+      .toBe("https://cdn/stac/ugs-publications/OFR/OFR-784DM/OFR-784DM__Mills__MapUnitPolys/OFR-784DM__Mills__MapUnitPolys.json");
+    expect(partHrefOf(pub, "nope")).toBeUndefined();
+  });
+
+  it("is empty for a Collection not fetched through useStac, or an Item", () => {
+    expect(partHrefsOf({ type: "Collection", id: "OFR-784DM", links }).size).toBe(0);
+    expect(partHrefsOf({ type: "Feature", links }).size).toBe(0);
+    expect(partHrefsOf(undefined).size).toBe(0);
   });
 });
 

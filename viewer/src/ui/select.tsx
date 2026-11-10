@@ -10,12 +10,13 @@ export interface SelectItem<T extends string> {
   label: string;
 }
 
-export function UiSelect<T extends string>({ value, onValueChange, items, className = "", title, disabled }: {
+export function UiSelect<T extends string>({ value, onValueChange, items, className = "", title, label, disabled }: {
   value: T;
   onValueChange: (value: T) => void;
   items: readonly SelectItem<T>[];
   className?: string;
   title?: string;
+  label?: string;   // the accessible name, when no visible label names the control
   disabled?: boolean;
 }) {
   return (
@@ -28,6 +29,7 @@ export function UiSelect<T extends string>({ value, onValueChange, items, classN
     >
       <Select.Trigger
         title={title}
+        aria-label={label}
         className={`flex items-center justify-between gap-1.5 rounded-md border border-input bg-card px-2 py-1 text-foreground hover:border-ring focus:border-ring focus:outline-none disabled:opacity-60 ${className}`}
       >
         <Select.Value className="truncate" />

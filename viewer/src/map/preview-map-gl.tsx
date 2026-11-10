@@ -17,7 +17,8 @@ import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { type IdentifyResult, identifyAt } from "./identify";
 import { IdentifyLayer } from "./identify-layer";
-import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
+import { useLayerStack } from "./use-layer-stack";
+import { boundsOf, defaultVectorLayers, type FocusSel, GEOM_FILTER, identifyIds, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, pubOfEntry } from "@/stac";
 import { useLiveLegend, useStyleLayers } from "@/stac/styles";
 import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
@@ -79,6 +80,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
 
   const isVector = spec?.kind === "vector";
   const item = spec?.item;
+  // The COG this spec draws: a plate or raster, or the plate under a publication's layers.
+  const cogHref = spec?.kind === "cog" ? spec.href : spec?.kind === "set" ? spec.cogHref : undefined;
   const itemId = specItemId(spec);
 
   // ---- vector-specific state (`renders`/`sel` are owned by the provider) ----
@@ -106,28 +109,28 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
 
   // Register the cog:// protocol lazily the first time a COG spec appears.
   useEffect(() => {
-    if (spec?.kind !== "cog" || cogReady) return;
+    if (!cogHref || cogReady) return;
     let live = true;
     ensureCogProtocol().then(() => { if (live) setCogReady(true); });
     return () => { live = false; };
-  }, [spec?.kind, cogReady]);
+  }, [cogHref, cogReady]);
 
   // ---- imperative camera fit: a persistent map honours initialViewState only once, so fit on every
   // spec change (keyed on item+kind). COG has no STAC bbox for many items → fit to its GeoTIFF extent.
-  const fitKey = spec ? `${itemId}|${spec.kind}` : "";
+  const fitKey = spec ? `${itemId}|${spec.kind}|${cogHref ?? ""}` : "";
   const lastFit = useRef<string>("");
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!spec || !map || !mapLoaded || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
     map.setPitch(showDem ? 48 : 0);
-    if (spec.kind === "cog") {
+    if (cogHref) {
       let live = true;
       (async () => {
         await ensureCogProtocol();
         try {
           const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
-          const meta = await getCogMetadata(spec.href);
+          const meta = await getCogMetadata(cogHref);
           const b = validBbox(meta?.bbox as number[] | undefined) ?? validBbox(spec.item.bbox);
           if (live && b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
         } catch { /* keep default view */ }
@@ -136,7 +139,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     }
     const b = boundsOf(spec.item);
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
-  }, [fitKey, mapLoaded, spec, showDem]);
+  }, [fitKey, mapLoaded, spec, showDem, cogHref]);
 
   // Fly to a picked feature (table row click, or Zoom to on the feature card). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
@@ -215,7 +218,21 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [itemId, focusKey, mapLoaded]);
 
+  // A set's layers mount as their docs load; keep them in draw order, the plate (and the identify
+  // layer that reads it) at the bottom.
+  useLayerStack(mapRef, spec?.kind === "set"
+    ? ["set-cog-raster", identifyIds("set").layer, ...spec.layers.flatMap((l) => defaultVectorLayers(l.color).map((d) => `set-${l.id}-${d.kind}`))]
+    : [], mapLoaded);
+
   const onMapClick = (e: MapLayerMouseEvent) => {
+    if (spec?.kind === "set") {
+      // A hidden plate answers nothing.
+      if (!spec.plateOn) { onIdentify?.(null); return; }
+      const pubTitle = String(spec.item.properties?.title ?? spec.item.id ?? "");
+      onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
+        [{ slug: "set", hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle }]));
+      return;
+    }
     if (spec?.kind === "cog" || spec?.kind === "rasterpm") {
       const slug = spec.kind === "cog" ? "cog" : "raster-mosaic";
       const pubTitle = pubOfEntry(spec.item)?.title;
@@ -341,6 +358,24 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
             </Source>
           )}
           {spec?.kind === "cog" && cogReady && spec.unitsHref && <IdentifyLayer slug="cog" href={spec.unitsHref} />}
+
+          {/* A publication drawn whole: the plate, then its layers. Every layer stays mounted and
+              switches by visibility; the effect above keeps them in draw order. */}
+          {spec?.kind === "set" && spec.cogHref && cogReady && (
+            <Source id="set-cog" type="raster" url={`cog://${spec.cogHref}`} tileSize={256}>
+              <Layer id="set-cog-raster" type="raster" layout={{ visibility: spec.plateOn ? "visible" : "none" }} />
+            </Source>
+          )}
+          {spec?.kind === "set" && spec.layers.map((l) => (
+            <Source key={l.id} id={`set-${l.id}`} type="vector" url={`pmtiles://${l.pmHref}`}>
+              {defaultVectorLayers(l.color).map((d) => (
+                <Layer key={d.kind} {...({ id: `set-${l.id}-${d.kind}`, type: d.type, filter: d.filter, paint: d.paint,
+                  source: `set-${l.id}`, "source-layer": l.sourceLayer,
+                  layout: { visibility: l.on ? "visible" : "none" } } as unknown as LayerProps)} />
+              ))}
+            </Source>
+          ))}
+          {spec?.kind === "set" && spec.unitsHref && <IdentifyLayer slug="set" href={spec.unitsHref} />}
 
           {/* Footprint outline */}
           {spec?.kind === "footprint" && (

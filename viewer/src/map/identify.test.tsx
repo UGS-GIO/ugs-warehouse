@@ -68,6 +68,12 @@ describe("identifyAt", () => {
     expect(m.queryRenderedFeatures).toHaveBeenCalledWith([10, 20], { layers: ["idn-a-fill"] });
   });
 
+  it("hands back the polygon of the unit it picked, for a highlight", () => {
+    const square = (x: number) => ({ type: "Polygon" as const, coordinates: [[[x, 0], [x + 1, 0], [x + 1, 1], [x, 0]]] });
+    const m = mapOf([{ ...feat(1, "Jm"), geometry: square(1) }, { ...feat(2, "Qa"), geometry: square(2) }] as never);
+    expect(identifyAt(m, click.point, click.lngLat, [target])).toMatchObject({ kind: "unit", unit: { code: "Qa" }, geometry: square(2) });
+  });
+
   it("says scan only on the footprint with no unit under it, and nothing outside it", () => {
     expect(identifyAt(mapOf([]), click.point, click.lngLat, [target]))
       .toEqual({ kind: "scan-only", pubTitle: "Geology of Somewhere" });

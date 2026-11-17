@@ -77,7 +77,8 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
 
 // Directly under the preview map, above the fields/table, so a click's result is in view without
 // scrolling past a long data table.
-function SelectedFeatureCard({ item }: { item: StacDoc }) {
+// `related` false leaves out the related-table rows, for a preview with no table to open them in.
+export function SelectedFeatureCard({ item, related = true }: { item: StacDoc; related?: boolean }) {
   const { selectedFeature, clearSelection, openRelated, setFocus } = usePreviewMap();
   const ref = useRef<HTMLDivElement>(null);
   // `selectFeature` builds a new object per click, so clicking the same feature twice re-scrolls.
@@ -86,7 +87,7 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
   const { props, fid, bbox } = selectedFeature;
   // A new key each time, so a second Zoom to flies again after the user has panned away.
   const zoom = bbox && (() => setFocus({ bbox, featureId: fid ?? undefined, props, key: Date.now() }));
-  return <div ref={ref}><FeatureCard item={item} props={props} onOpenRelated={openRelated} onClear={clearSelection} onZoom={zoom} /></div>;
+  return <div ref={ref}><FeatureCard item={item} props={props} onOpenRelated={related ? openRelated : undefined} onClear={clearSelection} onZoom={zoom} /></div>;
 }
 
 // A click on a plate or mosaic preview: the unit under it, or the scan-only notice.

@@ -1,15 +1,18 @@
 // The preview on a publication page with map layers: the plate and the layers drawn together in
 // one Map preview, with an "On this preview" panel to turn each on or off.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearch } from "@tanstack/react-router";
 
 import { unitsHrefOf } from "@/map/identify";
+import { setHovered } from "@/map/highlight";
 import { colorForId } from "@/map/map-model";
-import { PreviewMapSlot } from "@/map/preview-map";
+import { type PreviewHit, PreviewMapSlot, usePreviewMap } from "@/map/preview-map";
 import type { PreviewSpec } from "@/map/preview-spec";
 import { type CollectionPart, collectionParts, describeData, parquetAsset, partHrefsOf, pmtilesLink,
-  type StacDoc, useDocs, usePlate, useStac } from "@/stac";
+  type StacDoc, summaryFieldsOf, useDocs, usePlate, useStac } from "@/stac";
 import { DataExplorer } from "@/data/data-explorer";
-import { assetPreviewEntry, IdentifyResultCard, type PreviewEntry, PreviewTabs } from "./asset-viewer";
+import { assetPreviewEntry, IdentifyResultCard, type PreviewEntry, PreviewTabs, SelectedFeatureCard } from "./asset-viewer";
+import { EntryLink } from "./entry-link";
 import { type AssetEntry, assetEntries, drawOrder, isCartographic, isMapLayer, listOrder, plateEntry,
   TAB_LABEL } from "./item-view";
 
@@ -34,6 +37,72 @@ function PartTable({ href, part }: { href?: string; part: CollectionPart }) {
   return <div className="mt-2"><DataExplorer key={pq.href} href={pq.href} title={part.title} /></div>;
 }
 
+// Everything under a click, when there is more than one thing: hover a row to see it on the map,
+// click it to show it below. The selected row is marked as on the map, in yellow.
+const MAX_HITS = 8;
+function SetHitList({ parts, docOf, shows }: {
+  parts: CollectionPart[]; docOf: (id: string) => StacDoc | undefined;
+  shows: (h: PreviewHit) => boolean;   // false for a hit on a layer since switched off
+}) {
+  const { hits: all, selectHit, selectedFeature, identify } = usePreviewMap();
+  useEffect(() => () => setHovered(null), []);
+  // The plate's unit leads, so a long list never hides it.
+  const hits = (all ?? []).filter(shows).sort((a, b) => Number(!!b.unit) - Number(!!a.unit));
+  if (hits.length < 2) return null;
+  const isPicked = (h: PreviewHit) => (h.unit ? identify === h.unit : selectedFeature?.props === h.props);
+  const label = (h: PreviewHit): { name: string; value?: string } => {
+    if (h.unit?.kind === "unit") return { name: "Map plate", value: [h.unit.unit.code, h.unit.unit.name].filter(Boolean).join(" ") };
+    const part = parts.find((p) => p.id === h.layerId);
+    const key = [...summaryFieldsOf(h.layerId ? docOf(h.layerId) : undefined), ...Object.keys(h.props)]
+      .find((k) => h.props[k] != null && h.props[k] !== "");
+    return { name: part?.title ?? h.layerId ?? "Feature", value: key ? String(h.props[key]) : undefined };
+  };
+  return (
+    <section aria-label="Under the click" className="mt-3 rounded-md border border-border bg-card p-2 text-xs">
+      <div aria-live="polite" className="mb-1 px-1 font-semibold text-muted-foreground">{hits.length} things here</div>
+      <ul onPointerLeave={() => setHovered(null)}>
+        {hits.slice(0, MAX_HITS).map((h) => {
+          const { name, value } = label(h);
+          const picked = isPicked(h);
+          return (
+            <li key={h.key}>
+              <button type="button" aria-current={picked || undefined} onClick={() => { setHovered(null); selectHit(h); }}
+                onPointerEnter={(e) => { if (e.pointerType === "mouse" && !picked) setHovered(h.match ?? null); }}
+                onFocus={() => { if (!picked) setHovered(h.match ?? null); }} onBlur={() => setHovered(null)}
+                className={`flex w-full items-center gap-2 rounded border-l-4 px-2 py-1 text-left ${picked
+                  ? "border-[#FFFF00] bg-muted" : "border-transparent hover:border-[#1E6BFF] hover:bg-hover"}`}>
+                <span aria-hidden className="inline-block size-2.5 shrink-0 rounded-sm"
+                  style={{ background: h.layerId ? colorForId(h.layerId) : "transparent", border: h.layerId ? undefined : "1px solid currentColor" }} />
+                <span className="shrink-0 font-medium text-foreground">{name}</span>
+                {value && <span className="min-w-0 truncate text-muted-foreground">{value}</span>}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {hits.length > MAX_HITS && <p className="px-1 pt-1 text-muted-foreground">and {hits.length - MAX_HITS} more; zoom in to narrow it down.</p>}
+    </section>
+  );
+}
+
+// The selected feature, under the name of its layer and a way to that layer's page.
+function SetFeatureCard({ item, parts, docOf }: { item: StacDoc; parts: CollectionPart[]; docOf: (id: string) => StacDoc | undefined }) {
+  const { selectedFeature } = usePreviewMap();
+  const { c } = useSearch({ from: "__root__" });
+  const part = selectedFeature?.layerId ? parts.find((p) => p.id === selectedFeature.layerId) : undefined;
+  const doc = part && docOf(part.id);
+  if (!part || !doc) return null;
+  return (
+    <div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        From <span className="font-medium text-foreground">{part.title}</span>
+        {c && item.id && <> · <EntryLink c={`${c}/${item.id}`} i={part.id} className="text-primary hover:underline">Open its page ›</EntryLink></>}
+      </p>
+      <SelectedFeatureCard item={doc} related={false} />
+    </div>
+  );
+}
+
 // What the Map preview shows. Held by PublicationPreview, so it outlives a switch to another tab.
 type Shown = { on: Record<string, boolean>; plateOn: boolean };
 
@@ -47,9 +116,14 @@ function SetMap({ item, plate, hrefs, shown, setShown }: {
   const urls = layers.map((p) => hrefs.get(p.id));
   const { docs, error } = useDocs(urls.filter((u): u is string => !!u));
   const docOf = new Map(docs.map((d) => [d.url, d.data]));
+  const docById = (id: string) => { const u = hrefs.get(id); return u ? docOf.get(u) : undefined; };
   const isOn = (p: CollectionPart) => shown.on[p.id] ?? !isCartographic(p);
-  const setOn = (ps: CollectionPart[], v: boolean) =>
+  const { selectedFeature, clearSelection, identify, clearIdentify } = usePreviewMap();
+  const setOn = (ps: CollectionPart[], v: boolean) => {
+    // A feature of a layer switched off is no longer on the map, so neither is its card.
+    if (!v && ps.some((p) => p.id === selectedFeature?.layerId)) clearSelection();
     setShown((s) => ({ ...s, on: { ...s.on, ...Object.fromEntries(ps.map((p) => [p.id, v])) } }));
+  };
   const cog = plateEntry(plate)?.asset;
   const unitsHref = unitsHrefOf(plate);
   const drawn = layers.flatMap((p, i) => {
@@ -91,7 +165,10 @@ function SetMap({ item, plate, hrefs, shown, setShown }: {
           <div className="mt-1.5 space-y-2">
             {cog && (
               <label className="flex cursor-pointer items-center gap-1.5 font-semibold text-foreground">
-                <input type="checkbox" checked={shown.plateOn} onChange={(e) => setShown((s) => ({ ...s, plateOn: e.target.checked }))} />
+                <input type="checkbox" checked={shown.plateOn} onChange={(e) => {
+                  if (!e.target.checked && identify) clearIdentify();
+                  setShown((s) => ({ ...s, plateOn: e.target.checked }));
+                }} />
                 Map plate
               </label>
             )}
@@ -123,7 +200,12 @@ function SetMap({ item, plate, hrefs, shown, setShown }: {
           Not drawn, no map tiles found: {layers.filter((p) => undrawable.has(p.id)).map((p) => p.title).join(", ")}
         </p>
       )}
-      {cog && shown.plateOn && <p className="mt-1 text-xs text-muted-foreground">Click a unit on the plate to see what it is.</p>}
+      <p className="mt-1 text-xs text-muted-foreground">
+        {cog && shown.plateOn ? "Click a feature, or a unit on the plate, to see what it is." : "Click a feature to see what it is."}
+      </p>
+      <SetHitList parts={layers} docOf={docById}
+        shows={(h) => (h.unit ? shown.plateOn : !!parts.find((p) => p.id === h.layerId && isOn(p)))} />
+      <SetFeatureCard item={item} parts={layers} docOf={docById} />
       <IdentifyResultCard />
     </>
   );

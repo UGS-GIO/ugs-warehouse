@@ -460,8 +460,13 @@ def test_build_tier_writes_a_webp_cog_from_a_grid_vrt(tmp_path, maxz, aligned, c
                       write_stac_item=False)
     built = [c[-1].rsplit("/", 1)[1] for c in calls if c[0] == "gdalbuildvrt"]
     assert built == ["24k.vrt", *grid_vrts]                           # one grid VRT, never two
-    cog = next(c for c in calls if c[0] == "gdal_translate")
-    assert cog[2].endswith(grid_vrts[-1]) and cog[cog.index("-of") + 1] == "COG"
+    master, cog = [c for c in calls if c[0] == "gdal_translate"]
+    # The grid VRT becomes a lossless master on the tile grid; the COG is encoded from that.
+    of = master.index("-of")
+    assert master[of - 2].endswith(grid_vrts[-1]) and master[of + 1] == "GTiff"
+    assert "COMPRESS=ZSTD" in master and "SPARSE_OK=TRUE" in master
+    assert cog[cog.index("-of") - 2] == master[of - 1] and cog[cog.index("-of") + 1] == "COG"
+    assert "-projwin" in cog
     for co in ("TILING_SCHEME=GoogleMapsCompatible", f"ZOOM_LEVEL={cog_zoom}", "COMPRESS=WEBP",
                f"QUALITY={gm.TILE_QUALITY}", "WARP_RESAMPLING=nearest", "OVERVIEW_RESAMPLING=average",
                "BIGTIFF=YES"):

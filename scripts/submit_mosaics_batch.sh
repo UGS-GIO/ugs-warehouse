@@ -7,6 +7,9 @@
 # .cog.tif, and no STAC item (pubs/geolmap_mosaics.py build()), so it cannot touch the live tier or
 # catalog. The real statewide run needs --statewide and overwrites the live <scale> objects + item.
 #
+# A statewide run rebakes only the tiles under maps added, rewritten or removed since the last one
+# (pubs/geolmap_mosaics.py); --full rebakes every tile.
+#
 # --review writes to the login-gated review warehouse instead (the private review bucket under
 # review/stac, served by the review app), still reading the COGs from the public bucket. Publishing a
 # reviewed mosaic = the same run without --review.
@@ -14,7 +17,7 @@
 #   scripts/submit_mosaics_batch.sh                                  # scratch, 1 quad, 1h cap
 #   scripts/submit_mosaics_batch.sh --quads "Park City East Quad,Heber City Quad"
 #   scripts/submit_mosaics_batch.sh --statewide --review             # full 24k into the review warehouse
-#   scripts/submit_mosaics_batch.sh --statewide [--tag <sha>] [--yes]
+#   scripts/submit_mosaics_batch.sh --statewide [--full] [--tag <sha>] [--yes]
 #   scripts/submit_mosaics_batch.sh --scale 100k --statewide --review  # full 100k into the review warehouse
 #   scripts/submit_mosaics_batch.sh --scale 100k --quads "<30x60 quad name>"
 #   scripts/submit_mosaics_batch.sh --print                          # show the job JSON, submit nothing
@@ -32,10 +35,11 @@ PUBLIC_BUCKET=ut-dnr-ugs-maps-prod-public
 IMAGE="${IMAGE:-us-central1-docker.pkg.dev/${PROJECT}/ugs-warehouse/ugs-mosaics}"
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)/infra/batch/mosaics-job.json"
 
-TAG=latest scale=24k quads="Park City East Quad" quads_set=0 editions=current statewide=0 review=0 yes=0 print=0
+TAG=latest scale=24k quads="Park City East Quad" quads_set=0 editions=current statewide=0 full=0 review=0 yes=0 print=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --statewide) statewide=1 ;;
+    --full) full=1 ;;
     --review) review=1 ;;
     --scale) scale="${2:?--scale needs 24k or 100k}"; shift ;;
     --quads) quads="${2:?--quads needs a value}"; quads_set=1; shift ;;
@@ -60,6 +64,7 @@ fi
 # moves on a main deploy).
 case "$scale" in 24k) maxzoom=17 ;; 100k) maxzoom=15 ;; esac
 args=(python -m ugs_warehouse.pubs.geolmap_mosaics --scale "$scale" --maxzoom "$maxzoom" --editions "$editions")
+[ "$full" = 1 ] && args+=(--full)
 if [ "$statewide" = 1 ]; then
   run=full
   timeout=43200s

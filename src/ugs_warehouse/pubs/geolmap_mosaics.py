@@ -10,7 +10,15 @@ Pipeline per tier (GDAL, COGs read in place over /vsigs):
   gdalbuildvrt (-resolution highest, over /vsigs/<bucket>/...)  ->  `gdal raster tile`
   (multithreaded WebP tiles; GDAL owns adjacent-quad overlap via VRT last-wins + alpha-collar
   fallthrough)  ->  write the tile tree into PMTiles  ->  upload
-  ->  `gdal_translate -of COG` (GoogleMapsCompatible, WebP, internal overviews)  ->  upload
+  ->  lossless master GeoTIFF on the COG zoom's tile grid  ->  `gdal_translate -of COG`
+  (GoogleMapsCompatible, WebP, internal overviews)  ->  upload
+
+A rebake is incremental by default: the tier Item records each member's COG etag and footprint
+(`ugs:members`) and the build settings (`ugs:mosaic_build`). When only some members were added,
+rewritten or removed, only the tiles under their old and new footprints are rendered again and the
+rest are copied from the published PMTiles; the stored master is patched under the same footprints
+and re-encoded to the COG, so unchanged areas encode to the same bytes. No record, other settings,
+more than MOSAIC_INCREMENTAL_MAX_FRACTION of the members changed, or `--full` runs the full build.
 
 A tier capped below its native zoom is tiled from a second VRT built ON the cap zoom's grid
 (`-tr -tap -r average`): the sources downsample through their own overviews, ~3x faster than warping
@@ -57,11 +65,13 @@ import tempfile
 import urllib.parse
 import xml.etree.ElementTree as ET
 from array import array
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import NamedTuple
 
 from pmtiles.convert import mbtiles_to_header_json
+from pmtiles.reader import MmapSource, Reader, all_tiles
 from pmtiles.tile import tileid_to_zxy, zxy_to_tileid
 from pmtiles.writer import Writer
 
@@ -91,6 +101,12 @@ MOSAIC_COG_MAXZOOM = int(os.environ.get("MOSAIC_COG_MAXZOOM", "15"))
 # RAM on Cloud Run — fine for the small tiers, NOT for statewide z17). Point it at a mounted disk for
 # the big builds; None lets tempfile use the default.
 MOSAIC_WORK_DIR = os.environ.get("MOSAIC_WORK_DIR") or None
+# Above this share of changed members a rebake is full: the dirty area would be most of the tier.
+INCREMENTAL_MAX_FRACTION = float(os.environ.get("MOSAIC_INCREMENTAL_MAX_FRACTION", "0.3"))
+MEMBERS_PROP = "ugs:members"
+BUILD_PROP = "ugs:mosaic_build"
+
+Rect = tuple[int, int, int, int]   # inclusive XYZ tile range: min x, min y, max x, max y
 
 
 def mosaic_object(tier: str, *, suffix: str = "", ext: str = "pmtiles") -> str:
@@ -272,9 +288,18 @@ def _write_pmtiles(tile_dir: str, out: str, *, bounds: list[float], name: str) -
     tempfile and the archive are all on disk at once. Here each tile file is deleted once copied."""
     if not os.path.isdir(tile_dir):
         raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
-    # Tile ids only, 8 bytes each: a statewide z17 tree is millions of tiles. The path is rebuilt
-    # from the id when the tile is copied.
+    tiles = _tile_ids(tile_dir)
+    if not tiles:
+        raise RuntimeError(f"no tile files under {tile_dir}")
+    return _pack(out, ((t, _take_tile(tile_dir, t)) for t in tiles), bounds=bounds, name=name)
+
+
+def _tile_ids(tile_dir: str) -> array:
+    """The sorted tile ids of an XYZ tree, 8 bytes each: a statewide z17 tree is millions of tiles.
+    The path is rebuilt from the id when the tile is copied."""
     tiles = array("Q")
+    if not os.path.isdir(tile_dir):
+        return tiles
     for zd in os.listdir(tile_dir):
         if not (zd.isdigit() and os.path.isdir(zpath := os.path.join(tile_dir, zd))):
             continue
@@ -288,23 +313,121 @@ def _write_pmtiles(tile_dir: str, out: str, *, bounds: list[float], name: str) -
                 if ext.lower() != ".webp":
                     raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .webp")
                 tiles.append(zxy_to_tileid(int(zd), int(xd), int(ystr)))
-    if not tiles:
-        raise RuntimeError(f"no tile files under {tile_dir}")
-    tiles = array("Q", sorted(tiles))
-    minz, maxz = tileid_to_zxy(tiles[0])[0], tileid_to_zxy(tiles[-1])[0]
-    # The library's own MBTiles-metadata mapper; with no `center` it opens at the coarsest zoom.
-    header, metadata = mbtiles_to_header_json({
-        "name": name, "type": "overlay", "format": "webp", "minzoom": minz, "maxzoom": maxz,
-        "bounds": ",".join(str(v) for v in bounds)})
+    return array("Q", sorted(tiles))
+
+
+def _take_tile(tile_dir: str, tid: int) -> bytes:
+    """A tile's bytes from the XYZ tree; the file is deleted once read."""
+    path = os.path.join(tile_dir, "{}/{}/{}.webp".format(*tileid_to_zxy(tid)))
+    with open(path, "rb") as fh:
+        data = fh.read()
+    os.remove(path)
+    return data
+
+
+def _pack(out: str, tiles: Iterable[tuple[int, bytes]], *, bounds: list[float],
+          name: str) -> tuple[int, int, int]:
+    """Write (tile id, bytes) pairs, in ascending id order, into a PMTiles archive."""
+    n, minz, maxz = 0, None, 0
     with open(out, "wb") as f:
         writer = Writer(f)
-        for tid in tiles:
-            path = os.path.join(tile_dir, "{}/{}/{}.webp".format(*tileid_to_zxy(tid)))
-            with open(path, "rb") as fh:
-                writer.write_tile(tid, fh.read())
-            os.remove(path)
+        for tid, data in tiles:
+            writer.write_tile(tid, data)
+            z = tileid_to_zxy(tid)[0]
+            minz = z if minz is None else min(minz, z)
+            maxz = max(maxz, z)
+            n += 1
+        if not n:
+            raise RuntimeError(f"no tiles to write into {out}")
+        # The library's own MBTiles-metadata mapper; with no `center` it opens at the coarsest zoom.
+        header, metadata = mbtiles_to_header_json({
+            "name": name, "type": "overlay", "format": "webp", "minzoom": minz, "maxzoom": maxz,
+            "bounds": ",".join(str(v) for v in bounds)})
         writer.finalize(header, metadata)
-    return len(tiles), minz, maxz
+    return n, minz, maxz
+
+
+def _merged_tiles(old: str, tile_dir: str, dirty: dict[int, list[Rect]]) -> Iterator[tuple[int, bytes]]:
+    """The published archive `old` with every tile under `dirty` replaced by the tree's tile at that
+    id, or dropped when the tree has none (that area is blank now). Other tiles are copied as
+    stored. Both inputs are walked in tile-id order, so the result streams out clustered."""
+    new = iter(_tile_ids(tile_dir))
+    nxt = next(new, None)
+    with open(old, "rb") as f:
+        for zxy, data in all_tiles(MmapSource(f)):
+            tid = zxy_to_tileid(*zxy)
+            while nxt is not None and nxt < tid:
+                yield nxt, _take_tile(tile_dir, nxt)
+                nxt = next(new, None)
+            if not _in_rects(dirty.get(zxy[0], ()), zxy[1], zxy[2]):
+                yield tid, data
+    while nxt is not None:
+        yield nxt, _take_tile(tile_dir, nxt)
+        nxt = next(new, None)
+
+
+def _tile_range(bbox: list[float], z: int) -> Rect:
+    """The XYZ tiles at zoom `z` that a [W, S, E, N] box touches. An edge on a tile boundary does not
+    pull in the neighbor tile (float noise in the footprint is absorbed by `eps`)."""
+    n = 2 ** z
+    eps = 1e-7
+
+    def ty(lat: float) -> float:
+        lat = max(-85.0511287798, min(85.0511287798, lat))
+        return (1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * n
+
+    def clamp(v: int) -> int:
+        return max(0, min(n - 1, v))
+
+    w, s, e, nn = bbox
+    return (clamp(math.floor((w + 180) / 360 * n + eps)), clamp(math.floor(ty(nn) + eps)),
+            clamp(math.ceil((e + 180) / 360 * n - eps) - 1), clamp(math.ceil(ty(s) - eps) - 1))
+
+
+def _merge_rects(rects: Iterable[Rect]) -> list[Rect]:
+    """Touching or overlapping ranges joined into their bounding range, so each is rendered once."""
+    out: list[Rect] = []
+    for r in rects:
+        while True:
+            hit = next((o for o in out if r[0] <= o[2] + 1 and o[0] <= r[2] + 1
+                        and r[1] <= o[3] + 1 and o[1] <= r[3] + 1), None)
+            if hit is None:
+                break
+            out.remove(hit)
+            r = (min(r[0], hit[0]), min(r[1], hit[1]), max(r[2], hit[2]), max(r[3], hit[3]))
+        out.append(r)
+    return sorted(out)
+
+
+def dirty_rects(boxes: list[list[float]], minz: int, maxz: int) -> dict[int, list[Rect]]:
+    """{zoom: tile ranges} under `boxes` at every zoom from `minz` to `maxz`. A range at a lower zoom
+    is the parents of the one above it, so every overview over a change is in it."""
+    return {z: _merge_rects(_tile_range(b, z) for b in boxes) for z in range(minz, maxz + 1)}
+
+
+def _in_rects(rects: Iterable[Rect], x: int, y: int) -> bool:
+    return any(r[0] <= x <= r[2] and r[1] <= y <= r[3] for r in rects)
+
+
+def _rect_metres(rect: Rect, z: int) -> tuple[float, float, float, float]:
+    """A tile range's web-mercator extent: (min x, min y, max x, max y)."""
+    size = _WEBMERC_Z0_MPP / 2 ** z * 256
+    return (-_WEBMERC_ORIGIN + rect[0] * size, _WEBMERC_ORIGIN - (rect[3] + 1) * size,
+            -_WEBMERC_ORIGIN + (rect[2] + 1) * size, _WEBMERC_ORIGIN - rect[1] * size)
+
+
+def changed_members(prev: dict | None, prev_build: dict | None, etags: dict[str, str],
+                    build: dict) -> list[str] | None:
+    """The members whose COG was added, rewritten or removed since the published bake, by etag.
+    None when the tier needs a full build: no record, other build settings, or more than
+    INCREMENTAL_MAX_FRACTION of the members changed."""
+    if not prev or prev_build != build:
+        return None
+    changed = sorted(s for s in prev.keys() | etags.keys()
+                     if s not in prev or s not in etags or prev[s].get("etag") != etags[s])
+    if len(changed) > INCREMENTAL_MAX_FRACTION * max(len(prev), len(etags)):
+        return None
+    return changed
 
 
 def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
@@ -314,6 +437,21 @@ def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
         out = subprocess.run(["gdalinfo", "-json", "-nofl", "-nomd", "-noct", _vsigs(sid)], env=env,
                              stdout=subprocess.PIPE, text=True, check=True).stdout
         return [b["type"] for b in json.loads(out)["bands"]]
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        return dict(zip(sids, ex.map(one, sids)))
+
+
+def _cog_bboxes(sids: list[str], env: dict) -> dict[str, list[float] | None]:
+    """Each member COG's [W, S, E, N] footprint from its header; None for a COG that reports no
+    WGS84 extent. Not rounded: an edge on a tile boundary must stay on it (`_tile_range`)."""
+    def one(sid: str) -> list[float] | None:
+        out = subprocess.run(["gdalinfo", "-json", "-nofl", "-nomd", "-noct", _vsigs(sid)], env=env,
+                             stdout=subprocess.PIPE, text=True, check=True).stdout
+        ring = (json.loads(out).get("wgs84Extent") or {}).get("coordinates") or [[]]
+        if not ring[0]:
+            return None
+        lons, lats = [p[0] for p in ring[0]], [p[1] for p in ring[0]]
+        return [min(lons), min(lats), max(lons), max(lats)]
     with ThreadPoolExecutor(max_workers=16) as ex:
         return dict(zip(sids, ex.map(one, sids)))
 
@@ -372,10 +510,60 @@ def _build_vrt(listfile: str, vrt: str, members: list[str], env: dict, zoom: int
     return vrt
 
 
-def _write_cog(vrt: str, out: str, zoom: int, env: dict) -> None:
-    """A Web Mercator WebP COG with internal overviews, from a VRT on `zoom`'s grid."""
+def _projwin(rect: Rect, z: int) -> list[str]:
+    minx, miny, maxx, maxy = _rect_metres(rect, z)
+    return ["-projwin", *(repr(v) for v in (minx, maxy, maxx, miny))]
+
+
+def _write_master(vrt: str, out: str, rect: Rect, zoom: int, env: dict) -> None:
+    """The lossless master GeoTIFF of `rect` from a VRT on `zoom`'s grid: tiled on the tile grid, so a
+    patch writes whole blocks, and sparse, so ground with no map costs nothing."""
     subprocess.run(
-        ["gdal_translate", "-q", vrt, out, "-of", "COG", "-co", "TILING_SCHEME=GoogleMapsCompatible",
+        ["gdal_translate", "-q", *_projwin(rect, zoom), vrt, out, "-of", "GTiff",
+         "-co", "TILED=YES", "-co", "BLOCKXSIZE=256", "-co", "BLOCKYSIZE=256",
+         "-co", "COMPRESS=ZSTD", "-co", "PREDICTOR=2", "-co", "SPARSE_OK=TRUE",
+         "-co", "BIGTIFF=YES", "-co", "NUM_THREADS=ALL_CPUS"], env=env, check=True)
+
+
+def _master_rect(path: str, zoom: int) -> Rect:
+    """The tile range a master GeoTIFF covers."""
+    import rasterio
+
+    size = _WEBMERC_Z0_MPP / 2 ** zoom * 256
+    with rasterio.open(path) as ds:
+        left, bottom, right, top = ds.bounds
+    return (round((left + _WEBMERC_ORIGIN) / size), round((_WEBMERC_ORIGIN - top) / size),
+            round((right + _WEBMERC_ORIGIN) / size) - 1, round((_WEBMERC_ORIGIN - bottom) / size) - 1)
+
+
+def _patch_master(vrt: str, master: str, rects: list[Rect], zoom: int, env: dict, tmp: str) -> None:
+    """Overwrite each tile range of the master with the VRT's pixels, one block row at a time. Blank
+    ground in the VRT (a removed map) overwrites too."""
+    import rasterio
+    from rasterio.windows import Window, from_bounds
+
+    patch = os.path.join(tmp, "patch.tif")
+    with rasterio.open(master, "r+") as dst:
+        for rect in rects:
+            subprocess.run(["gdal_translate", "-q", *_projwin(rect, zoom), "-co", "TILED=YES",
+                            vrt, patch], env=env, check=True)
+            win = from_bounds(*_rect_metres(rect, zoom), dst.transform).round_offsets().round_lengths()
+            with rasterio.open(patch) as src:
+                if (src.width, src.height) != (win.width, win.height):
+                    raise RuntimeError(f"patch {src.width}x{src.height} does not fill {win}")
+                for row in range(0, src.height, 256):
+                    h = min(256, src.height - row)
+                    dst.write(src.read(window=Window(0, row, src.width, h)),
+                              window=Window(win.col_off, win.row_off + row, win.width, h))
+            os.remove(patch)
+
+
+def _write_cog(src: str, out: str, zoom: int, env: dict, rect: Rect | None = None) -> None:
+    """A Web Mercator WebP COG with internal overviews, from a raster on `zoom`'s grid (the tile
+    range `rect` of it, when given)."""
+    subprocess.run(
+        ["gdal_translate", "-q", *(_projwin(rect, zoom) if rect else []), src, out,
+         "-of", "COG", "-co", "TILING_SCHEME=GoogleMapsCompatible",
          "-co", f"ZOOM_LEVEL={zoom}", "-co", "COMPRESS=WEBP", "-co", f"QUALITY={TILE_QUALITY}",
          "-co", "WARP_RESAMPLING=nearest", "-co", "OVERVIEW_RESAMPLING=average",
          "-co", "BIGTIFF=YES",
@@ -408,14 +596,117 @@ def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
                            f"{vrt}: {', '.join(missing[:10])}" + (" ..." if len(missing) > 10 else ""))
 
 
+def _tile_argv(src: str, out: str, resampling: str, minz: int, maxz: int, *extra: str) -> list[str]:
+    return ["gdal", "raster", "tile", "--resampling", resampling,
+            "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
+            "--skip-blank", "--convention", "xyz", "--webviewer", "none",
+            "--min-zoom", str(minz), "--max-zoom", str(maxz), *extra, src, out]
+
+
+def _range_args(rect: Rect) -> list[str]:
+    return ["--min-x", str(rect[0]), "--max-x", str(rect[2]), "--min-y", str(rect[1]),
+            "--max-y", str(rect[3]), "--no-intersection-ok"]
+
+
+def _render_dirty(dirty: dict[int, list[Rect]], tiledir: str, base_vrt: str, base_resampling: str,
+                  maxz: int, old: str, env: dict) -> None:
+    """Render the tiles under `dirty` into `tiledir`: the base zoom from the VRT as the full build
+    does, then each overview zoom from its children, as GDAL's pyramid does.
+
+    GDAL builds a parent only from children inside the run's range, so each overview range runs with
+    all of its children in place: the changed ones already in `tiledir`, the rest copied from the
+    published archive `old` for the run. `--resume` keeps GDAL from rendering those again."""
+    for rect in dirty[maxz]:
+        subprocess.run(_tile_argv(base_vrt, tiledir, base_resampling, maxz, maxz, *_range_args(rect)),
+                       env=env, check=True)
+    with open(old, "rb") as f:
+        reader = Reader(MmapSource(f))
+        for z in range(maxz - 1, min(dirty) - 1, -1):
+            for x0, y0, x1, y1 in dirty[z]:
+                children = (2 * x0, 2 * y0, 2 * x1 + 1, 2 * y1 + 1)
+                copied = []
+                for x in range(children[0], children[2] + 1):
+                    for y in range(children[1], children[3] + 1):
+                        path = os.path.join(tiledir, str(z + 1), str(x), f"{y}.webp")
+                        if os.path.exists(path) or _in_rects(dirty[z + 1], x, y):
+                            continue
+                        if (data := reader.get(z + 1, x, y)) is not None:
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            with open(path, "wb") as out:
+                                out.write(data)
+                            copied.append(path)
+                subprocess.run(_tile_argv(base_vrt, tiledir, base_resampling, z, z + 1, "--resume",
+                                          *_range_args(children)), env=env, check=True)
+                for path in copied:
+                    os.remove(path)
+
+
+def _plan(tier: str, sids: list[str], env: dict, build: dict, incremental: bool,
+          etags: dict[str, str]) -> tuple[dict, list[list[float]] | None]:
+    """(the members record for the Item, the footprints to render again: the changed members' old
+    and new ones). The footprints are None for a full build."""
+    etag = {s: etags.get(f"{identity.COG_PREFIX}/{s}.cog.tif", "") for s in sids}
+    prev, changed = None, None
+    if incremental:
+        item_id = f"geologic-maps-{tier}"
+        prev = stac.prior_property(COLLECTION, item_id, MEMBERS_PROP)
+        changed = changed_members(prev, stac.prior_property(COLLECTION, item_id, BUILD_PROP),
+                                  etag, build)
+        if changed is None:
+            print(f"[mosaics] {tier}: full build (no matching record, or over "
+                  f"{INCREMENTAL_MAX_FRACTION:.0%} of the members changed)")
+    fresh = _cog_bboxes([s for s in sids if changed is None or s in changed], env)
+    members = {s: {"etag": etag[s], "bbox": fresh[s] if s in fresh else prev[s]["bbox"]}
+               for s in sids}
+    if changed is None:
+        return members, None
+    boxes = [r["bbox"] for s in changed for r in (prev.get(s), members.get(s)) if r]
+    if any(b is None for b in boxes):
+        print(f"[mosaics] {tier}: full build (a changed member has no footprint)")
+        return members, None
+    if changed:
+        print(f"[mosaics] {tier}: incremental, {len(changed)} changed: {', '.join(changed)}")
+    return members, boxes
+
+
+def _fetch_published(tier: str, tmp: str, objs: tuple[str, str], cog_rect: Rect,
+                     cog_zoom: int) -> tuple[str, str] | None:
+    """The published PMTiles and master, downloaded, or None when either is missing or unusable."""
+    paths = (os.path.join(tmp, "published.pmtiles"), os.path.join(tmp, f"{tier}.master.tif"))
+    why = None
+    try:
+        for obj, path in zip(objs, paths):
+            gcs.download(obj, path)
+    except FileNotFoundError as e:
+        why = f"missing {e}"
+    else:
+        with open(paths[0], "rb") as f:
+            clustered = Reader(MmapSource(f)).header()["clustered"]
+        m = _master_rect(paths[1], cog_zoom)
+        if not clustered:
+            why = "the published PMTiles is not clustered"
+        elif not (m[0] <= cog_rect[0] and m[1] <= cog_rect[1]
+                  and cog_rect[2] <= m[2] and cog_rect[3] <= m[3]):
+            why = "the mosaic outgrew the master"
+    if why is None:
+        return paths
+    print(f"[mosaics] {tier}: full build ({why})")
+    for p in paths:
+        if os.path.exists(p):
+            os.remove(p)
+    return None
+
+
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
-                *, suffix: str = "", write_stac_item: bool = True,
-                published: PublishedPubs | None = None) -> bool:
+               *, suffix: str = "", write_stac_item: bool = True,
+               published: PublishedPubs | None = None, full: bool = False,
+               etags: dict[str, str] | None = None) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
     empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
-    uploads the scratch pmtiles for direct inspection but writes NO STAC item, see `build()`.
-    `published` (see `published_pubs`) is read from the catalog when not given."""
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item, see `build()`, and is
+    always a full build. `full` skips the incremental path. `published` (see `published_pubs`) and
+    `etags` ({object path: etag} of the COGs) are read when not given."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
@@ -453,39 +744,73 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         tile_vrt = vrt if base_maxz >= native else grid_vrt(base_maxz)
         base_resampling = "nearest" if aligned or tile_vrt != vrt else "average"
         minz_arg = min(MOSAIC_MINZOOM, base_maxz)      # never emit --min-zoom > --max-zoom
-        zdesc = f"z{minz_arg}-{base_maxz}" + ("" if maxz is not None else " (native)")
-        print(f"[mosaics] {tier}: gdal raster tile -> {zdesc}, WebP q{TILE_QUALITY}, "
-              f"base={base_resampling} (native z{native})")
-        subprocess.run(
-            ["gdal", "raster", "tile", "--resampling", base_resampling,
-             "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
-             "--skip-blank", "--convention", "xyz", "--webviewer", "none",
-             "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
-             tile_vrt, tiledir], env=env, check=True)
+        cog_zoom = min(MOSAIC_COG_MAXZOOM, base_maxz, native)
+        cog_rect = _tile_range(bounds, cog_zoom)
+        obj = mosaic_object(tier, suffix=suffix)
+        cog_obj = mosaic_object(tier, suffix=suffix, ext="cog.tif")
+        master_obj = mosaic_object(tier, suffix=suffix, ext="master.tif")
+        record: dict = {}
+        boxes = None
+        if write_stac_item:
+            build_sig = {"minzoom": minz_arg, "maxzoom": base_maxz, "cog_zoom": cog_zoom,
+                         "native": native, "aligned": aligned, "quality": TILE_QUALITY}
+            if etags is None:
+                etags = gcs.list_etags(identity.COG_PREFIX, bucket=config.SOURCE_BUCKET)
+            members_rec, boxes = _plan(tier, sids, env, build_sig, not full, etags)
+            record = {MEMBERS_PROP: members_rec, BUILD_PROP: build_sig}
+        if boxes == []:
+            print(f"[mosaics] {tier}: no member changed — nothing to rebake")
+            return True
+        prior = _fetch_published(tier, tmp, (obj, master_obj), cog_rect, cog_zoom) if boxes else None
+        master = os.path.join(tmp, f"{tier}.master.tif")
 
-        print(f"[mosaics] {tier}: writing tiles -> PMTiles")
-        n_tiles, minz, maxz_built = _write_pmtiles(
-            tiledir, pmtiles, bounds=bounds, name=f"geologic-maps-{tier}")
-        shutil.rmtree(tiledir)
+        if prior:
+            dirty = dirty_rects(boxes, minz_arg, base_maxz)
+            print(f"[mosaics] {tier}: rendering the changed tiles, z{minz_arg}-{base_maxz}")
+            _render_dirty(dirty, tiledir, tile_vrt, base_resampling, base_maxz, prior[0], env)
+            print(f"[mosaics] {tier}: merging them into the published PMTiles")
+            n_tiles, minz, maxz_built = _pack(pmtiles, _merged_tiles(prior[0], tiledir, dirty),
+                                              bounds=bounds, name=f"geologic-maps-{tier}")
+            os.remove(prior[0])
+        else:
+            zdesc = f"z{minz_arg}-{base_maxz}" + ("" if maxz is not None else " (native)")
+            print(f"[mosaics] {tier}: gdal raster tile -> {zdesc}, WebP q{TILE_QUALITY}, "
+                  f"base={base_resampling} (native z{native})")
+            subprocess.run(_tile_argv(tile_vrt, tiledir, base_resampling, minz_arg, base_maxz),
+                           env=env, check=True)
+            print(f"[mosaics] {tier}: writing tiles -> PMTiles")
+            n_tiles, minz, maxz_built = _write_pmtiles(
+                tiledir, pmtiles, bounds=bounds, name=f"geologic-maps-{tier}")
+        shutil.rmtree(tiledir, ignore_errors=True)
         print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built})")
 
-        obj = mosaic_object(tier, suffix=suffix)
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         os.remove(pmtiles)
 
-        cog_zoom = min(MOSAIC_COG_MAXZOOM, base_maxz, native)
+        # The COG is encoded from a lossless master, so a patched master re-encodes its unchanged
+        # blocks to the same bytes; WebP COG blocks themselves cannot be rewritten in place.
+        if prior:
+            print(f"[mosaics] {tier}: patching the master on the z{cog_zoom} grid")
+            _patch_master(grid_vrt(cog_zoom), master, dirty_rects(boxes, cog_zoom, cog_zoom)[cog_zoom],
+                          cog_zoom, env, tmp)
+        else:
+            area = stac.union_bbox([bounds, UTAH_BBOX]) if write_stac_item else bounds
+            print(f"[mosaics] {tier}: master on the z{cog_zoom} grid")
+            _write_master(grid_vrt(cog_zoom), master, _tile_range(area, cog_zoom), cog_zoom, env)
         cog = os.path.join(tmp, f"{tier}.cog.tif")
-        cog_obj = mosaic_object(tier, suffix=suffix, ext="cog.tif")
         print(f"[mosaics] {tier}: WebP COG -> z{cog_zoom}")
-        _write_cog(grid_vrt(cog_zoom), cog, cog_zoom, env)
+        _write_cog(master, cog, cog_zoom, env, cog_rect)
+        if write_stac_item:
+            gcs.upload(master, master_obj, content_type="image/tiff", cache_control=gcs.CACHE_MUTABLE)
+        os.remove(master)
         print(f"[mosaics] {tier}: uploading {os.path.getsize(cog) // 1024 // 1024} MB -> {cog_obj}")
         meta = gcs.upload(cog, cog_obj, content_type=config.COG_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
             _write_item(tier, sids, obj, by_sid, bounds=bounds,
                         published=published if published is not None else published_pubs(),
-                        cog=_cog_asset(cog, cog_obj, meta, TIER_LABEL.get(tier, tier)))
+                        cog=_cog_asset(cog, cog_obj, meta, TIER_LABEL.get(tier, tier)), record=record)
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
@@ -548,7 +873,8 @@ def _member_doc(p: dict, published: PublishedPubs) -> tuple[str, str]:
 
 
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
-                bounds: list[float], published: PublishedPubs, cog: dict | None = None) -> None:
+                bounds: list[float], published: PublishedPubs, cog: dict | None = None,
+                record: dict | None = None) -> None:
     """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
     raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
     that's how the viewer tells a raster mosaic from vector tiles. `cog` is the WebP COG's asset.
@@ -591,7 +917,8 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
         bbox=[w, s, e, n],
         datetime_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         properties={"title": f"Utah Geologic Maps — {label} seamless mosaic",
-                    "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
+                    "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic",
+                    **(record or {})},
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
                           "title": f"Raster PMTiles ({label})"},
@@ -604,10 +931,10 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
 
 
 def build(scales: list[str], maxz: int | None = None,
-          edition_mode: str = "current", quads: str | None = None) -> int:
+          edition_mode: str = "current", quads: str | None = None, full: bool = False) -> int:
     """`edition_mode` ("current"|"all") and `quads` (comma-separated quad names) are threaded
-    through to `_group_by_tier`. A `--quads` build is a scoped demo/scratch run: it writes ONLY a
-    `-test-{edition_mode}`-suffixed scratch pmtiles object (never the real tier), writes NO STAC
+    through to `_group_by_tier`; `full` forces full rebakes. A `--quads` build is a scoped
+    demo/scratch run: it writes ONLY a `-test-{edition_mode}`-suffixed scratch pmtiles object (never the real tier), writes NO STAC
     item, and skips the catalog refresh — the suffix carries the edition mode so a current-only
     demo and an all-editions demo of the SAME quads can coexist instead of clobbering each other."""
     groups, by_sid = _group_by_tier(edition_mode=edition_mode, quads=quads)
@@ -618,12 +945,14 @@ def build(scales: list[str], maxz: int | None = None,
               f"writing '*{suffix}' items only, real tiers untouched")
     built, rebaked = 0, []
     published = published_pubs() if write_stac_item else None
+    etags = gcs.list_etags(identity.COG_PREFIX, bucket=config.SOURCE_BUCKET) if write_stac_item else None
     for tier in scales:
         # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
         # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
         tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
-                      suffix=suffix, write_stac_item=write_stac_item, published=published):
+                      suffix=suffix, write_stac_item=write_stac_item, published=published,
+                      full=full, etags=etags):
             built += 1
             rebaked.append(f"geologic-maps-{tier}")
     if built and not quads:
@@ -654,6 +983,8 @@ def main() -> int:
                          "members to — a scoped demo/scratch build; writes ONLY a scratch "
                          "*-test-current or *-test-all pmtiles (matching --editions), no STAC "
                          "item, and never touches the real tier — inspect via the printed URL.")
+    ap.add_argument("--full", action="store_true",
+                    help="Rebake every tile, not only those under the members that changed.")
     args = ap.parse_args()
     # The PMTiles writer stages tile data in a tempfile; keep it on the work disk with the rest.
     tempfile.tempdir = MOSAIC_WORK_DIR
@@ -661,7 +992,8 @@ def main() -> int:
         ap.error("--quads contained no usable quad names")
     picked = args.scale or ["all"]
     scales = list(TIERS) if "all" in picked else list(dict.fromkeys(picked))
-    built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads)
+    built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads,
+                  full=args.full)
     # A scoped --quads build under the default --scale all legitimately leaves tiers with no members.
     return 0 if built == len(scales) or (args.quads and built > 0) else 1
 

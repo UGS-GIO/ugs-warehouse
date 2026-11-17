@@ -8,6 +8,7 @@ import { PreviewMapProvider } from "@/map/preview-map";
 import { collectionAsItem, type StacDoc, stacDocQuery } from "@/stac";
 import { Preview } from "./asset-viewer";
 import { PlateAddToMap } from "./item-detail";
+import { PublicationPreview } from "./publication-preview";
 
 // The view context, with the real app's layer gate: drawsAsLayer is toLayer's, as in app.tsx. Add to
 // map goes through addLayer, the same call the plate's own page makes.
@@ -103,5 +104,26 @@ describe("the publication's other files", () => {
     const other = await screen.findByText(/Other files:/);
     expect(other.textContent).toContain("GIS Data - Zip");
     expect(other.textContent).not.toContain("GeoPackage");
+  });
+});
+
+describe("the preview of a publication with map layers", () => {
+  const layer = (name: string) => ({ rel: "item", href: `./M-246DM__Maps__${name}/M-246DM__Maps__${name}.json`, title: name,
+    "ugs:layer_kind": "layer", "ugs:geometry_kind": "polygons" });
+
+  it("opens on the Document, with the plate and layers one tab away", async () => {
+    collection.links.push(layer("Landslides"), layer("Scarps"));
+    try {
+      const item = await loadPublication();
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <PreviewMapProvider><PublicationPreview item={item} /></PreviewMapProvider>
+        </QueryClientProvider>,
+      );
+      expect(screen.getByRole("tab", { name: "Document" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tab", { name: "Map preview" }).getAttribute("aria-selected")).toBe("false");
+    } finally {
+      collection.links.splice(1);
+    }
   });
 });

@@ -150,7 +150,8 @@ export function PublicationPreview({ item }: { item: StacDoc }) {
   ].filter((t) => t.entries.length);
   return (
     <>
-      <PreviewTabs tabs={tabs} initial="Map preview" />
+      {/* The document leads, as on every other publication; the Map preview is a click away. */}
+      <PreviewTabs tabs={tabs} initial={tabs[0]?.label} />
       {error != null && (
         <div role="alert" className="mt-2 text-xs text-destructive">
           Map plate could not be loaded: {error instanceof Error ? error.message : String(error)}

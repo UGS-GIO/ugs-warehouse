@@ -2,6 +2,8 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
 import type { StacDoc } from "@/stac";
 
 const parquet = { href: "https://x/a.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
@@ -16,7 +18,9 @@ const cog = { href: "https://x/a.cog.tif", type: "image/tiff; application=geotif
 const panel = async (item: StacDoc) => {
   const { PreviewMapProvider } = await import("@/map/preview-map");
   const { EndpointsPanel } = await import("./endpoints-panel");
-  return render(<PreviewMapProvider><EndpointsPanel item={item} /></PreviewMapProvider>);
+  return render(<QueryClientProvider client={new QueryClient()}>
+    <PreviewMapProvider><EndpointsPanel item={item} /></PreviewMapProvider>
+  </QueryClientProvider>);
 };
 
 beforeEach(() => {
@@ -42,18 +46,35 @@ describe("EndpointsPanel service links", () => {
     expect(screen.getByText("ArcGIS image layer")).toBeDefined();
     expect((screen.getByRole("link", { name: "Open in Map Viewer" }) as HTMLAnchorElement).href).toContain(
       encodeURIComponent("https://gs.example/ugs/rest/services/MP-01-1/ImageServer"));
-    expect(screen.getAllByText("copy")).toHaveLength(1);
+    // The service, and the COG itself for desktop GIS.
+    expect(screen.getAllByText("copy")).toHaveLength(2);
+    expect(screen.getByText("COG")).toBeDefined();
   });
 
-  it("offers none for any item without the ugs:dbt_schema stamp", async () => {
-    const { container } = await panel(withParquet({}));
-    expect(container.textContent).toBe("");
-  });
-
-  it("offers none for a publication layer, which neither service serves", async () => {
-    const { container } = await panel(withParquet({ "ugs:series_id": "M-246DM" }));
+  it("offers no service for any item without the ugs:dbt_schema stamp, only its file", async () => {
+    await panel(withParquet({}));
     expect(screen.queryByText("ArcGIS feature layer")).toBeNull();
-    expect(container.textContent).toBe("");
+    expect(screen.queryByText("ArcGIS Online and services")).toBeNull();
+    expect(screen.getByText("GeoParquet")).toBeDefined();
+  });
+
+  it("offers no service for a publication layer, which neither service serves", async () => {
+    await panel(withParquet({ "ugs:series_id": "M-246DM" }));
+    expect(screen.queryByText("ArcGIS feature layer")).toBeNull();
+    expect(screen.queryByText("ArcGIS Online and services")).toBeNull();
+  });
+
+  it("groups a publication layer's links by the software they go into", async () => {
+    await panel({ ...withParquet({ "ugs:series_id": "OFR-784DM" }, [
+      { rel: "pmtiles", href: "https://x/a.pmtiles", type: "application/vnd.pmtiles" },
+      { rel: "cite-as", href: "https://doi.org/10.34191/OFR-784DM" },
+    ]), assets: { data: parquet, style: { href: "https://x/a.style.json", roles: ["style"] } } });
+    expect(screen.getByText("ArcGIS Pro / QGIS")).toBeDefined();
+    expect(screen.getByText("Web maps")).toBeDefined();
+    expect(screen.getByText("PMTiles")).toBeDefined();
+    expect(screen.getByText("Style")).toBeDefined();
+    expect(screen.getByText("Cite and share")).toBeDefined();
+    expect(screen.getByText("DOI")).toBeDefined();
   });
 });
 

@@ -10,7 +10,12 @@ export type PreviewSpec =
   | { kind: "cog"; item: StacDoc; href: string; unitsHref?: string }
   | { kind: "rasterpm"; item: StacDoc; href: string; unitsHref?: string }
   | { kind: "footprint"; item: StacDoc; geometry: GeoJSON.Geometry }
+  // A publication drawn whole: its plate under its layers, each switched on or off in place.
+  | { kind: "set"; item: StacDoc; cogHref?: string; unitsHref?: string; plateOn: boolean; layers: SetLayer[] }
   | null;
+
+// One layer of a "set" preview, listed bottom first (the draw order).
+type SetLayer = { id: string; pmHref: string; sourceLayer: string; color: string; on: boolean };
 
 export type Renders = ReturnType<typeof rendersOf>;
 

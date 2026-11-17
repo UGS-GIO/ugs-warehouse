@@ -12,7 +12,8 @@ export type UnitInfo = {
 };
 
 export type IdentifyResult =
-  | { kind: "unit"; unit: UnitInfo }
+  // The unit polygon under the click as tiled, and its attributes as stored, for a highlight.
+  | { kind: "unit"; unit: UnitInfo; geometry?: GeoJSON.Geometry; properties?: Record<string, unknown> }
   | { kind: "scan-only"; pubTitle?: string };
 
 // The `units` asset href of a plate or mosaic Item, when it carries one.
@@ -30,7 +31,7 @@ const text = (v: unknown): string | undefined => {
   return s || undefined;
 };
 
-type Feat = { properties?: Record<string, unknown> | null };
+type Feat = { properties?: Record<string, unknown> | null; geometry?: GeoJSON.Geometry };
 
 // Where mosaic quads overlap, several features hit one point; the highest rank is the one drawn on
 // top in the mosaic.
@@ -76,8 +77,12 @@ export function identifyAt(
   for (const t of targets) {
     const id = identifyIds(t.slug).layer;
     if (!t.hasUnits || !map.getLayer(id)) continue;
-    const unit = topUnit(map.queryRenderedFeatures([point.x, point.y], { layers: [id] }));
-    if (unit) return { kind: "unit", unit };
+    const feats = map.queryRenderedFeatures([point.x, point.y], { layers: [id] });
+    const unit = topUnit(feats);
+    if (unit) {
+      const hit = feats.find((f) => text(f.properties?.unit_code) === unit.code && text(f.properties?.series_id) === (unit.seriesId || undefined));
+      return { kind: "unit", unit, ...(hit?.geometry ? { geometry: hit.geometry } : {}), ...(hit?.properties ? { properties: hit.properties } : {}) };
+    }
   }
   const on = targets.find((t) => inBbox(lngLat.lng, lngLat.lat, t.bbox));
   return on ? { kind: "scan-only", pubTitle: on.pubTitle } : null;

@@ -283,6 +283,18 @@ export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | und
   } catch { return undefined; }
 };
 
+// A publication's Items (layers and tables) by id, as absolute URLs against the URL the Collection
+// was fetched from. Empty for anything else, or a Collection not fetched through useStac.
+export const partHrefsOf = (d: StacDoc | undefined): Map<string, string> => {
+  const from = d && fetchedFrom.get(d);
+  if (d?.type !== "Collection" || !from) return new Map();
+  // One bad href loses only its own part; the preview names a part it cannot find.
+  return new Map((d.links ?? []).filter((l) => l.rel === "item").flatMap((l): [string, string][] => {
+    try { return [[idOf(l.href.split(/[?#]/)[0]), abs(l.href, from)]]; } catch { return []; }
+  }));
+};
+export const partHrefOf = (d: StacDoc | undefined, id: string): string | undefined => partHrefsOf(d).get(id);
+
 /** The publication's plate Item (see plateHrefOf), fetched: `plate` is undefined while loading or
  *  when there is none; `error` is set when the fetch failed, so the page can say so. */
 export function usePlate(d: StacDoc | undefined): { plate?: StacDoc; error?: unknown } {

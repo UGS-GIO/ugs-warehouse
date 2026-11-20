@@ -108,6 +108,11 @@ export const isSpatialData = (d: StacDoc | undefined): boolean => {
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
 export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
 
+// Whether the item or publication has geologic unit descriptions in the warehouse (unit_polys with
+// description text, a DescriptionOfMapUnits table, or a unit-description serving table).
+export const hasUnitDescriptions = (it: ItemRef): boolean =>
+  propsOf(it)["ugs:has_unit_descriptions"] === true;
+
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {
   const n = propsOf(it)["ugs:row_count"];
@@ -354,6 +359,7 @@ const DERIVED_DEFS: MetaDef[] = [
   { key: "ugs:primary_key", label: "Primary key", fmt: asList },
   { key: "proj:code", label: "Coordinate system" },
   { key: "ugs:summary_fields", label: "Summary fields", fmt: asList },
+  { key: "ugs:has_unit_descriptions", label: "Unit descriptions", fmt: (v) => (v ? "Yes" : "") },
   INGESTED,
 ];
 const withoutDatetime = (defs: MetaDef[]): MetaDef[] => defs.filter((d) => d.key !== "datetime");

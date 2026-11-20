@@ -12,8 +12,8 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, withSelected, type FacetSelection, filterResults, parseDiscovery,
-  publishedYear, ranksByWords, reliefs, scaleLabel, sortItems, type SortKey, SORTS, yearBins,
+  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, withSelected, filterResults, parseDiscovery,
+  publishedYear, ranksByWords, reliefs, scaleLabel, sortItems, type SortKey, SORTS, UNITS_HAS, yearBins,
   yearsLabel, yearSpan,
 } from "./discovery-model";
 import { RailSection } from "./rail-section";
@@ -93,7 +93,7 @@ export function DiscoveryView({
   // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
   const sp = useSearch({ from: "__root__" });
   const st = parseDiscovery(sp);
-  const { q, geometry, layout, density, area } = st;
+  const { q, geometry, units, layout, density, area } = st;
   const sort = effectiveSort(st);
   const { collections: colls, categories: cats, types, formats, scales } = st;
   const { q: _q, sort: _s, layout: _l, density: _d, ...filters } = discoveryPatch(st);
@@ -378,6 +378,8 @@ export function DiscoveryView({
       )}
       <GeometrySection defaultOpen={!phone}
         facets={withSelected(facets.geometry, geometry === "all" ? [] : [geometry], (k) => (k === GEOM_HAS ? "On the map" : "No footprint"))} value={geometry} onChange={(v) => patch({ geometry: v })} />
+      <GeometrySection label="Unit descriptions" defaultOpen={!phone}
+        facets={withSelected(facets.units, units === "all" ? [] : [units], (k) => (k === UNITS_HAS ? "Has unit descriptions" : "No unit descriptions"))} value={units} onChange={(v) => patch({ units: v })} />
     </>
   );
   const isDesktop = useIsDesktop();               // md and up: the rail shows, so the panel never does
@@ -792,22 +794,24 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
   );
 }
 
-// The geometry facet is single-select (all / on-the-map / no-footprint) → radiogroup semantics;
-// clicking the active row clears it back to "all". Collapsible like the others.
-function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
-  facets: FacetCount[]; value: FacetSelection["geometry"]; onChange: (v: FacetSelection["geometry"]) => void;
+// A binary has/none facet (geometry, unit descriptions) is single-select (all / has / none) →
+// radiogroup semantics; clicking the active row clears it back to "all". Collapsible like the others.
+function GeometrySection<T extends "all" | "has" | "none">({
+  label = "Geometry", facets, value, onChange, defaultOpen = true,
+}: {
+  label?: string; facets: FacetCount[]; value: T; onChange: (v: T) => void;
   defaultOpen?: boolean;
 }) {
   if (facets.length < 2 && value === "all") return null;
   return (
-    <RailSection label="Geometry" defaultOpen={defaultOpen || value !== "all"}>
-      <ul className="mt-1 space-y-0.5" role="radiogroup" aria-label="Geometry">
+    <RailSection label={label} defaultOpen={defaultOpen || value !== "all"}>
+      <ul className="mt-1 space-y-0.5" role="radiogroup" aria-label={label}>
         {facets.map((f) => {
           const on = value === f.key;
           return (
             <li key={f.key}>
               <button type="button" role="radio" aria-checked={on}
-                onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
+                onClick={() => onChange((on ? "all" : f.key) as T)}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
                   ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                 <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on

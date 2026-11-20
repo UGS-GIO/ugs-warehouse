@@ -111,9 +111,11 @@ def attach_to_mosaic_item(tier: str, asset: dict) -> bool:
         item = json.loads(gcs.get_bytes(path).decode())
     except FileNotFoundError:
         return False
-    if (item.get("assets") or {}).get("units") == asset:
+    if (item.get("assets") or {}).get("units") == asset and (
+        item.get("properties") or {}).get("ugs:has_unit_descriptions") is True:
         return True
-    return stac.patch_published(path, {"units": asset}, target="assets")
+    stac.patch_published(path, {"units": asset}, target="assets")
+    return stac.patch_published(path, {"ugs:has_unit_descriptions": True}, target="properties")
 
 
 def bands_object() -> str:

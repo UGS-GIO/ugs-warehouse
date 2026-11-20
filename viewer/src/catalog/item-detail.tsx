@@ -357,7 +357,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 // One labeled metadata group (Curated / Derived) as a key→value list; hidden when it has no rows.
 // The derived metadata a reader cares about; the pipeline's own fields (dbt schema, serving table,
 // keys) stay in the STAC JSON.
-const GLANCE = new Set(["Records", "Mappable", "Coordinate system", "Ingested"]);
+const GLANCE = new Set(["Records", "Mappable", "Coordinate system", "Unit descriptions", "Ingested"]);
 const PRIMARY = "inline-flex items-center rounded border border-primary bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground no-underline hover:opacity-90";
 const SECONDARY = "inline-flex items-center rounded border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground no-underline hover:border-primary";
 

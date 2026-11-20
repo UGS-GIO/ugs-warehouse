@@ -4,7 +4,7 @@
 // The view component wires these to MiniSearch (the shared search-index) and the live map; neither
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
-import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, propsOf,
+import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, hasUnitDescriptions, propsOf,
   scale, scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { overlaps } from "@/lib/bbox";
@@ -23,12 +23,14 @@ export const discoverable = (items: ItemRef[]): ItemRef[] => items.filter((it) =
 export type FacetCount = { key: string; label: string; n: number };
 export type Facets = {
   collections: FacetCount[]; categories: FacetCount[]; types: FacetCount[];
-  formats: FacetCount[]; scales: FacetCount[]; geometry: FacetCount[];
+  formats: FacetCount[]; scales: FacetCount[]; geometry: FacetCount[]; units: FacetCount[];
 };
 
-// Geometry facet keys (also the `geometry` field of a FacetSelection).
+// Geometry / unit-description facet keys (also the `geometry` / `units` fields of a FacetSelection).
 export const GEOM_HAS = "has";
 export const GEOM_NONE = "none";
+export const UNITS_HAS = "has";
+export const UNITS_NONE = "none";
 
 const ranked = (m: Map<string, FacetCount>): FacetCount[] =>
   [...m.values()].sort((a, b) => b.n - a.n || a.key.localeCompare(b.key));
@@ -77,6 +79,8 @@ export function extractFacets(items: ItemRef[]): Facets {
   const scales = new Map<string, number>();
   let has = 0;
   let none = 0;
+  let unitsHas = 0;
+  let unitsNone = 0;
   for (const it of items) {
     if (!it.data) continue; // not yet loaded → not a facetable result
     if (it.collId) bump(colls, it.collId, collectionLabel(it.collId));
@@ -89,13 +93,18 @@ export function extractFacets(items: ItemRef[]): Facets {
     if (sb) scales.set(sb, (scales.get(sb) ?? 0) + 1);
     if (hasFootprint(it.data)) has++;
     else none++;
+    if (hasUnitDescriptions(it)) unitsHas++;
+    else unitsNone++;
   }
   const geometry: FacetCount[] = [];
   if (has) geometry.push({ key: GEOM_HAS, label: "On the map", n: has });
   if (none) geometry.push({ key: GEOM_NONE, label: "No footprint", n: none });
+  const units: FacetCount[] = [];
+  if (unitsHas) units.push({ key: UNITS_HAS, label: "Has unit descriptions", n: unitsHas });
+  if (unitsNone) units.push({ key: UNITS_NONE, label: "No unit descriptions", n: unitsNone });
   return {
     collections: ranked(colls), categories: ranked(cats), types: ranked(types),
-    formats: ranked(formats), geometry,
+    formats: ranked(formats), geometry, units,
     scales: SCALE_BUCKETS.filter((b) => scales.has(b.key))
       .map((b) => ({ key: b.key, label: b.label, n: scales.get(b.key) ?? 0 })),
   };
@@ -116,6 +125,7 @@ export type FacetSelection = {
   formats?: string[];    // an item matches if it carries ANY selected format
   scales?: string[];     // SCALE_BUCKETS keys
   geometry: "all" | typeof GEOM_HAS | typeof GEOM_NONE;
+  units?: "all" | typeof UNITS_HAS | typeof UNITS_NONE;
 };
 
 // Keep items matching every active facet group — AND across the groups, OR within a multi-select
@@ -136,6 +146,8 @@ export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
     if (scales.size && !scales.has(scaleBucket(it) ?? "")) return false;
     if (sel.geometry === GEOM_HAS && !hasFootprint(it.data)) return false;
     if (sel.geometry === GEOM_NONE && hasFootprint(it.data)) return false;
+    if (sel.units === UNITS_HAS && !hasUnitDescriptions(it)) return false;
+    if (sel.units === UNITS_NONE && hasUnitDescriptions(it)) return false;
     return true;
   });
 }
@@ -263,6 +275,7 @@ export type DiscoveryState = {
   formats: string[];
   scales: string[];
   geometry: FacetSelection["geometry"];
+  units: NonNullable<FacetSelection["units"]>;
   sort: SortKey;
   layout: Layout;
   density: Density;
@@ -273,7 +286,7 @@ export type DiscoveryState = {
 
 export const DEFAULT_DISCOVERY: DiscoveryState = {
   q: "", collections: [], categories: [], types: [], formats: [], scales: [],
-  geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
+  geometry: "all", units: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
   place: "", years: null,
 };
 
@@ -285,6 +298,7 @@ const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T)
   (allowed as readonly string[]).includes(str(v)) ? (str(v) as T) : fallback;
 
 const GEOMETRIES = ["all", GEOM_HAS, GEOM_NONE] as const;
+const UNITS_K = ["all", UNITS_HAS, UNITS_NONE] as const;
 const LAYOUTS_K = ["gallery", "list"] as const;
 const DENSITIES_K = ["comfortable", "compact"] as const;
 const SORT_KEYS = SORTS.map((s) => s.key);
@@ -317,6 +331,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     formats: toStringArray(sp.formats),
     scales: toStringArray(sp.scale),
     geometry: oneOf(sp.geometry, GEOMETRIES, "all"),
+    units: oneOf(sp.units, UNITS_K, "all"),
     sort: oneOf(sp.sort, SORT_KEYS, "relevance"),
     layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
     density: oneOf(sp.density, DENSITIES_K, "comfortable"),
@@ -343,6 +358,7 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     formats: csv(s.formats),
     scale: csv(s.scales),
     geometry: s.geometry === "all" ? undefined : s.geometry,
+    units: s.units === "all" ? undefined : s.units,
     sort: s.sort === "relevance" ? undefined : s.sort,
     layout: s.layout === "gallery" ? undefined : s.layout,
     density: s.density === "comfortable" ? undefined : s.density,
@@ -374,6 +390,8 @@ export function activeChips(s: DiscoveryState, labelFor: {
     chips.push({ id: `scale:${key}`, label: scaleLabel(key), patch: { scales: s.scales.filter((k) => k !== key) } });
   if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
   if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
+  if (s.units === UNITS_HAS) chips.push({ id: "units", label: "Has unit descriptions", patch: { units: "all" } });
+  if (s.units === UNITS_NONE) chips.push({ id: "units", label: "No unit descriptions", patch: { units: "all" } });
   if (s.area) chips.push({ id: "area", label: s.place ? `Near ${s.place}` : "Map area", patch: { area: null, place: "" } });
   if (s.years) chips.push({ id: "years", label: yearsLabel(s.years), patch: { years: null } });
   return chips;
@@ -412,23 +430,24 @@ export function yearSpan(items: ItemRef[]): [number, number] | null {
 }
 
 export type FilterGroup =
-  "collections" | "categories" | "types" | "formats" | "geometry" | "area" | "years" | "scales";
+  "collections" | "categories" | "types" | "formats" | "geometry" | "units" | "area" | "years" | "scales";
 
 const CLEAR: Record<FilterGroup, Partial<DiscoveryState>> = {
   collections: { collections: [] }, categories: { categories: [] }, types: { types: [] },
-  formats: { formats: [] }, geometry: { geometry: "all" }, area: { area: null, place: "" },
+  formats: { formats: [] }, geometry: { geometry: "all" }, units: { units: "all" }, area: { area: null, place: "" },
   years: { years: null }, scales: { scales: [] },
 };
 const ANY: Record<FilterGroup, string> = {
   collections: "Any collection", categories: "Any category", types: "Any type", formats: "Any format",
-  geometry: "With or without a footprint", area: "Anywhere", years: "Any year", scales: "Any scale",
+  geometry: "With or without a footprint", units: "With or without unit descriptions",
+  area: "Anywhere", years: "Any year", scales: "Any scale",
 };
 
 export const activeGroups = (s: DiscoveryState): FilterGroup[] => {
   const on: Record<FilterGroup, boolean> = {
     collections: s.collections.length > 0, categories: s.categories.length > 0, types: s.types.length > 0,
-    formats: s.formats.length > 0, geometry: s.geometry !== "all", area: s.area !== null,
-    years: s.years !== null, scales: s.scales.length > 0,
+    formats: s.formats.length > 0, geometry: s.geometry !== "all", units: s.units !== "all",
+    area: s.area !== null, years: s.years !== null, scales: s.scales.length > 0,
   };
   return (Object.keys(on) as FilterGroup[]).filter((g) => on[g]);
 };
@@ -441,6 +460,7 @@ export function filterResults(items: ItemRef[], s: DiscoveryState, skip?: Filter
     formats: skip === "formats" ? [] : s.formats,
     scales: skip === "scales" ? [] : s.scales,
     geometry: skip === "geometry" ? "all" : s.geometry,
+    units: skip === "units" ? "all" : s.units,
   });
   if (s.area && skip !== "area") out = filterByViewport(out, s.area);
   const { years } = s;

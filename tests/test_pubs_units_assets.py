@@ -81,6 +81,32 @@ def test_a_plate_without_unit_data_has_no_units_asset():
     assert unit_polys.TILE_LAYER == "units"
 
 
+def test_ugs_has_unit_descriptions_is_stamped_for_described_polys_or_a_dmu_table():
+    p = {"series_id": "M-1DM", "pub_name": "Map", "pub_publisher": "UGS"}
+    described = {"rows": 4, "bytes": 10, "checksum": CHECKSUM, "described": True,
+                 "pmtiles": {"bytes": 77, "checksum": CHECKSUM}}
+    undescribed = {**described, "described": False}
+
+    coll, items = sink_stac.build_publication(p, [], has_cog=True, has_units=True,
+                                              unit_polys=described, registered_dois=frozenset())
+    assert coll["ugs:has_unit_descriptions"] is True
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert plate["properties"]["ugs:has_unit_descriptions"] is True
+
+    coll, items = sink_stac.build_publication(p, [], has_cog=True, has_units=True,
+                                              unit_polys=undescribed, registered_dois=frozenset())
+    assert "ugs:has_unit_descriptions" not in coll
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert "ugs:has_unit_descriptions" not in plate["properties"]
+
+    coll, items = sink_stac.build_publication(
+        p, [], has_cog=True, companion_tables=[{"label": "geo__DescriptionOfMapUnits"}],
+        layers={"geo__DescriptionOfMapUnits": {"rows": 10}}, registered_dois=frozenset())
+    assert coll["ugs:has_unit_descriptions"] is True
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert "ugs:has_unit_descriptions" not in plate["properties"]
+
+
 def _item(tier, assets=None):
     path = gm.stac.item_object_path(gm.COLLECTION, f"geologic-maps-{tier}")
     gcs.put_bytes(json.dumps({"id": f"geologic-maps-{tier}", "assets": assets or {"tiles": {"href": "t"}},

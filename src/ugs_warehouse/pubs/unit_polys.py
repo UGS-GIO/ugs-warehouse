@@ -310,6 +310,8 @@ def build(series_id: str, manifest: dict) -> None:
                 manifest["unit_layer"] = sel.record()
                 manifest["unit_polys_version"] = UNIT_POLYS_VERSION
                 return
+            described = con.execute(
+                "SELECT count(*) FROM units WHERE description IS NOT NULL").fetchone()[0] > 0
             parquet = os.path.join(work, "unit_polys.parquet")
             import geopandas as gpd
 
@@ -337,5 +339,6 @@ def build(series_id: str, manifest: dict) -> None:
     manifest["unit_layer"] = sel.record()
     manifest["unit_polys"] = {
         "rows": rows, "bytes": pq_meta.size, "checksum": pq_meta.checksum,
+        "described": bool(described),
         "pmtiles": {"bytes": pm_meta.size, "checksum": pm_meta.checksum}}
     manifest["unit_polys_version"] = UNIT_POLYS_VERSION

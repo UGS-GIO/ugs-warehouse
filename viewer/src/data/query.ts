@@ -6,8 +6,8 @@
 //          field:"multi word" · -field:value.  Known fields below; an unknown `name:value`
 //          (a URL, a `1:24000` scale) falls back to a plain term.
 
-export type FieldName = "title" | "keywords" | "topic" | "series" | "coll" | "id";
-const FIELDS: readonly FieldName[] = ["title", "keywords", "topic", "series", "coll", "id"];
+export type FieldName = "title" | "keywords" | "topic" | "series" | "coll" | "id" | "has";
+const FIELDS: readonly FieldName[] = ["title", "keywords", "topic", "series", "coll", "id", "has"];
 const FIELD_SET = new Set<string>(FIELDS);
 
 export type FieldClause = { field: FieldName; value: string; negate: boolean };
@@ -80,7 +80,7 @@ export function baseTerms(q: Query): string {
 
 export type SearchDoc = {
   title?: string; text?: string; keywords?: string; topic?: string;
-  series?: string; collId?: string; itemId?: string; id?: string;
+  series?: string; collId?: string; itemId?: string; id?: string; has?: string;
 };
 
 const seriesOf = (sid: string) => sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid;
@@ -93,6 +93,7 @@ function fieldValue(d: SearchDoc, f: FieldName): string {
     case "series": return d.series ?? seriesOf(d.itemId ?? d.id ?? "");
     case "coll": return d.collId ?? "";
     case "id": return d.itemId ?? d.id ?? "";
+    case "has": return d.has ?? "";
   }
 }
 
@@ -107,8 +108,11 @@ export function matchesQuery(q: Query, d: SearchDoc): boolean {
   for (const f of q.fields) {
     const dv = fieldValue(d, f.field).toLowerCase();
     const v = f.value.toLowerCase();
-    // series/coll are exact codes (series:M must NOT match MP/MF); text fields are substring.
-    const hit = f.field === "series" || f.field === "coll" ? dv === v : dv.includes(v);
+    // series/coll are exact codes (series:M must NOT match MP/MF); `has` is whitespace-separated
+    // capability tags (has:units); text fields are substring.
+    const hit = f.field === "series" || f.field === "coll" ? dv === v
+      : f.field === "has" ? dv.split(/\s+/).includes(v)
+      : dv.includes(v);
     if (f.negate ? hit : !hit) return false;
   }
   return true;

@@ -29,7 +29,7 @@ import time
 import traceback
 import urllib.request
 
-from ..core import config, gcs, jobs, stac
+from ..core import config, gcs, jobs, stac, styles
 from ..pubs.harvest import _series_ctx, hlog, outcome_category
 
 CATALOG = stac.SERVING_TOPICS_CATALOG  # items nest one level under it, per mart schema
@@ -92,14 +92,6 @@ def _style_url(item: dict) -> str | None:
     return (renders.get("default") or {}).get("style_url")
 
 
-def _source_layer(item: dict) -> str:
-    """The PMTiles source-layer name — from the web-map `pmtiles` link's `pmtiles:layers`, else the id."""
-    for link in item.get("links") or []:
-        if link.get("rel") == "pmtiles" and (link.get("pmtiles:layers") or []):
-            return link["pmtiles:layers"][0]
-    return item["id"]
-
-
 def _drawn_layers(style_url: str | None) -> list[dict]:
     """The layers a thumbnail draws: the bound style's minus symbol/label layers (they need glyphs and
     sprites we don't carry), else the sand fallback, which a symbol-only style also gets. A bound
@@ -132,13 +124,10 @@ def _thumb_hash(item: dict, layers: list[dict]) -> str:
 
 
 def _compose_style(layers: list[dict], pmtiles_url: str, source_layer: str) -> dict:
-    styled = [{**lyr, "id": f"l-{i}", "source": "v", "source-layer": source_layer} for i, lyr in enumerate(layers)]
-    return {
-        "version": 8,
-        "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-        "sources": {"v": {"type": "vector", "url": f"pmtiles://{pmtiles_url}"}},
-        "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#f4efe1"}}, *styled],
-    }
+    style = styles.compose_style([{**lyr, "id": f"l-{i}"} for i, lyr in enumerate(layers)], pmtiles_url,
+                                 source_layer, glyphs="https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf")
+    style["layers"].insert(0, {"id": "bg", "type": "background", "paint": {"background-color": "#f4efe1"}})
+    return style
 
 
 def _render_webp(style: dict, bbox: list[float], out: str) -> None:
@@ -318,7 +307,7 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
         state, asset = _ensure_stac_thumbnail(stac_path, stem, flat_stray)
         return ("skip:gone", None) if state == "gone" else ("skip:exists", asset)
 
-    style = _compose_style(layers, pmtiles, _source_layer(item))
+    style = _compose_style(layers, pmtiles, styles.source_layer(item))
     work = tempfile.mkdtemp(prefix=f"tt_{stem}_")
     try:
         out = os.path.join(work, "thumb.webp")

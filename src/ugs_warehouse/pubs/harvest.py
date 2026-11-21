@@ -32,6 +32,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .. import basemap
 from ..core import config, gcs, jobs
 from . import geoparquet, identity, webp
 
@@ -987,15 +988,42 @@ def _to_8bit(plate, work):
     return plate, cast_args, None
 
 
+def sheet_quad(plate) -> basemap.Quad | None:
+    """The 7.5-minute quad a whole-sheet scan shows: the cell at the sheet's center, when the sheet
+    holds all of it and is no more than two cells across (one quad plus its collar and legend)."""
+    ring = (_gdalinfo(plate).get("wgs84Extent") or {}).get("coordinates", [[]])[0]
+    if not ring:
+        return None
+    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+    w, s, e, n = min(xs), min(ys), max(xs), max(ys)
+    q = basemap.quad_at((w + e) / 2, (s + n) / 2)
+    holds = w <= q.west and e >= q.east and s <= q.south and n >= q.north
+    return q if holds and e - w <= 2 * basemap.CELL and n - s <= 2 * basemap.CELL else None
+
+
+def _quad_cutline(q: basemap.Quad, work) -> str:
+    p = os.path.join(work, "quad_cutline.geojson")
+    ring = [[q.west, q.south], [q.east, q.south], [q.east, q.north], [q.west, q.north], [q.west, q.south]]
+    json.dump({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
+               "geometry": {"type": "Polygon", "coordinates": [ring]}}]}, open(p, "w"))
+    return p
+
+
 def _warp_plate(plate, clipped, cut, n_feat, cast_args) -> None:
-    """Warp the plate to EPSG:3857, cropped to the map footprint when the index has one."""
+    """Warp the plate to EPSG:3857, cropped to the map footprint when the index has one, else to
+    the 7.5-minute quad of a one-quad sheet."""
     # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".
-    # Fall back to an uncropped warp (full sheet) instead of failing the pub.
+    cutline_args = []
+    q = None if n_feat > 0 else sheet_quad(plate)
     if n_feat > 0:
         cutline_args = ["-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline"]
         hlog("warping (cutline + reproject 3857) → COG", step="cog")
+    elif q:
+        # The quad grid is NAD27, about 65 m off WGS 84 in Utah.
+        cutline_args = ["-cutline", _quad_cutline(q, os.path.dirname(clipped)),
+                        "-cutline_srs", "EPSG:4267", "-crop_to_cutline"]
+        hlog(f"no map footprint in the index — cropping to quad {q.code}", step="cog", level="WARNING")
     else:
-        cutline_args = []
         hlog("no map footprint in the index — warping uncropped (full sheet)",
              step="cog", level="WARNING")
     run(["gdalwarp", *cutline_args, *cast_args,

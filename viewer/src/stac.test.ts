@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, parquetAsset, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, classificationColors, parquetAsset, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import { ROOT_INDEX_URL, rootIndexItems, hasItemsIndex, indexItemRefs } from "./stac/items-index";
 import type { StacDoc } from "./stac";
 import { joinsRows, vectorSpecOf } from "./map/preview-spec";
@@ -636,5 +636,15 @@ describe("parquetAsset", () => {
     const data = { href: "x.parquet", type: "application/vnd.apache.parquet", roles: ["data"] };
     expect(parquetAsset({ assets: { overview_1: overview, data } } as unknown as StacDoc)).toBe(data);
     expect(parquetAsset({ assets: { overview_1: overview } } as unknown as StacDoc)).toBeUndefined();
+  });
+});
+
+describe("classificationColors", () => {
+  it("keys a class by its MapUnit, which the integer value cannot hold", () => {
+    const d = { properties: { "classification:classes": [
+      { value: 0, name: "Zuw", color_hint: "AABBCC", "ugs:map_unit": "Zuw" },
+      { value: "Qal", name: "Qal", color_hint: "112233" },
+    ] } } as unknown as StacDoc;
+    expect(classificationColors(d)).toEqual({ Zuw: "#AABBCC", Qal: "#112233" });
   });
 });

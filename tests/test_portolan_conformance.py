@@ -12,6 +12,7 @@ anything.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,26 @@ GUARDED = {
     "PTL-LIC-003",  # never the deprecated "proprietary"
     "PTL-PRV-001",  # at least one producer
     "PTL-PRV-002",  # exactly one host, listed last
+    "PTL-PRV-003",  # the host names a url
+    "PTL-GEN-001",  # every object parses
+    "PTL-GEN-002",  # the whole tree was read
+    "PTL-AST-004",  # multihash checksums
+    "PTL-AST-005",  # assets on collections and items, never catalogs
+    "PTL-CNF-002",  # one Portolan schema version across the tree
+    "PTL-CNF-003",  # versioned datasets declare the version extension
+    "PTL-CNF-004",  # extension versions the profile pins
+    "PTL-COL-004",  # raster scenes on items
+    "PTL-EXT-001",  # objects satisfy the schemas of the extensions they declare
+    "PTL-LIC-002",  # license "other" links its text
+    "PTL-LNK-003",  # structural link media types
+    "PTL-TTL-002",  # human titles, not slugs
+    "PTL-VIZ-003",  # PMTiles registered through a rel:"pmtiles" link
+    "PTL-VIZ-006",  # one default style
 }
+# Not guarded yet, each a catalog design change rather than a builder fix:
+# PTL-AST-007/008: a publication with only documents has no data-role asset.
+# PTL-COL-002/005: serving-topic layer collections nest inside their schema collection.
+# PTL-VIZ-002/005: serving-topic styles are ugs-styles GL fragments, not full MapLibre styles.
 
 # Each serving-topic layer is published twice while the viewers move: as an item in its schema
 # collection and as its own collection in the same folder. rashid reads the folder as owned by the
@@ -173,6 +193,14 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
                         "confidence": 100, "overlap": 100.0}],
         override={})
 
+    # A publication with a 3D fence diagram, whose unit classes key on MapUnit codes.
+    _write_pub(
+        {"series_id": "OFR-778DM", "series": "OFR", "pub_year": "2026", "pub_publisher": "UGS",
+         "pub_name": "Geologic map with a fence diagram", "pub_scale": "1:24,000"},
+        [], has_cover=True, has_cog=True, has_3d=True,
+        classes_3d=[{"value": "Zuw", "name": "Zuw", "title": "Upper unit", "color_hint": "AABBCC"}],
+        override={})
+
     # A publication whose only data is one tiled layer: the layer, its tiles and their web-map
     # link sit on the Collection.
     _write_pub(
@@ -186,7 +214,8 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
 
     stac.refresh_catalog()
 
-    root = tmp_path / "catalog"
+    # CI hands this tree to stac-node-validator.
+    root = Path(os.environ.get("STAC_FIXTURE_OUT") or tmp_path / "catalog")
     prefix = config.STAC_PREFIX + "/"
     for path, body in store.items():
         if not path.startswith(prefix):
@@ -232,6 +261,10 @@ def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_p
     root = _catalog_on_disk(monkeypatch, tmp_path)
 
     assert (root / "catalog.json").exists()
+    # STAC requires an absolute self link; the other links stay relative.
+    root_doc = json.loads((root / "catalog.json").read_text())
+    assert next(lk["href"] for lk in root_doc["links"] if lk["rel"] == "self") \
+        == config.public_url(config.STAC_PREFIX + "/catalog.json")
     # Nested catalogs above leaf collections, which is the layout both producers write.
     assert (root / "ugs-serving-topics" / "hazards" / "collection.json").exists()
     assert (root / "ugs-publications" / "OFR" / "OFR-593" / "collection.json").exists()

@@ -112,6 +112,8 @@ Source rasters: a map with a raster at `gs://ut-dnr-ugs-maps-prod-public/geolmap
 takes its plate from that file, and its GIS zip supplies only the units. The folder is the one place
 a map's source raster lives; `index.csv` beside the rasters records where each came from. Each
 raster must already carry its CRS. `GEOLMAP_SOURCES_PREFIX` overrides the object prefix.
+`python -m scripts.georef_quads` places the 24k maps that have no GIS raster from the control points
+in `scripts/georef_quads.json`, uploads them here and updates `index.csv`. Harvest each map after.
 
 ## 4. Pub/Sub event-driven ingest (dataELT #418)
 

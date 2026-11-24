@@ -94,7 +94,7 @@ def test_a_tier_takes_own_polygons_then_seamless_ones_for_members_without(run, t
     assert [f["properties"]["rank"] for f in features] == [0, 0, 2, 1, 1]
     assert gcs.get_bytes(identify.tiles_object("100k")) == b"tiles"
     state = json.loads(gcs.get_bytes(identify.state_object("100k")))
-    assert state["members"] == ["A-1", "B-2", "C-3"] and state["features"] == {"own": 3, "seamless": 2}
+    assert state["members"] == ["A-1", "B-2", "C-3"] and state["features"] == {"own": 3, "seamless": 2, "described": 3}
     assert state["sources"] == {"A-1": "sumA", "B-2": None, "C-3": "sumC"}
 
 

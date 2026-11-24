@@ -21,9 +21,10 @@ from ..core import config, gcs, stac
 from ..core.bbox import to_2d_bbox
 from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
 from . import counties, dois, identify, identity, topic
-from .relations import layer_kind, source_of_label
+from .relations import layer_kind, layer_name, source_of_label
 from .scale import MOSAIC_TIER_LABEL, denominator
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
+from .unit_polys import DMU_NAME
 from .vectors import GEOPACKAGE_MIME, VECTORS_PREFIX, geopackage_object, pmtiles_object
 
 UGSPUB = identity.UGSPUB
@@ -444,6 +445,8 @@ def build_publication(p: dict, attachments: list[dict], *,
         **({"ugs:county": cty} if (cty := counties.county_of_pub(p)) else {}),
         **({"ugs:volume": vol} if (vol := issue_volume(sid)) is not None else {}),
         **({"ugs:contents": contents} if contents else {}),
+        **({"ugs:has_unit_descriptions": True}
+           if has_unit_descriptions(unit_polys, companion_tables) else {}),
         **sci,
         **style_fields,
     }
@@ -555,6 +558,13 @@ def _with_related(label: str, data: dict, rel: _Related) -> dict:
     return assets
 
 
+def has_unit_descriptions(unit_polys: dict | None, companion_tables: list[dict] | None) -> bool:
+    """True when the publication has unit descriptions in the warehouse: its `unit_polys` carry
+    description text, or one of its published companion tables is a `DescriptionOfMapUnits` table."""
+    return bool((unit_polys or {}).get("described") or any(
+        layer_name(t["label"]).casefold() == DMU_NAME for t in companion_tables or []))
+
+
 def _plate_item(ctx: _PubCtx, cog_fields: dict | None, unit_polys: dict | None, has_thumb: bool,
                 mosaic: list[dict]) -> dict:
     """The plate COG's Item, with its identify tiles and thumbnail when present."""
@@ -569,7 +579,9 @@ def _plate_item(ctx: _PubCtx, cog_fields: dict | None, unit_polys: dict | None, 
         plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
                                      "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
     return _pub_item(ctx, plate_item_id(sid), "Map plate", plate_assets, geometry=ctx.aoi,
-                     item_bbox=ctx.aoi_bbox, footprint_source=ctx.aoi_source, links=mosaic)
+                     item_bbox=ctx.aoi_bbox, footprint_source=ctx.aoi_source, links=mosaic,
+                     extra={"ugs:has_unit_descriptions": True}
+                     if (unit_polys or {}).get("described") else None)
 
 
 def _layer_item(ctx: _PubCtx, label: str, meta: dict, item_id: str,

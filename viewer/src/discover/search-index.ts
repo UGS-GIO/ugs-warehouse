@@ -14,14 +14,14 @@ export type Article = {
 // A catalog item flattened for search (pub or vector layer). `ids` are the ids people type to find it:
 // its own and a publication's series id.
 export type CatalogDoc = {
-  id: string; collId: string; itemId: string; title: string; keywords?: string; meta?: string; ids?: string[];
+  id: string; collId: string; itemId: string; title: string; keywords?: string; meta?: string; ids?: string[]; has?: string;
 };
 
 export type Hit = {
   id: string; kind: "article" | "item"; title: string; text?: string; keywords?: string;
   // The item's ids, one per line: `ids` indexes each whole, `idBare` without the format letters after
   // the number, and `idParts` by the part after the series code.
-  ids?: string; idBare?: string; idParts?: string;
+  ids?: string; idBare?: string; idParts?: string; has?: string;
   sid?: string; pdf?: string; page?: number | null; volume?: number | null; issue?: string;
   collId?: string; itemId?: string; topic?: string; score: number;
 };
@@ -65,6 +65,7 @@ export function toSearchDoc(collId: string, d: StacDoc): CatalogDoc {
     keywords: String(p.keywords ?? ""),
     meta: [p["ugs:series"], p["ugs:topic"], p["ugs:pub_type"]].filter(Boolean).join(" · "),
     ids: [...new Set([itemId, seriesId].filter((v): v is string => typeof v === "string" && v !== ""))],
+    ...(p["ugs:has_unit_descriptions"] === true ? { has: "units" } : {}),
   };
 }
 
@@ -79,7 +80,7 @@ function toHits(articles: Article[], catalog: CatalogDoc[]): Hit[] {
       const ids = (c.ids ?? []).join("\n");
       return {
         id: c.id, kind: "item" as const, title: c.title, text: c.meta ?? "", keywords: c.keywords ?? "",
-        ids, idBare: ids, idParts: ids, collId: c.collId, itemId: c.itemId, page: null, score: 0,
+        ids, idBare: ids, idParts: ids, has: c.has, collId: c.collId, itemId: c.itemId, page: null, score: 0,
       };
     }),
   ];
@@ -92,7 +93,7 @@ export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   const docs = toHits(articles, catalog);
   const ms = new MiniSearch<Hit>({
     fields: ["title", "text", "keywords", "ids", "idBare", "idParts"],
-    storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
+    storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic", "has"],
     // The id fields read whole ids, one per line; every other field keeps MiniSearch's defaults.
     tokenize: (text, field) =>
       (ID_FIELDS.has(field ?? "") ? text.split("\n").filter(Boolean) : defaultTokenize(text)),

@@ -591,7 +591,9 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
         bbox=[w, s, e, n],
         datetime_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         properties={"title": f"Utah Geologic Maps — {label} seamless mosaic",
-                    "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
+                    "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic",
+                    **({"ugs:has_unit_descriptions": True}
+                       if units and identify.mosaic_described(tier) else {})},
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
                           "title": f"Raster PMTiles ({label})"},

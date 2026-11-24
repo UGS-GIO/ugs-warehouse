@@ -4,7 +4,7 @@ import {
   activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
   discoverable, discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE,
   byOverlap, drawable, overlapScore, placeArea, parseDiscovery, reliefs, withSelected, scaleBucket, sortItems,
-  typeOf, yearBins, yearSpan,
+  typeOf, UNITS_HAS, UNITS_NONE, yearBins, yearSpan,
 } from "./discovery-model";
 import { hasFootprint } from "@/stac";
 import { rootIndexItems } from "@/stac/items-index";
@@ -237,7 +237,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     });
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
-      formats: ["PDF", "COG"], scales: [], geometry: "has", sort: "newest", layout: "list",
+      formats: ["PDF", "COG"], scales: [], geometry: "has", units: "all", sort: "newest", layout: "list",
       density: "compact", area: [-114, 37, -109, 42], place: "", years: null,
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
@@ -246,7 +246,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
   it("serializes a state back, dropping defaults (a pristine view is a clean URL)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
-      formats: undefined, scale: undefined, geometry: undefined, sort: undefined, layout: undefined,
+      formats: undefined, scale: undefined, geometry: undefined, units: undefined, sort: undefined, layout: undefined,
       density: undefined, area: undefined, place: undefined, years: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
@@ -305,6 +305,26 @@ describe("scaleBucket", () => {
     expect(discoveryPatch(s).scale).toBe("24k,62k");
     expect(activeChips(s, { collection: String, category: String }).map((c) => c.label))
       .toEqual(["1:24,000 · 7.5' quadrangle", "1:62,500 · 15' quadrangle"]);
+  });
+
+  it("extracts and filters on unit descriptions, and round-trips through the URL", () => {
+    const set = [
+      item("ugs-publications/OFR", "OFR-774DM", { "ugs:has_unit_descriptions": true }),
+      item("ugs-publications/M", "M-180DM", {}),
+    ];
+    expect(extractFacets(set).units).toEqual([
+      { key: UNITS_HAS, label: "Has unit descriptions", n: 1 },
+      { key: UNITS_NONE, label: "No unit descriptions", n: 1 },
+    ]);
+    expect(applyFacets(set, { collections: [], types: [], geometry: "all", units: UNITS_HAS }).map((it) => it.data?.id))
+      .toEqual(["OFR-774DM"]);
+    expect(applyFacets(set, { collections: [], types: [], geometry: "all", units: UNITS_NONE }).map((it) => it.data?.id))
+      .toEqual(["M-180DM"]);
+    const s = parseDiscovery({ units: "has" });
+    expect(s.units).toBe("has");
+    expect(discoveryPatch(s).units).toBe("has");
+    expect(activeChips(s, { collection: String, category: String }).map((c) => c.label))
+      .toEqual(["Has unit descriptions"]);
   });
 });
 

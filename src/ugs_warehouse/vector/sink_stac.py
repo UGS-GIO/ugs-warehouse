@@ -106,6 +106,11 @@ def _fill_title(item: dict, stem: str) -> None:
               "Set one in the admin console's metadata overrides.", file=sys.stderr)
 
 
+# Related-table asset keys that carry geologic or hazard unit descriptions; a serving topic that
+# binds one answers for `ugs:has_unit_descriptions` alongside the publications that have them.
+_UNIT_DESCRIPTION_ASSETS = ("geolmap_geolunits_desc_map_units", "hazards_unitdescriptions")
+
+
 def _properties(topic: Topic, con: duckdb.DuckDBPyConnection | None, view: str, md: dict,
                 title: str | None, description: str | None, rc: int,
                 content_hash: str | None) -> dict:
@@ -251,6 +256,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
 
     props = _properties(topic, con, view, md, title, description, rc, content_hash)
     assets = _assets(topic, con, view, pmtiles_url, rel, file_meta)
+    if any(k in assets for k in _UNIT_DESCRIPTION_ASSETS):
+        props["ugs:has_unit_descriptions"] = True
 
     exts = [stac.WEB_MAP_LINKS_EXT]
 

@@ -882,7 +882,7 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
                     "ugs:topic", "ugs:scale", "ugs:scale_denominator", "ugs:author", "ugs:county",
                     "ugs:dbt_schema", "ugs:layer", "ugs:layer_kind", "ugs:row_count", "ugs:volume",
-                    "keywords")
+                    "ugs:has_unit_descriptions", "keywords")
 # `ugs:layer_kind` values for Items whose geometry is their publication's area of interest, not a
 # place on the map. The index leaves their bbox out and the viewer keeps them off the map.
 NON_MAPPABLE_KINDS = ("table", "supporting")

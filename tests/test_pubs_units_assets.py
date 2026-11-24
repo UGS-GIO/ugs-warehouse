@@ -81,6 +81,32 @@ def test_a_plate_without_unit_data_has_no_units_asset():
     assert unit_polys.TILE_LAYER == "units"
 
 
+def test_ugs_has_unit_descriptions_is_stamped_for_described_polys_or_a_dmu_table():
+    p = {"series_id": "M-1DM", "pub_name": "Map", "pub_publisher": "UGS"}
+    described = {"rows": 4, "bytes": 10, "checksum": CHECKSUM, "described": True,
+                 "pmtiles": {"bytes": 77, "checksum": CHECKSUM}}
+    undescribed = {**described, "described": False}
+
+    coll, items = sink_stac.build_publication(p, [], has_cog=True, has_units=True,
+                                              unit_polys=described, registered_dois=frozenset())
+    assert coll["ugs:has_unit_descriptions"] is True
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert plate["properties"]["ugs:has_unit_descriptions"] is True
+
+    coll, items = sink_stac.build_publication(p, [], has_cog=True, has_units=True,
+                                              unit_polys=undescribed, registered_dois=frozenset())
+    assert "ugs:has_unit_descriptions" not in coll
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert "ugs:has_unit_descriptions" not in plate["properties"]
+
+    coll, items = sink_stac.build_publication(
+        p, [], has_cog=True, companion_tables=[{"label": "geo__DescriptionOfMapUnits"}],
+        layers={"geo__DescriptionOfMapUnits": {"rows": 10}}, registered_dois=frozenset())
+    assert coll["ugs:has_unit_descriptions"] is True
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert "ugs:has_unit_descriptions" not in plate["properties"]
+
+
 def _item(tier, assets=None):
     path = gm.stac.item_object_path(gm.COLLECTION, f"geologic-maps-{tier}")
     gcs.put_bytes(json.dumps({"id": f"geologic-maps-{tier}", "assets": assets or {"tiles": {"href": "t"}},
@@ -116,6 +142,21 @@ def test_an_unchanged_tier_whose_item_lacks_the_asset_is_patched(run, tmp_path):
     assert identify.build_changed().unchanged == ["100k"]
 
     assert json.loads(gcs.get_bytes(path))["assets"]["units"]["title"] == identify.UNITS_TITLE
+
+
+def test_the_mosaic_flag_follows_whether_its_polygons_carry_descriptions():
+    path = _item("250k")
+    asset = {"href": "u", "file:size": 3}
+    flag = lambda: json.loads(gcs.get_bytes(path)).get("properties", {}).get("ugs:has_unit_descriptions")  # noqa: E731
+
+    assert identify.attach_to_mosaic_item("250k", asset, described=False)
+    assert flag() is None and "units" in json.loads(gcs.get_bytes(path))["assets"]
+    assert identify.attach_to_mosaic_item("250k", asset, described=True)
+    assert flag() is True
+    assert identify.attach_to_mosaic_item("250k", asset, described=False)  # a stale True is cleared
+    assert flag() is False
+    assert identify.is_described({"features": {"own": 4, "seamless": 2, "described": 0}}) is False
+    assert identify.is_described({"features": {"own": 4}}) is False  # a pre-v2 state
 
 
 def test_patch_published_can_target_an_items_assets():

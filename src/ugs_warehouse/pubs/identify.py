@@ -35,7 +35,7 @@ from .unit_polys import COLUMNS as UNIT_COLUMNS
 from .unit_polys import TILE_LAYER
 
 # Bump to build every tier again at the next vectors run.
-IDENTIFY_VERSION = 1
+IDENTIFY_VERSION = 2  # 2: the state counts described polygons
 
 UNITS_TITLE = "Geologic units (identify)"
 SEAMLESS_OBJECT = f"{identity.UNITS_PREFIX}/units.parquet"
@@ -100,10 +100,21 @@ def mosaic_asset(tier: str) -> dict | None:
     return units_asset(tiles_object(tier), state["pmtiles"], origin=origin)
 
 
-def attach_to_mosaic_item(tier: str, asset: dict) -> bool:
-    """Make the published mosaic Item of `tier` carry `asset` as `units`, patching it in place when
-    it does not already. False when the mosaic has no Item yet; its next bake adds the asset
-    through `mosaic_asset`."""
+def is_described(state: dict | None) -> bool:
+    """Whether a tier's identify layer has any polygon with description text. Seamless fallback
+    rows never do, so only a member's own `unit_polys` can make it true."""
+    return bool(((state or {}).get("features") or {}).get("described"))
+
+
+def mosaic_described(tier: str) -> bool:
+    """`is_described` for the tier's state in the source bucket, as `mosaic_asset` reads it."""
+    return is_described(read_state(tier, bucket=config.SOURCE_BUCKET))
+
+
+def attach_to_mosaic_item(tier: str, asset: dict, described: bool) -> bool:
+    """Make the published mosaic Item of `tier` carry `asset` as `units` and `described` as
+    `ugs:has_unit_descriptions`, patching it in place when it does not already. False when the
+    mosaic has no Item yet; its next bake adds both through `mosaic_asset`."""
     from . import geolmap_mosaics
 
     path = stac.item_object_path(geolmap_mosaics.COLLECTION, f"geologic-maps-{tier}")
@@ -111,9 +122,14 @@ def attach_to_mosaic_item(tier: str, asset: dict) -> bool:
         item = json.loads(gcs.get_bytes(path).decode())
     except FileNotFoundError:
         return False
-    if (item.get("assets") or {}).get("units") == asset:
+    has_asset = (item.get("assets") or {}).get("units") == asset
+    flagged = (item.get("properties") or {}).get("ugs:has_unit_descriptions") is True
+    if has_asset and flagged == described:
         return True
-    return stac.patch_published(path, {"units": asset}, target="assets")
+    ok = has_asset or stac.patch_published(path, {"units": asset}, target="assets")
+    # False, not absent: a merge patch can't drop a key, and a stale True must not survive.
+    return ok and (flagged == described or stac.patch_published(
+        path, {"ugs:has_unit_descriptions": described}, target="properties"))
 
 
 def bands_object() -> str:
@@ -204,14 +220,15 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
     """Write the tier's polygons to the GeoJSONSeq file `out`, own `unit_polys` first in member order,
     then the seamless fallback rows of the members without one, in member order. Each polygon
     carries `rank`, its member's index in the draw order (the seamless fallback ranks like its
-    member), so a viewer takes the highest rank at a point. Returns {"own": rows, "seamless": rows}."""
+    member), so a viewer takes the highest rank at a point. Returns {"own": rows, "seamless": rows,
+    "described": own rows with description text}."""
     import duckdb
 
     from .vectors import _literal
 
     own = [sid for sid in order if sums.get(sid)]
     fallback = [sid for sid in order if not sums.get(sid)]
-    counts = {"own": 0, "seamless": 0}
+    counts = {"own": 0, "seamless": 0, "described": 0}
     con = duckdb.connect()
     try:
         transform.setup(con)
@@ -227,6 +244,8 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
                 con.execute(f"CREATE OR REPLACE TEMP VIEW piece AS SELECT {', '.join(UNIT_COLUMNS)}, "
                             f"geom, {order.index(sid)} AS rank FROM read_parquet({_literal(local)})")
                 chunk = os.path.join(work, f"own_{i}.geojsonl")
+                counts["described"] += con.execute(
+                    "SELECT count(*) FROM piece WHERE description IS NOT NULL").fetchone()[0]
                 counts["own"] += _export(con, "piece", chunk)
                 con.execute("DROP VIEW piece")
                 os.remove(local)
@@ -328,7 +347,7 @@ def build_changed(tiers: list[str] | None = None) -> Result:
             current = state is not None and {k: state.get(k) for k in sig} == sig
             if current:
                 # A patch that failed last run left the Item without the asset: retry it.
-                attach_to_mosaic_item(tier, units_asset(tiles_object(tier), state["pmtiles"]))
+                attach_to_mosaic_item(tier, units_asset(tiles_object(tier), state["pmtiles"]), is_described(state))
                 result.unchanged.append(tier)
                 continue
             state = build_tier(tier, order, sums, sig)
@@ -338,7 +357,7 @@ def build_changed(tiers: list[str] | None = None) -> Result:
                 continue
             # The state is recorded only once the Item carries the asset, so a failed patch rebuilds
             # (and patches) at the next run instead of being taken for done.
-            attach_to_mosaic_item(tier, units_asset(tiles_object(tier), state["pmtiles"]))
+            attach_to_mosaic_item(tier, units_asset(tiles_object(tier), state["pmtiles"]), is_described(state))
             write_state(tier, state)
             result.built.append(tier)
             print(f"[identify] {tier}: built from {len(order)} members "

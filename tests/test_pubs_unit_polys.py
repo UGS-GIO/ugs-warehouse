@@ -268,6 +268,7 @@ def test_gems_attributes_are_joined_trimmed_and_blanks_become_null(pub, tmp_path
     assert manifest["unit_layer"] == {"label": "g__MapUnitPolys", "schema": "gems",
                                       "code_column": "MapUnit"}
     assert manifest["unit_polys"]["rows"] == 4 and manifest["unit_polys"]["pmtiles"]["bytes"] == 5
+    assert manifest["unit_polys"]["described"] is True
     assert manifest["unit_polys_version"] == unit_polys.UNIT_POLYS_VERSION
     assert uploads["layer"] == b"units"
     feature = json.loads(uploads["geojsonl"].splitlines()[0])
@@ -294,6 +295,22 @@ def test_template_columns_map_to_the_product_columns(pub, tmp_path):
     rows = _read(uploads[vectors.unit_polys_object("M-8DM")], tmp_path)
     assert rows == [("M-8DM", "Tv", "Volcanics", "Tertiary", "Lava.", "Quad_GeologicUnits"),
                     ("M-8DM", None, "x", None, None, "Quad_GeologicUnits")]
+
+
+def test_a_unit_product_without_description_text_records_described_false(pub):
+    put, _ = pub
+    layer = gpd.GeoDataFrame(
+        {"UNITSYMBOL": ["Qal", "Qaf"], "UNITNAME": ["Alluvium", "Fan"], "AGE": ["Q", "Q"]},
+        geometry=[_square(424000, 4512000), _square(424200, 4512000)], crs="EPSG:26912")
+    put("M-180DM", "geounits", layer)
+    manifest = {"warnings": [], "layers": [
+        {"label": "geounits", "spatial": True, "rows": 2, "geometry_types": ["Polygon"],
+         "proj_code": "EPSG:26912",
+         "columns": [{"name": c, "type": "string"} for c in ("UNITSYMBOL", "UNITNAME", "AGE")]}]}
+
+    unit_polys.build("M-180DM", manifest)
+
+    assert manifest["unit_polys"]["rows"] == 2 and manifest["unit_polys"]["described"] is False
 
 
 def test_a_pub_with_no_unit_layer_records_the_version_and_builds_nothing(pub):

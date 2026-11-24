@@ -6,7 +6,7 @@ import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { cardText } from "./card-text";
-import { formatBadgeAssets, seriesLabel } from "./item-view";
+import { formatBadgeAssets, hasUnitDescriptions, seriesLabel } from "./item-view";
 import type { Density } from "@/discover/discovery-model";
 import { hasFootprint, thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
@@ -41,12 +41,13 @@ export const itemLink = (it: ItemRef, wide: boolean): LinkAttrs => {
 
 const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-function Badges({ interim, idMatch }: { interim: boolean; idMatch?: boolean }) {
-  if (!interim && !idMatch) return null;
+function Badges({ interim, idMatch, units }: { interim: boolean; idMatch?: boolean; units?: boolean }) {
+  if (!interim && !idMatch && !units) return null;
   return (
     <span className="flex shrink-0 gap-1">
       {idMatch && <span className="rounded bg-emerald-100 px-1.5 text-2xs font-semibold text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100">Series ID match</span>}
       {interim && <span className="rounded bg-amber-100 px-1.5 text-2xs font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">Interim</span>}
+      {units && <span className="rounded bg-sky-100 px-1.5 text-2xs font-semibold text-sky-900 dark:bg-sky-900/40 dark:text-sky-100">Unit descriptions</span>}
     </span>
   );
 }
@@ -94,7 +95,9 @@ export function ResultCard({ it, density, on, link, addSlot, idMatch }: CardProp
           </div>
           {c.sub && <div className="truncate text-xs text-muted-foreground" title={c.sub}>{c.sub}</div>}
           <Meta it={it} meta={c.meta} />
-          {(c.interim || idMatch) && <div className="mt-1"><Badges interim={c.interim} idMatch={idMatch} /></div>}
+          {(c.interim || idMatch || hasUnitDescriptions(it)) && (
+            <div className="mt-1"><Badges interim={c.interim} idMatch={idMatch} units={hasUnitDescriptions(it)} /></div>
+          )}
           {!compact && <div className="mt-1">{formatBadges(it)}</div>}
         </div>
       </Link>
@@ -118,7 +121,7 @@ export function ResultRow({ it, density, on, link, addSlot, idMatch }: CardProps
         </span>
         {sid && <span className="shrink-0 font-mono text-2xs text-muted-foreground">{sid}</span>}
         {!compact && rest.length > 0 && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{rest.join(" · ")}</span>}
-        <Badges interim={c.interim} idMatch={idMatch} />
+        <Badges interim={c.interim} idMatch={idMatch} units={hasUnitDescriptions(it)} />
         {hasFootprint(it.data) && (
           <span className="ml-auto shrink-0 text-primary">
             <span aria-hidden className="text-3xs">◆</span><span className="sr-only">on the map</span>

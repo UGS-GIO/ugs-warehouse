@@ -12,7 +12,7 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, withSelected, filterResults, parseDiscovery,
+  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, type HasNone, isHasNone, placeArea, withSelected, filterResults, parseDiscovery,
   publishedYear, ranksByWords, reliefs, scaleLabel, sortItems, type SortKey, SORTS, UNITS_HAS, yearBins,
   yearsLabel, yearSpan,
 } from "./discovery-model";
@@ -796,10 +796,10 @@ function FacetSection({ label, facets, selected, onToggle, defaultOpen = true }:
 
 // A binary has/none facet (geometry, unit descriptions) is single-select (all / has / none) →
 // radiogroup semantics; clicking the active row clears it back to "all". Collapsible like the others.
-function GeometrySection<T extends "all" | "has" | "none">({
+function GeometrySection({
   label = "Geometry", facets, value, onChange, defaultOpen = true,
 }: {
-  label?: string; facets: FacetCount[]; value: T; onChange: (v: T) => void;
+  label?: string; facets: FacetCount[]; value: HasNone; onChange: (v: HasNone) => void;
   defaultOpen?: boolean;
 }) {
   if (facets.length < 2 && value === "all") return null;
@@ -811,7 +811,7 @@ function GeometrySection<T extends "all" | "has" | "none">({
           return (
             <li key={f.key}>
               <button type="button" role="radio" aria-checked={on}
-                onClick={() => onChange((on ? "all" : f.key) as T)}
+                onClick={() => { if (on) onChange("all"); else if (isHasNone(f.key)) onChange(f.key); }}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm pointer-coarse:min-h-11 ${on
                   ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                 <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-3xs leading-none ${on

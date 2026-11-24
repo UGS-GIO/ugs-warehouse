@@ -31,6 +31,9 @@ export const GEOM_HAS = "has";
 export const GEOM_NONE = "none";
 export const UNITS_HAS = "has";
 export const UNITS_NONE = "none";
+/** A single-select has/none facet's value (geometry, unit descriptions). */
+export type HasNone = "all" | "has" | "none";
+export const isHasNone = (k: string): k is HasNone => k === "all" || k === "has" || k === "none";
 
 const ranked = (m: Map<string, FacetCount>): FacetCount[] =>
   [...m.values()].sort((a, b) => b.n - a.n || a.key.localeCompare(b.key));
@@ -295,10 +298,10 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const toStringArray = (v: unknown): string[] =>
   [...new Set(str(v).split(",").map((s) => s.trim()).filter(Boolean))];
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
-  (allowed as readonly string[]).includes(str(v)) ? (str(v) as T) : fallback;
+  allowed.find((a) => a === str(v)) ?? fallback;
 
 const GEOMETRIES = ["all", GEOM_HAS, GEOM_NONE] as const;
-const UNITS_K = ["all", UNITS_HAS, UNITS_NONE] as const;
+const UNITS_K: readonly HasNone[] = ["all", UNITS_HAS, UNITS_NONE];
 const LAYOUTS_K = ["gallery", "list"] as const;
 const DENSITIES_K = ["comfortable", "compact"] as const;
 const SORT_KEYS = SORTS.map((s) => s.key);

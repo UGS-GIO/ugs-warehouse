@@ -144,6 +144,21 @@ def test_an_unchanged_tier_whose_item_lacks_the_asset_is_patched(run, tmp_path):
     assert json.loads(gcs.get_bytes(path))["assets"]["units"]["title"] == identify.UNITS_TITLE
 
 
+def test_the_mosaic_flag_follows_whether_its_polygons_carry_descriptions():
+    path = _item("250k")
+    asset = {"href": "u", "file:size": 3}
+    flag = lambda: json.loads(gcs.get_bytes(path)).get("properties", {}).get("ugs:has_unit_descriptions")  # noqa: E731
+
+    assert identify.attach_to_mosaic_item("250k", asset, described=False)
+    assert flag() is None and "units" in json.loads(gcs.get_bytes(path))["assets"]
+    assert identify.attach_to_mosaic_item("250k", asset, described=True)
+    assert flag() is True
+    assert identify.attach_to_mosaic_item("250k", asset, described=False)  # a stale True is cleared
+    assert flag() is False
+    assert identify.is_described({"features": {"own": 4, "seamless": 2, "described": 0}}) is False
+    assert identify.is_described({"features": {"own": 4}}) is False  # a pre-v2 state
+
+
 def test_patch_published_can_target_an_items_assets():
     path = _item("500k")
     asset = {"href": "u", "file:size": 3}
